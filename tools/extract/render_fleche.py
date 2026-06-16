@@ -7,7 +7,7 @@ directory at 0, then a data section at 0x800 holding one frame — a 12-byte hea
 pixels (palette index 0 = transparent). The single frame is a 16x16 arrow.
 
 The arrow is drawn over the world map, so it is coloured with MONDE1.VEC's embedded
-16-colour palette. Output: local/results/sprites/fleche_arrow.png (1:1, RGBA) + an 8x copy.
+16-colour palette. Output: results/sprites/fleche_arrow.png (1:1, RGBA) + an 8x copy.
 """
 from __future__ import annotations
 import os
@@ -93,7 +93,7 @@ def main() -> None:
     # The arrow is composited over the world map, so use MONDE1.VEC's embedded palette.
     mem, stream = V.decode_vec_to_framebuffer(open(os.path.join(GAME, "MONDE1.VEC"), "rb").read())
     pal = V.embedded_palette(bytes(mem[stream:stream + V.DECLARED_LEN]))
-    out = os.path.join(ROOT, "local/results/sprites")
+    out = os.path.join(ROOT, "results/sprites")
     os.makedirs(out, exist_ok=True)
     for scale, suffix in ((1, ""), (8, "_8x")):
         W, H, rgba = render_rgba(img, wpx, h, pal, scale)

@@ -18,13 +18,17 @@ from __future__ import annotations
 import os
 import struct
 import sys
+from typing import Dict, List, Optional, Tuple
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.join(ROOT, "tools/render"))
 sys.path.insert(0, os.path.join(ROOT, "tools/extract"))
 import json  # noqa: E402
 from op12_port import Op12, DG          # noqa: E402
 from vec_render import render_planar, write_png  # noqa: E402
+
+Pal = List[Tuple[int, int, int]]
+# A decoded sprite: (rows of palette indices, width_px, height); index 0 = transparent.
+Frame = Tuple[List[List[int]], int, int]
 
 GAME = os.path.join(ROOT, "local/build/capture/game")
 W, H = 320, 200          # display height is 200 (the .PAV background is 192 tall)
@@ -57,7 +61,7 @@ def _e6(v: int) -> int:
 PALETTE = [(_e6(r), _e6(g), _e6(b)) for (r, g, b) in LPAL6]   # world-1 default / fallback
 
 
-def world_palette(world: int) -> list:
+def world_palette(world: int) -> Pal:
     """Per-world gameplay palette (6-bit RGB) captured from the emulator; each world has
     its own colour theme. Falls back to the world-1 default if not captured."""
     p = os.path.join(ROOT, "local/build/render/bum", "world%d.pal.json" % world)
@@ -92,7 +96,7 @@ def decompress(path: str, declen: int) -> bytes:
 PAV_BUF, DEC_BUF, BUM_BUF = 0x472d0, 0x64750, 0x6f960
 
 
-def _decode_into(mem: bytearray, name: str, stream: int, declen: int):
+def _decode_into(mem: bytearray, name: str, stream: int, declen: int) -> Tuple[bytes, int]:
     """Decode one op4/op12 file in-place into `mem` at `stream`, sharing the op12 sliding
     window (DG:0x4e97). Returns (decoded `declen` bytes, meaningful_len) where
     meaningful_len is the real payload size = the last processed record's vec_src, or the
@@ -129,7 +133,7 @@ def _decode_into(mem: bytearray, name: str, stream: int, declen: int):
     return bytes(mem[stream:stream + declen]), meaningful
 
 
-def load_bum(world: int):
+def load_bum(world: int) -> Tuple[bytes, int]:
     """Decode D<n>.BUM purely in Python (no emulator) by replaying the game's
     D<n>.PAV -> D<n>.DEC -> D<n>.BUM decode sequence into one shared memory image, so the
     op12 sliding window (DG:0x4e97) holds the same leftover state the game has when it
@@ -156,7 +160,7 @@ class Sprites:
     def __init__(self) -> None:
         self.b = open(os.path.join(GAME, "BUMSPJEU.BIN"), "rb").read()
         self.data = 0x800
-        self._cache: dict = {}
+        self._cache: Dict[int, Optional[Frame]] = {}
 
     def _be32(self, o: int) -> int:
         return struct.unpack(">I", self.b[o:o + 4])[0]
@@ -164,7 +168,7 @@ class Sprites:
     def _be16(self, o: int) -> int:
         return struct.unpack(">H", self.b[o:o + 2])[0]
 
-    def frame(self, idx: int):
+    def frame(self, idx: int) -> Optional[Frame]:
         """Return (rows_of_indices, width_px, height) or None for an unusable frame."""
         if idx in self._cache:
             return self._cache[idx]
@@ -192,7 +196,7 @@ class Sprites:
         return out
 
 
-def blit(rgb: bytearray, fr, px: int, py: int, pal=PALETTE) -> None:
+def blit(rgb: bytearray, fr: Frame, px: int, py: int, pal: Pal = PALETTE) -> None:
     """Composite a decoded sprite (index grid, 0=transparent) onto the RGB buffer."""
     grid, wpx, h = fr
     for r in range(h):
@@ -282,7 +286,7 @@ def draw_background(rgb: bytearray, atlas: bytes, atlas_idx: bytes, dec: bytes, 
 
 
 def render_level(atlas: bytes, atlas_idx: bytes, dec: bytes, bum: bytes, lvl: int, spr: Sprites,
-                 world: int = 1, pal=PALETTE) -> bytearray:
+                 world: int = 1, pal: Pal = PALETTE) -> bytearray:
     """Composite one puzzle level: .DEC-tile background + layers A/B/C + Bumpy at spawn."""
     # The engine clears the view to palette index 0 before drawing tiles, so background
     # grid cells with code 0 (and any masked-through gaps) show that base colour rather
@@ -294,7 +298,7 @@ def render_level(atlas: bytes, atlas_idx: bytes, dec: bytes, bum: bytes, lvl: in
     layer_b = bum[base + 0x30:base + 0x60]
     layer_c = bum[base + 0x60:base + 0x90]
 
-    def draw_anim(layer, posname, codemap):
+    def draw_anim(layer: bytes, posname: str, codemap: dict) -> None:
         pos = ANIM[posname]
         for cell in range(48):
             code = layer[cell]
@@ -344,7 +348,7 @@ def render_level(atlas: bytes, atlas_idx: bytes, dec: bytes, bum: bytes, lvl: in
     return rgb
 
 
-def montage(tiles: list, cols: int, scale: int) -> tuple:
+def montage(tiles: List[bytes], cols: int, scale: int) -> Tuple[int, int, bytes]:
     """Pack a list of (W,H,rgb) tiles into a grid montage. scale=1 keeps thumbnails at
     full 1:1 resolution (whole-row copy); scale>1 nearest-downsamples. Returns (w,h,rgb)."""
     tw, th, pad = W // scale, H // scale, 4
@@ -372,7 +376,7 @@ def main() -> None:
     do_montage = "--montage" in sys.argv[1:] or not args
     worlds = [int(a) for a in args] or list(range(1, 10))
     spr = Sprites()
-    out = os.path.join(ROOT, "local/results/levels_png")
+    out = os.path.join(ROOT, "results/levels_png")
     os.makedirs(out, exist_ok=True)
     total = 0
     for n in worlds:

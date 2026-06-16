@@ -97,7 +97,7 @@ def main() -> None:
                     o = ((cy + r) * W + cx + c) * 3
                     img[o:o + 3] = pal[v]
 
-    out = os.path.join(ROOT, "local/results/sprites/bumspjeu_sheet.png")
+    out = os.path.join(ROOT, "results/sprites/bumspjeu_sheet.png")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     write_png(out, W, H, bytes(img))
     print("wrote %s (%dx%d, %d frames)" % (os.path.relpath(out, ROOT), W, H, len(frames)))

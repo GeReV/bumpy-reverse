@@ -1,6 +1,9 @@
 # Everything non-source lives under local/ (toolchain, game data, build
-# intermediates, results, downloads, planning) — regenerable or not distributable.
+# intermediates, downloads, planning) — regenerable or not distributable.
 /local/
+
+# Generated outputs (level PNGs, sprite sheets, JSON) — regenerable from the game files.
+/results/
 
 # Build cruft
 __pycache__/

@@ -38,7 +38,7 @@ def glyph_bitmap(b: bytes, bounds: List[int], idx: int) -> Tuple[int, int, List[
 
 def main() -> None:
     path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, 'local/build/capture/game/DDFNT2.CAR')
-    out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(ROOT, 'local/results/images/ddfnt2_sheet.png')
+    out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(ROOT, 'results/images/ddfnt2_sheet.png')
     b, first, offs, bounds = load_car(path)
     print("%s: first_char=%#x glyphs=%d" % (os.path.basename(path), first, len(offs)))
     chars = list(range(0x20, 0x80))      # printable ASCII

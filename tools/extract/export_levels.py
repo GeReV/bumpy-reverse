@@ -14,11 +14,10 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.join(ROOT, "tools/render"))
 sys.path.insert(0, os.path.join(ROOT, "tools/extract"))
 from render_levels import load_bum, P2_FRAME_TABLE  # noqa: E402
 
-OUT = os.path.join(ROOT, "local/results/levels")
+OUT = os.path.join(ROOT, "results/levels")
 
 
 def grid(b: bytes) -> list:

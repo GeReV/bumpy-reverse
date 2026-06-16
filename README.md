@@ -15,7 +15,8 @@ The original game files are copyright and **not distributed here**; you supply y
 | `tools/ghidra_scripts/`, `tools/bin/ghidra-headless` | Ghidra analysis scripts + headless wrapper |
 | `tools/*.py`     | TinyProg unpacker (`tinyprog_unpack.py`) and the relocation/diff helpers (`inspect_relocs.py`, `compare_unpacked.py`) behind the unpacking write-up |
 | `docs/`          | the write-up: inventory, unpacking, copy-protection, engine, and `docs/formats/*.md` (file-format specs) |
-| `local/`         | **git-ignored** working tree: your game files, the toolchain (Ghidra/JDK/DOSBox), build intermediates, and generated `results/` |
+| `local/`         | **git-ignored** working tree: your game files, the toolchain (Ghidra/JDK/DOSBox), and build intermediates |
+| `results/`       | **git-ignored** generated outputs (level PNGs, sprite sheets, world maps, level JSON) — regenerable from the game files via the tools |
 
 ## Reproducing
 
@@ -29,7 +30,7 @@ The original game files are copyright and **not distributed here**; you supply y
    `MONDE*.VEC`, `BUMSPJEU.BIN`, etc. from your copy of the game).
 3. **Run the tools**, e.g.:
    ```sh
-   uv run python tools/extract/render_levels.py     # all puzzles -> local/results/levels_png/
+   uv run python tools/extract/render_levels.py     # all puzzles -> results/levels_png/
    uv run python tools/extract/render_vec_images.py # title/score/world maps
    ```
 

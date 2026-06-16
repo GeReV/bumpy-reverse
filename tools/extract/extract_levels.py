@@ -10,7 +10,7 @@ into the level buffer that the runtime renderer (vec_run) then interprets:
 
 This tool decompresses every level file, verifies the decompressed size against the
 game's documented buffer sizes (docs/06-engine.md), writes the raw decompressed
-streams to build/extract/, and prints a per-file summary. Correctness is confirmed
+streams to local/build/extract/, and prints a per-file summary. Correctness is confirmed
 when decoded size == expected buffer size for all 9 levels.
 """
 from __future__ import annotations
@@ -84,7 +84,7 @@ def main() -> None:
                 dec = rle_decode(d, 12, EXPECT[ext] + 64)
                 open(os.path.join(OUT, "D%d.%s.bin" % (n, ext)), "wb").write(dec)
                 decoded = str(len(dec))
-                note = "RLE-decompressed -> build/extract/"
+                note = "RLE-decompressed -> local/build/extract/"
             else:
                 kind = "op%d" % op
                 note = "draw-record stream (needs vec_run walk)"

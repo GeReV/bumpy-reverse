@@ -81,7 +81,7 @@ def main() -> None:
     args = sys.argv[1:]
     if not args:
         vec = os.path.join(ROOT, "local/build/capture/game/MONDE1.VEC")
-        out = os.path.join(ROOT, "local/results/levels_png/world1.png")
+        out = os.path.join(ROOT, "results/levels_png/world1.png")
     else:
         vec = args[0]
         out = args[1] if len(args) > 1 else os.path.splitext(vec)[0] + ".png"
