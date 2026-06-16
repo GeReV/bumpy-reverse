@@ -253,7 +253,10 @@ def main() -> None:
                     help="Reference PNG to compare against (chunky mode only)")
     ap.add_argument("--planar", action="store_true",
                     help="Input is a .PLN planar capture (32000 planar + 768 DAC bytes); "
-                         "de-plane to chunky and render PNG (no oracle comparison)")
+                         "de-plane to chunky and render PNG.  If an oracle PNG positional "
+                         "arg is also given, performs the same RGB comparison + verdict as "
+                         "chunky mode (MATCH exact / DIFF pixels=...).  Without an oracle, "
+                         "renders to PNG and exits 0.")
     ap.add_argument("--vec", metavar="file.VEC",
                     help="Extract palette from this .VEC file (chunky mode, preferred over EGA default)")
     ap.add_argument("--out", metavar="render.png",
@@ -280,8 +283,35 @@ def main() -> None:
         chunky, palette = deplane(pln)
         rgb: bytearray = chunky_to_rgb(bytes(chunky), palette)
         write_png(out_path, WIDTH, HEIGHT, bytes(rgb))
-        print("PLANAR de-plane ok -> %s" % out_path)
-        sys.exit(0)
+
+        if not args.oracle:
+            # Render-only: no oracle supplied — just report success and exit.
+            print("PLANAR de-plane ok -> %s" % out_path)
+            sys.exit(0)
+
+        # Oracle supplied: run the same comparison as chunky mode.
+        oracle_w: int
+        oracle_h: int
+        oracle_rgb: bytes
+        oracle_w, oracle_h, oracle_rgb = read_png(args.oracle)
+        if oracle_w != WIDTH or oracle_h != HEIGHT:
+            print(
+                "ERROR: oracle %s is %dx%d; expected %dx%d"
+                % (args.oracle, oracle_w, oracle_h, WIDTH, HEIGHT),
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        n_diff: int
+        max_delta: int
+        n_diff, max_delta = compare_rgb(bytes(rgb), oracle_rgb, PIXELS)
+
+        if n_diff == 0:
+            print("MATCH exact (%dx%d)" % (WIDTH, HEIGHT))
+            sys.exit(0)
+        else:
+            print("DIFF pixels=%d/%d maxchanneldelta=%d" % (n_diff, PIXELS, max_delta))
+            sys.exit(1)
 
     # ---- chunky mode (original behaviour) ----
     # 1. Read chunky buffer.

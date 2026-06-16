@@ -51,9 +51,8 @@
 #include <string.h>
 
 /* ── Internal decode scratch buffer ──────────────────────────────────────── */
-/* The RLE decoder needs a VEC_DECODE_MAX work buffer.  We declare it static
-   here so bvec_buf1.c no longer needs g_scratch.  (bvec.c still provides
-   g_scratch via bvec_buf1.c for now but it is unused by vec_decode_planar.) */
+/* The RLE decoder needs a VEC_DECODE_MAX work buffer.  It is declared as the
+   static array vec_decode_scratch[] below; no external symbol is required. */
 
 /* ── Big-endian word read ─────────────────────────────────────────────────── */
 
