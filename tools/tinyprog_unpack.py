@@ -38,7 +38,7 @@ MB = 0x100000
 MEM_SIZE = 2 * MB
 
 
-def load_mz(path):
+def load_mz(path: str) -> dict:
     data = bytearray(open(path, "rb").read())
     (magic, cblp, cp, crlc, cparhdr, minalloc, maxalloc,
      ss, sp, csum, ip, cs, lfarlc, ovno) = struct.unpack_from("<2sHHHHHHHHHHHHH", data, 0)
@@ -49,7 +49,7 @@ def load_mz(path):
                 hdr_bytes=hdr_bytes, load_module=data[hdr_bytes:img_len])
 
 
-def run_full(mz, psp_seg):
+def run_full(mz: dict, psp_seg: int) -> tuple[bytearray, dict]:
     """Emulate both unpack layers until the program's first DOS call.
     Returns (mem, info) where info has the final entry regs and the set of
     physical byte addresses written during unpacking."""
@@ -121,33 +121,8 @@ def run_full(mz, psp_seg):
     return info["mem"], info
 
 
-def contiguous_region(written, center, gap=0x40):
-    """Largest written span containing `center`, tolerating small gaps."""
-    lo = center
-    while lo > 0:
-        if any(written[max(0, lo - gap):lo]):
-            lo = max(0, lo - gap)
-            while lo > 0 and written[lo - 1]:
-                lo -= 1
-        else:
-            break
-    hi = center
-    n = len(written)
-    while hi < n:
-        if any(written[hi:min(n, hi + gap)]):
-            while hi < n and written[hi]:
-                hi += 1
-            # skip a tolerated gap then continue if more written follows
-            if hi < n and any(written[hi:min(n, hi + gap)]):
-                hi += 1
-            else:
-                break
-        else:
-            break
-    return lo, hi
-
-
-def write_mz(path, load_module, relocs, minalloc, e_cs, e_ip, e_ss, e_sp):
+def write_mz(path: str, load_module: bytes, relocs: list[int], minalloc: int,
+             e_cs: int, e_ip: int, e_ss: int, e_sp: int) -> None:
     nreloc = len(relocs)
     reloc_off = 0x1C
     hdr_paras = (reloc_off + nreloc * 4 + 15) // 16
@@ -164,7 +139,7 @@ def write_mz(path, load_module, relocs, minalloc, e_cs, e_ip, e_ss, e_sp):
     open(path, "wb").write(bytes(hdr) + bytes(load_module))
 
 
-def main():
+def main() -> None:
     if len(sys.argv) < 3:
         print(__doc__); sys.exit(1)
     inp, outp = sys.argv[1], sys.argv[2]
@@ -192,7 +167,7 @@ def main():
     load_module = bytearray(mem1[base_phys:hi])
     entry_cs, entry_ip = i1["cs"], i1["ip"]
 
-    def word(mem, p):
+    def word(mem: bytes, p: int) -> int:
         return mem[p] | (mem[p + 1] << 8)
 
     # Scan EVERY byte offset (relocations may sit at odd offsets, e.g. the
