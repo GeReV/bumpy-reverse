@@ -18,4 +18,8 @@ extern u16 prng_state0;
 extern u16 prng_state1;
 extern u16 prng_state2;
 
+/* PRNG functions (src/prng.c). */
+void prng_seed(u16 seed);
+void prng_step(void);
+
 #endif /* BUMPY_H */
