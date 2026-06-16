@@ -10,12 +10,18 @@
      BVEC [in.VEC] [out.bin]  — decode .VEC, blit to VGA, write planar
      BVEC --selftest           — write a synthetic pattern to VGA and exit
 
-   Capture route (2): blit planar buffer plane-by-plane via VGA sequencer;
-   the harness captures from host.plane[].
+   Normal path:
+     1. Load .VEC into g_file.
+     2. vec_decode_planar() → plane-major g_planar + 48-byte g_pal.
+     3. video_set_mode_0d() → INT 10h mode 0x0D (320x200x16 EGA planar).
+     4. video_set_palette6(g_pal) → upload 16-colour DAC.
+     5. video_blit_planar(g_planar) → write 4 planes via sequencer map-mask.
+     6. video_restore_text() → return to text mode.
+     7. harness captures plane[] + DAC state → TITRE.PLN (32000+768 bytes).
 
-   Note on segment layout: the large static buffers are split across
-   bvec_buf1.c (g_file + g_scratch) and bvec_buf2.c (g_chunky + g_planar)
-   to stay within the 64 KB per-segment limit of the large memory model. */
+   Note on segment layout: g_file is declared in bvec_buf1.c; g_planar is
+   declared in bvec_buf2.c.  Both use __far so the linker places them outside
+   the 64 KB DGROUP limit of the large memory model. */
 
 #define VEC_FILE_MAX 0x4000u   /* 16 KB: largest .VEC (TITRE ~12.6 KB) */
 #define PLANAR_BYTES 32000u    /* 4 planes * 8000 bytes */
@@ -23,9 +29,10 @@
 /* Large buffers declared __far in bvec_buf1.c / bvec_buf2.c to keep each
    segment under the 64 KB DGROUP limit. */
 extern u8 __far g_file[];    /* VEC_FILE_MAX bytes */
-extern u8 __far g_scratch[]; /* VEC_DECODE_MAX bytes */
-extern u8 __far g_chunky[];  /* VEC_CHUNKY bytes */
 extern u8 __far g_planar[];  /* PLANAR_BYTES bytes */
+
+/* 16-colour 6-bit DAC palette (48 bytes: 16 x R,G,B). */
+static u8 g_pal[VEC_PAL_BYTES];
 
 /* Synthesise a test pattern: pat[p*8000 + i] = (u8)((i + p*37) & 0xFF) */
 static void selftest_fill(u8 *planar)
@@ -45,7 +52,7 @@ int main(int argc, char **argv)
     const char *in_path;
     const char *out_path;
     s16 n;
-    u16 hdr;
+    u16 rc;
 
     /* --- selftest mode ---- */
     if (argc >= 2 && strcmp(argv[1], "--selftest") == 0) {
@@ -68,21 +75,25 @@ int main(int argc, char **argv)
     }
     printf("loaded %d bytes from %s\n", (int)n, in_path);
 
-    hdr = vec_decode_image(g_file, (u16)n, g_scratch, g_chunky);
-    if (hdr == 0xffffu) {
-        printf("ERR: not a full-screen raster .VEC\n");
+    /* vec_decode_planar: runs the real vec_run op4 loop, writes plane-major
+       planar into g_planar, and extracts the 16-colour 6-bit DAC palette
+       into g_pal (48 bytes). */
+    rc = vec_decode_planar(g_file, (u16)n, g_planar, g_pal);
+    if (rc != 0u) {
+        printf("ERR: vec_decode_planar failed (rc=%u)\n", (unsigned)rc);
         return 2;
     }
-    printf("decoded image (header %u bytes)\n", hdr);
+    printf("decoded planar image ok\n");
 
-    /* The planar buffer lives at g_scratch + hdr (past the header). */
-    memcpy(g_planar, g_scratch + hdr, PLANAR_BYTES);
-
+    /* Faithful planar-VGA pipeline. */
     video_set_mode_0d();
+    video_set_palette6(g_pal);
     video_blit_planar(g_planar);
     video_restore_text();
     printf("blit complete\n");
 
+    /* The harness (run_bvec.py) captures the VGA plane state + DAC into .PLN.
+       The dosio_save here is a secondary on-disk copy (optional for harness). */
     if (dosio_save(out_path, g_planar, PLANAR_BYTES) != 0) {
         printf("ERR: cannot write %s\n", out_path);
         return 3;
