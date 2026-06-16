@@ -10,7 +10,7 @@ faithful "port" is to execute the bytes exactly. This interpreter covers the
 instruction subset that code path uses; it raises on anything unimplemented so the
 subset can be grown deterministically.
 
-Validation: tools/render/dosemu.py captures a 6000-step ground-truth register trace
+Validation: tools/emu/dosemu.py captures a 6000-step ground-truth register trace
 (op12_trace.bin) from the same op12 entry. `--validate` runs this CPU against it and
 reports the first divergence, so the implementation is provably faithful before we
 trust its rendered output.

@@ -28,7 +28,7 @@ from unicorn import (Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_INTR, UC_HOOK_CODE,
                      UC_HOOK_MEM_READ, UcError)
 from unicorn.x86_const import *
 
-# Anchor all data/output paths to the repo root (tools/render/dosemu.py -> ../../),
+# Anchor all data/output paths to the repo root (tools/emu/dosemu.py -> ../../..),
 # so the script works regardless of the caller's working directory.
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 GAME_DIR = os.path.join(ROOT, "local/originals/old-games/bumpy")
