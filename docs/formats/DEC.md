@@ -1,16 +1,26 @@
 # `.DEC` — per-level décor / background ("décor" = scenery)
 
-One per level, `D1.DEC`..`D9.DEC`. Shared
-[container format](README.md#the-shared-container-vecpavdecbum) + `vec_run`
-interpreter. Medium-sized per-level files; **fewer, sparser opcodes** than
-`.PAV`, consistent with background/scenery art drawn behind the playfield.
+One per level: `D1.DEC`–`D9.DEC`. Uses the shared
+[container format](README.md#the-shared-container-vecpavdecbum) and the same
+`vec_run` interpreter as `.VEC`. These are medium-sized per-level files with
+**fewer, sparser opcodes** than `.PAV`, consistent with background/scenery art
+drawn behind the playfield.
 
-Header is the standard 8-byte big-endian block; body is the big-endian
-opcode/coordinate token stream ([VEC.md](VEC.md)).
+The 8-byte big-endian header is standard; the body is the big-endian
+opcode/coordinate token stream — see [VEC.md](VEC.md) for the record layout and
+interpreter.
 
-## Files (from `tools/extract/container.py`)
+`.DEC` streams terminate via the opcode-validity / checksum terminator: the
+terminal record carries opcode `0x750`, which fails the `w4 & 0x7f00 != 0`
+validity check and signals end-of-stream (unlike `.PAV`/`.BUM` which end on the
+`w0 > 0x0f` check).
 
-| File | Bytes | `decoded_size` | distinct opcodes | coord words |
+Decoded by `tools/extract/vec_records.py` (record walker) and
+`tools/extract/container.py` (header + opcode histogram).
+
+## Files
+
+| File | Bytes | `decoded_size` | Distinct opcodes | Coord words |
 |------|------:|---------------:|-----------------:|------------:|
 | D1.DEC | 6436 | 0x19ea | 8 | 3159 |
 | D2.DEC | 8817 | 0x2f96 | 5 | 4355 |
@@ -22,11 +32,5 @@ opcode/coordinate token stream ([VEC.md](VEC.md)).
 | D8.DEC | 5470 | 0x1684 | 12 | 2678 |
 | D9.DEC | 5307 | 0x154b | 10 | 2617 |
 
-Some levels (D2, D3, D6) are dominated by opcodes 3/6/12/13 with long
-coordinate runs — likely large filled background regions rather than detailed
-line art.
-
-## Status
-
-Container parses for all 9 levels. Opcode semantics shared with
-[VEC.md](VEC.md); décor-vs-playfield layering confirmation is task #8.
+Some levels (D2, D3, D6) are dominated by opcodes 3/6/12/13 with long coordinate
+runs, consistent with large filled background regions rather than detailed line art.

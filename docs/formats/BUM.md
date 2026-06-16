@@ -1,23 +1,19 @@
-# `.BUM` — per-level objects / sprite masks ("Bumpy")
+# `.BUM` — per-level objects / sprite masks
 
-One per level, `D1.BUM`..`D9.BUM`. Shared
-[container format](README.md#the-shared-container-vecpavdecbum) + `vec_run`
-interpreter. The **smallest** per-level files. Two sub-shapes are visible in the
-data:
+One per level: `D1.BUM`–`D9.BUM`. Uses the shared
+[container format](README.md#the-shared-container-vecpavdecbum) and the same
+`vec_run` interpreter as `.VEC`. These are the **smallest** per-level files.
 
-- **Sparse** (`D1–D5, D7, D8`): one or two opcodes (often just `op12`) followed
-  by a long coordinate run — looks like a single masked shape / object sprite or
-  placement list.
-- **Rich** (`D6, D9`): many opcodes (12–24 distinct) — more elaborate per-level
-  object sets. Note `D6.BUM`/`D9.BUM` also carry unusual header words
-  (`decoded_size`/checksums near 0), so they may use a header variant.
+The 8-byte big-endian header is standard; the body is the big-endian
+opcode/coordinate token stream — see [VEC.md](VEC.md) for the record layout and
+interpreter.
 
-Header is the standard 8-byte big-endian block; body is the big-endian
-opcode/coordinate stream ([VEC.md](VEC.md)).
+Decoded by `tools/extract/vec_records.py` (record walker) and
+`tools/extract/container.py` (header + opcode histogram).
 
-## Files (from `tools/extract/container.py`)
+## Files
 
-| File | Bytes | `decoded_size` | distinct opcodes | coord words |
+| File | Bytes | `decoded_size` | Distinct opcodes | Coord words |
 |------|------:|---------------:|-----------------:|------------:|
 | D1.BUM | 686 | 0x0369 | 4 | 334 |
 | D2.BUM | 1120 | 0x0b60 | 1 | 551 |
@@ -29,8 +25,19 @@ opcode/coordinate stream ([VEC.md](VEC.md)).
 | D8.BUM | 1322 | 0x0b60 | 4 | 650 |
 | D9.BUM | 2330 | 0x001e | 13 | 532 |
 
-## Status
+## Sub-shape variants
 
-Container parses for all 9 levels. Whether `.BUM` encodes object/enemy placement
-vs. sprite-mask geometry (and the header variant in D6/D9) is open — task #8,
-helped by the `MASKBUMP.VEC` mask format and the loader's resource indexing.
+Two structural variants are visible in the data:
+
+- **Sparse** (`D1`–`D5`, `D7`, `D8`): one or two opcodes (often just `op12`)
+  followed by a long coordinate run — a single masked shape, object sprite, or
+  placement list. `decoded_size` is a normal non-zero value (e.g. `0x0b60`).
+- **Rich** (`D6`, `D9`): many opcodes (12–24 distinct) — more elaborate per-level
+  object sets.
+
+## D6/D9 header variant
+
+`D6.BUM` and `D9.BUM` carry non-zero magic words and `decoded_size` values near
+zero (`0x0009` and `0x001e` respectively). This is a header variant: despite the
+near-zero `decoded_size`, the interpreter still processes the body stream. The
+record walker handles these files with a special case for the zeroed-header form.

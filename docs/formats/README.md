@@ -1,11 +1,9 @@
 # Bumpy's Arcade Fantasy — data file formats
 
-Reverse-engineered from the unpacked `BUMPY.EXE` (see `../02`–`../05`) and from
-the real asset files under `originals/old-games/bumpy/`. Extraction scripts live
-in `tools/extract/`; their output goes to `build/extract/`.
-
-Loriciel title → French names: `monde`=world, `pavé`=tile/paving, `décor`=scenery,
+Loriciel title; French names: `monde`=world, `pavé`=tile/paving, `décor`=scenery,
 `fleche`=arrow, `caractères`=characters/font.
+
+Extraction scripts live in `tools/extract/`.
 
 ## File-type map
 
@@ -17,13 +15,14 @@ Loriciel title → French names: `monde`=world, `pavé`=tile/paving, `décor`=sc
 | `.BUM` | yes (`D1..D9`) | Level objects/masks (vector stream) | **big** | [BUM.md](BUM.md) |
 | `.BIN` | no | Sprite/image bank (offset directory) | **big** | [BIN.md](BIN.md) |
 | `.CAR` | no | Bitmap font ("caractères") | **big** | [CAR.md](CAR.md) |
-| `.BNK` | no | **Standard AdLib OPL2 instrument bank** | little | [BNK.md](BNK.md) |
+| `.BNK` | no | **Standard AdLib OPL2 instrument bank** (`ADLIB-` signature, little-endian) | little | — |
 | `.MID` | no | **Standard MIDI** (format 1, 7 trk, 192 tpqn) | — | use any SMF tool |
 
-`.VEC/.PAV/.DEC/.BUM` are the **same container** (below), all consumed by the
-same interpreter (`vec_run`, overlay segment `1c28`). `.BNK`/`.MID` are standard
-third-party formats — use existing tooling (adplug/AdPlug, timidity/fluidsynth),
-do not re-implement.
+`.VEC/.PAV/.DEC/.BUM` are the **same container** (below), all consumed by the same
+interpreter (`vec_run`, overlay segment `1c28`). `.BNK` is the published AdLib Inc.
+instrument-bank format readable by AdPlug/adplug and other OPL2 tools — no custom
+doc is required; use existing tooling. `.MID` is a standard MIDI file; play or
+convert with timidity, fluidsynth, or any SMF tool.
 
 ## The shared container (VEC/PAV/DEC/BUM)
 
@@ -43,7 +42,7 @@ title VEC/PAV/DEC/BUM header (8 bytes, big-endian)
 |----:|-----:|-------|---------|
 | 0 | 2 | `w0` magic | always `0x0000` |
 | 2 | 2 | `w1` decoded_size | output/render-buffer size hint in bytes (≈32000 for a full 320×200 16-colour screen; `0` in `SCORE.VEC`) |
-| 4 | 2 | `w2` checksum A | validation word (checked by `vec_read_record`) |
+| 4 | 2 | `w2` checksum A | validation word (checked by the record reader) |
 | 6 | 2 | `w3` checksum B | validation word |
 
 The header is actually the first **record**: the body is a short sequence of
@@ -52,4 +51,11 @@ records, each a 12-byte big-endian header (`w0..w3` params, `w4` opcode+flag,
 Record 0 is always `op4` with `w0=0`, `w1=decoded_size`. The per-record checksum
 makes the whole stream **walkable in pure Python** (no emulation):
 `tools/extract/vec_records.py` covers 98.5–100 % of every file. See
-[VEC.md](VEC.md) for the record layout and `vec_run` interpreter.
+[VEC.md](VEC.md) for the record layout and interpreter.
+
+## Per-level data
+
+The per-level `.PAV` / `.DEC` / `.BUM` set decodes into the buffers that make up a
+playable puzzle (the brush/tile atlas, the per-level map-header table, and the
+background tile grid). See [LEVELS.md](LEVELS.md) for the decoded-buffer layouts,
+the `0xc2`-byte level-header structure, and how the three combine.

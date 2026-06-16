@@ -1,9 +1,9 @@
-# `.BIN` — sprite / image banks
+# `.BIN` — sprite banks
 
-Loriciel-custom raster banks: `FLECHE.BIN` (the level-select arrow, "flèche") and
-`BUMSPJEU.BIN` ("BUMpy SPrites JEU" = game sprites). A `.BIN` opens with a
-directory of **big-endian `uint32`** byte offsets into the file; each entry's
-blob runs to the next offset (last → EOF).
+Loriciel-custom raster banks used by `BUMSPJEU.BIN` (game sprites) and `FLECHE.BIN`
+(the world-map level-select cursor arrow). Each file opens with a directory of
+**big-endian `uint32`** byte offsets; each entry delimits one blob, spanning from its
+offset to the next (last entry → EOF).
 
 ```mermaid
 packet-beta
@@ -16,62 +16,62 @@ title .BIN leading offset directory (big-endian uint32 each)
 
 | File | Bytes | Dir entries | First offset | Blob size(s) |
 |------|------:|------------:|-------------:|--------------|
-| FLECHE.BIN | 2188 | 1 | 0x0C | 2176 (single arrow sprite) |
-| BUMSPJEU.BIN | 89116 | 3* | 0x0C | 132, 132, 88840* |
+| `FLECHE.BIN` | 2188 | 1 | `0x0C` | 2176 (single arrow frame) |
+| `BUMSPJEU.BIN` | 89116 | — | `0x0C` | see below |
 
-### `BUMSPJEU.BIN` — flat frame-offset table + data section (CORRECTED)
+## `BUMSPJEU.BIN` — flat frame-offset table + data section
 
-The earlier "4-level offset tree" reading was wrong (those repeating 132-byte steps are
-just frame records). It is a **flat BE32 frame-offset table + a data section at 0x800**:
-
-```
-table @0       BE32 entries; each is an offset RELATIVE to the data base 0x800
-data  @0x800   per-frame [12-byte header | packed pixels]
-frame i pixels = file (0x800 + table[i]);  its 12-byte header precedes that pointer
-```
-
-Verified against the runtime: the loader resolves `table[i]` → far ptr `base+0x800+off`
-(seed sheet base `0x4eae0`), and the op12 seed's p1 frame 0 lands at file `0x80c`,
-dims 4×16 — matching `0x800 + table[0](=0xc)`. `tools/extract/sprite_container.py` walks
-the flat table; `tools/extract/sprite_oracle.py` drives the real decoder per frame.
-
-Header = BE16 words at `frame_ptr-0xc..frame_ptr`: `width@-4` (in **16-bit words per
-row**), `height@-2` (rows), plus a `ctrl` byte (`@-0xa`); BE in-file.
-
-### Pixel format — CRACKED (raw frames, pure-Python)
-
-A raw frame (`ctrl & 0x40 == 0`, ~all frames) is **4-plane planar, interleaved in 16px
-blocks**:
+`BUMSPJEU.BIN` is a flat **BE32 frame-offset table** starting at offset `0`, followed
+by a data section at a fixed base of `0x800`:
 
 ```
-row = `width` BE16 words = (width/4) blocks of 16 px
-block = [plane0_word, plane1_word, plane2_word, plane3_word]   (MSB = leftmost px)
-pixel = sum_p ((plane_p >> (15-col)) & 1) << p     # 0 = transparent
-sprite is (width/4 * 16) px wide x `height` rows
+table  @0x000   BE32 entries; each value is an offset relative to the data base 0x800
+data   @0x800   per-frame [12-byte header | packed pixels]
 ```
 
-e.g. frame 33 (world-map Bumpy-on-cloud): width=8 words → 32 px, height=21. Validated
-visually against the user's `results/oracle/bumpy_oracle.png` and the emulator capture.
-`tools/extract/sprite_sheet.py` decodes **511/512 frames** to `results/sprites/
-bumspjeu_sheet.png` (Bumpy animations, teddy bears, conveyor/awning pieces, candy/food,
-a full 0–9/A–Z sprite font, etc.) using the level (world-1) palette; 0 = transparent.
+Frame `i`'s pixel data begins at `file[0x800 + table[i]]`. The 12-byte header
+immediately **precedes** that pointer:
 
-The one remaining frame uses `ctrl & 0x40` = **mask-RLE** (`mask_count=(w*h)>>2` bitmask
-bytes then packed pixels; set bit→copy, clear→transparent), expanded at runtime by
-`prepare_sprite_frames` via the bit-reverse LUT `pixel_bitrev_lut`. The live blit
-(`blit_sprite_vga` → codegen `FUN_203b_f8fd/f87d`) rearranges this into a column-major
-form for plotting, but that rearrangement is **not needed** — the file frames decode
-directly with the block-planar reader above. (Emulator capture + background-diff,
-`sprite_isolate.py`/`sprite_crop.py`/`sprite_separate.py`, was used to obtain the
-ground-truth Bumpy/cloud that validated the format.)
+| Header field | Offset from pixel pointer | Type | Meaning |
+|---|---|---|---|
+| `ctrl` | −0x0a (−10) | byte | codec flags; `ctrl & 0x40` selects mask-RLE |
+| `width` | −4 | BE16 | row width in **16-bit words** |
+| `height` | −2 | BE16 | row count |
 
-## Extraction
+The pixel pointer itself is the first byte of packed pixel data.
 
-- `tools/extract/sprite_sheet.py` → `results/sprites/bumspjeu_sheet.png` (all frames, pure-Python).
-- `tools/extract/sprite_container.py [file.BIN]` — map the flat frame-offset table.
-- `tools/extract/binbank.py <file.BIN>` → raw blobs in `build/extract/bin/<name>/`.
-- `tools/extract/render_fleche.py` → `results/sprites/fleche_arrow.png` (+`_8x`). `FLECHE.BIN`
-  is one frame: dir `[0]=0xc` → data base `0x800`, frame_ptr `0x80c`, **width=4 words (16px),
-  height=16** → a 16×16 cursor arrow (the world-map level-select pointer). Decodes with the
-  same 4-plane block-planar reader as `BUMSPJEU`; coloured with MONDE1's embedded palette
-  (index 13 body, 14 edge; 0 transparent).
+## Pixel format — 4-plane planar, 16px blocks
+
+Raw frames (`ctrl & 0x40 == 0`) encode pixels in interleaved 16-pixel blocks, one
+block per four `width` words:
+
+```
+row    = `width` BE16 words = (width / 4) blocks of 16 px
+block  = [plane0_word, plane1_word, plane2_word, plane3_word]   (MSB = leftmost pixel)
+pixel  = sum_p( (plane_p >> (15 − col)) & 1 ) << p   for p in 0..3
+```
+
+Sprite dimensions in pixels: `(width / 4) * 16` wide × `height` rows. Palette index
+`0` is transparent.
+
+One frame in `BUMSPJEU.BIN` uses the `ctrl & 0x40` **mask-RLE** variant: a
+`(width * height) >> 2` byte bitmask precedes the packed pixels; a set bit copies
+a pixel, a clear bit produces transparency.
+
+## `FLECHE.BIN`
+
+`FLECHE.BIN` holds a single frame: directory entry `[0] = 0x0C`, so the pixel pointer
+is at file offset `0x80C`. The header gives `width = 4` words (16 px) and
+`height = 16` rows — a 16×16 cursor arrow. It decodes with the same 4-plane
+block-planar reader. Palette: MONDE1's embedded 16-colour palette (index 13 body,
+14 edge; 0 transparent).
+
+## Decoded by
+
+- `tools/extract/sprite_sheet.py` — decodes all raw frames of `BUMSPJEU.BIN` to a
+  PNG sprite sheet.
+- `tools/extract/sprite_container.py` — maps the flat frame-offset table (prints
+  per-frame offsets and header fields).
+- `tools/extract/render_fleche.py` — decodes `FLECHE.BIN` to
+  `results/sprites/fleche_arrow.png` (plus an 8× upscale).
+- `tools/extract/binbank.py` — extracts raw blobs from any `.BIN` file.
