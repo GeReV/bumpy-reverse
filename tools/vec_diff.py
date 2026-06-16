@@ -1,13 +1,24 @@
 #!/usr/bin/env python3
-"""Differential validation tool: compare a chunky-index RAW against an oracle PNG.
+"""Differential validation tool: compare a chunky-index RAW (or planar .PLN)
+against an oracle PNG.
 
-Usage:
+Usage (existing chunky mode):
     vec_diff.py <chunky.RAW> <oracle.png> [--vec <file.VEC>] [--out <render.png>]
 
-Reads a 320×200 16-colour chunky index buffer (64000 bytes, values 0..15),
+Usage (planar mode — no oracle required):
+    vec_diff.py --planar <capture.PLN> [--out <render.png>]
+
+Reads a 320x200 16-colour chunky index buffer (64000 bytes, values 0..15),
 renders it to RGB using the palette embedded in the given .VEC file (or the
 default EGA palette), writes a PNG, then compares pixel-for-pixel against the
 oracle PNG. Exits 0 on exact match, 1 on any difference or error.
+
+In --planar mode the .PLN file is a 32768-byte capture from run_bvec.py:
+    bytes   0 .. 31999  — 4 planes x 8000 bytes (plane-major order)
+    bytes 32000 .. 32767 — 256 x 3 bytes of 6-bit DAC values (R,G,B)
+The de-plane step reconstructs the 64000-byte chunky index buffer from the
+four planes, applies the captured DAC palette, and writes a PNG.  No oracle
+comparison is performed in this mode (exit 0 unless an error occurs).
 """
 from __future__ import annotations
 
@@ -39,7 +50,9 @@ from vec_render import (  # noqa: E402
 WIDTH: int = 320
 HEIGHT: int = 200
 PIXELS: int = WIDTH * HEIGHT          # 64000
-PLANAR_SIZE: int = PIXELS // 2        # 32000 — used only to locate the palette
+PLANAR_SIZE: int = PIXELS // 2        # 32000 — 4 planes x 8000 bytes
+DAC_SIZE: int = 256 * 3              # 768 bytes — 6-bit R,G,B for 256 entries
+PLN_SIZE: int = PLANAR_SIZE + DAC_SIZE  # 32768 bytes total in .PLN file
 
 
 # ---------------------------------------------------------------------------
@@ -50,7 +63,7 @@ def _palette_from_decoded(buf: bytes) -> List[Tuple[int, int, int]]:
     """Extract the 16-colour 8-bit RGB palette from a fully-decoded VEC buffer.
 
     The decoded VEC buffer layout is:
-        [metadata header] [16 × 3 bytes of 6-bit DAC values] [planar data]
+        [metadata header] [16 x 3 bytes of 6-bit DAC values] [planar data]
     The header length is ``len(buf) - PLANAR_SIZE``; the palette occupies the
     48 bytes immediately before the planar data (``hdr_len - 48``).
     """
@@ -75,13 +88,47 @@ def read_palette_from_vec(vec_path: str) -> Optional[List[Tuple[int, int, int]]]
 
 
 # ---------------------------------------------------------------------------
-# Chunky-index buffer → RGB
+# Planar capture de-plane: .PLN -> chunky index buffer
+# ---------------------------------------------------------------------------
+
+def deplane(pln: bytes) -> Tuple[bytearray, List[Tuple[int, int, int]]]:
+    """De-plane a .PLN capture into a 64000-byte chunky index buffer + palette.
+
+    .PLN layout (produced by tools/run_bvec.py Host.dump_planar):
+        bytes   0 .. 31999  — plane 0..3 sequential, 8000 bytes each
+        bytes 32000 .. 32767 — 256 x 3 bytes DAC (6-bit R,G,B per entry)
+
+    Returns (chunky, palette) where palette is a list of 16 (R8,G8,B8) tuples.
+    """
+    if len(pln) < PLN_SIZE:
+        raise ValueError("PLN too small: %d bytes (need %d)" % (len(pln), PLN_SIZE))
+    planes: List[bytes] = [pln[p * 8000:(p + 1) * 8000] for p in range(4)]
+    chunky = bytearray(PIXELS)
+    for y in range(HEIGHT):
+        for x in range(WIDTH):
+            byte_off: int = y * 40 + (x >> 3)
+            bit_shift: int = 7 - (x & 7)
+            idx: int = 0
+            for p in range(4):
+                idx |= ((planes[p][byte_off] >> bit_shift) & 1) << p
+            chunky[y * WIDTH + x] = idx
+    # Palette: first 16 DAC entries, 6-bit -> 8-bit via expand6.
+    dac_base: int = PLANAR_SIZE
+    palette: List[Tuple[int, int, int]] = []
+    for i in range(16):
+        o: int = dac_base + i * 3
+        palette.append((expand6(pln[o]), expand6(pln[o + 1]), expand6(pln[o + 2])))
+    return chunky, palette
+
+
+# ---------------------------------------------------------------------------
+# Chunky-index buffer -> RGB
 # ---------------------------------------------------------------------------
 
 def chunky_to_rgb(raw: bytes, palette: List[Tuple[int, int, int]]) -> bytearray:
     """Convert a 64000-byte chunky index buffer to a packed RGB bytearray."""
     if len(raw) != PIXELS:
-        raise ValueError(f"chunky buffer is {len(raw)} bytes; expected {PIXELS}")
+        raise ValueError("chunky buffer is %d bytes; expected %d" % (len(raw), PIXELS))
     rgb = bytearray(PIXELS * 3)
     for i, idx in enumerate(raw):
         r, g, b = palette[idx & 0x0F]
@@ -112,7 +159,7 @@ def read_png(path: str) -> Tuple[int, int, bytes]:
     """Read an RGB 8-bit PNG and return ``(width, height, rgb_bytes)``."""
     data: bytes = open(path, "rb").read()
     if data[:8] != b"\x89PNG\r\n\x1a\n":
-        raise ValueError(f"{path}: not a valid PNG file")
+        raise ValueError("%s: not a valid PNG file" % path)
     pos: int = 8
     idat_parts: List[bytes] = []
     ihdr_body: Optional[bytes] = None
@@ -128,14 +175,14 @@ def read_png(path: str) -> Tuple[int, int, bytes]:
         elif typ == b"IEND":
             break
     if ihdr_body is None:
-        raise ValueError(f"{path}: missing IHDR chunk")
+        raise ValueError("%s: missing IHDR chunk" % path)
     w, h = struct.unpack(">II", ihdr_body[:8])
     bit_depth: int = ihdr_body[8]
     colour_type: int = ihdr_body[9]
     if bit_depth != 8 or colour_type != 2:
         raise ValueError(
-            f"{path}: unsupported PNG (bit_depth={bit_depth}, colour_type={colour_type}); "
-            "only 8-bit RGB is supported"
+            "%s: unsupported PNG (bit_depth=%d, colour_type=%d); only 8-bit RGB is supported"
+            % (path, bit_depth, colour_type)
         )
     raw: bytes = zlib.decompress(b"".join(idat_parts))
     stride: int = 1 + w * 3
@@ -163,7 +210,7 @@ def read_png(path: str) -> Tuple[int, int, bytes]:
                 c: int = prev[x - 3] if x >= 3 else 0
                 row[x] = (row[x] + _paeth(a, b_, c)) & 0xFF
         else:
-            raise ValueError(f"{path}: unknown PNG filter type {filt} at row {y}")
+            raise ValueError("%s: unknown PNG filter type %d at row %d" % (path, filt, y))
         pixels[y * w * 3:(y + 1) * w * 3] = row
         prev = row
     return w, h, bytes(pixels)
@@ -200,39 +247,20 @@ def compare_rgb(
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("raw", metavar="chunky.RAW",
-                    help="320×200 chunky index buffer (64000 bytes)")
-    ap.add_argument("oracle", metavar="oracle.png",
-                    help="Reference PNG to compare against")
+    ap.add_argument("raw", metavar="chunky.RAW or capture.PLN",
+                    help="320x200 chunky index buffer (64000 bytes) or planar capture (.PLN)")
+    ap.add_argument("oracle", metavar="oracle.png", nargs="?",
+                    help="Reference PNG to compare against (chunky mode only)")
+    ap.add_argument("--planar", action="store_true",
+                    help="Input is a .PLN planar capture (32000 planar + 768 DAC bytes); "
+                         "de-plane to chunky and render PNG (no oracle comparison)")
     ap.add_argument("--vec", metavar="file.VEC",
-                    help="Extract palette from this .VEC file (preferred over EGA default)")
+                    help="Extract palette from this .VEC file (chunky mode, preferred over EGA default)")
     ap.add_argument("--out", metavar="render.png",
                     help="Where to write the rendered PNG (default: results/renders/<stem>.png)")
     args = ap.parse_args()
 
-    # 1. Read chunky buffer.
-    raw: bytes = open(args.raw, "rb").read()
-    if len(raw) != PIXELS:
-        print(f"ERROR: {args.raw} is {len(raw)} bytes; expected {PIXELS}", file=sys.stderr)
-        sys.exit(1)
-
-    # 2. Resolve palette.
-    palette: List[Tuple[int, int, int]]
-    if args.vec:
-        extracted = read_palette_from_vec(args.vec)
-        if extracted is not None:
-            palette = extracted
-        else:
-            print(f"WARNING: {args.vec} too small for embedded palette; using EGA default",
-                  file=sys.stderr)
-            palette = list(EGA)
-    else:
-        palette = list(EGA)
-
-    # 3. Render chunky → RGB.
-    rgb: bytearray = chunky_to_rgb(raw, palette)
-
-    # 4. Determine output PNG path.
+    # Determine output PNG path.
     out_path: str
     if args.out:
         out_path = args.out
@@ -240,29 +268,70 @@ def main() -> None:
         stem: str = Path(args.raw).stem
         out_dir = Path(__file__).resolve().parent.parent / "results" / "renders"
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = str(out_dir / f"{stem}.png")
+        out_path = str(out_dir / ("%s.png" % stem))
 
-    # 5. Write rendered PNG (reuse vec_render.write_png).
+    if args.planar:
+        # ---- planar de-plane mode ----
+        pln: bytes = open(args.raw, "rb").read()
+        if len(pln) < PLN_SIZE:
+            print("ERROR: %s is %d bytes; expected at least %d" % (args.raw, len(pln), PLN_SIZE),
+                  file=sys.stderr)
+            sys.exit(1)
+        chunky, palette = deplane(pln)
+        rgb: bytearray = chunky_to_rgb(bytes(chunky), palette)
+        write_png(out_path, WIDTH, HEIGHT, bytes(rgb))
+        print("PLANAR de-plane ok -> %s" % out_path)
+        sys.exit(0)
+
+    # ---- chunky mode (original behaviour) ----
+    # 1. Read chunky buffer.
+    raw: bytes = open(args.raw, "rb").read()
+    if len(raw) != PIXELS:
+        print("ERROR: %s is %d bytes; expected %d" % (args.raw, len(raw), PIXELS),
+              file=sys.stderr)
+        sys.exit(1)
+
+    # 2. Resolve palette.
+    palette_list: List[Tuple[int, int, int]]
+    if args.vec:
+        extracted = read_palette_from_vec(args.vec)
+        if extracted is not None:
+            palette_list = extracted
+        else:
+            print("WARNING: %s too small for embedded palette; using EGA default" % args.vec,
+                  file=sys.stderr)
+            palette_list = list(EGA)
+    else:
+        palette_list = list(EGA)
+
+    # 3. Render chunky -> RGB.
+    rgb = chunky_to_rgb(raw, palette_list)
+
+    # 4. Write rendered PNG (reuse vec_render.write_png).
     write_png(out_path, WIDTH, HEIGHT, bytes(rgb))
 
-    # 6. Load oracle PNG.
+    # 5. Oracle comparison (required in chunky mode).
+    if not args.oracle:
+        print("ERROR: oracle PNG required in chunky mode (or use --planar)", file=sys.stderr)
+        sys.exit(1)
+
     oracle_w, oracle_h, oracle_rgb = read_png(args.oracle)
     if oracle_w != WIDTH or oracle_h != HEIGHT:
         print(
-            f"ERROR: oracle {args.oracle} is {oracle_w}×{oracle_h}; "
-            f"expected {WIDTH}×{HEIGHT}",
+            "ERROR: oracle %s is %dx%d; expected %dx%d"
+            % (args.oracle, oracle_w, oracle_h, WIDTH, HEIGHT),
             file=sys.stderr,
         )
         sys.exit(1)
 
-    # 7. Compare pixel-for-pixel.
+    # 6. Compare pixel-for-pixel.
     n_diff, max_delta = compare_rgb(bytes(rgb), oracle_rgb, PIXELS)
 
     if n_diff == 0:
-        print(f"MATCH exact ({WIDTH}x{HEIGHT})")
+        print("MATCH exact (%dx%d)" % (WIDTH, HEIGHT))
         sys.exit(0)
     else:
-        print(f"DIFF pixels={n_diff}/{PIXELS} maxchanneldelta={max_delta}")
+        print("DIFF pixels=%d/%d maxchanneldelta=%d" % (n_diff, PIXELS, max_delta))
         sys.exit(1)
 
 

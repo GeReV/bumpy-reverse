@@ -371,6 +371,14 @@ class CPU:
             self.push(self.flags | 0xF002); return
         if op == 0x9D:  # popf
             self.flags = self.pop(); return
+        if op == 0x9E:  # sahf: SF/ZF/AF/PF/CF <- AH
+            ah = (self.r["ax"] >> 8) & 0xFF
+            self.flags = (self.flags & 0xFF00) | (ah & 0xD5) | 0x02
+            return
+        if op == 0x9F:  # lahf: AH <- SF/ZF/AF/PF/CF
+            fl = (self.flags & 0xD5) | 0x02
+            self.r["ax"] = (self.r["ax"] & 0x00FF) | (fl << 8)
+            return
         if op in (0xA0, 0xA1):  # mov al/ax, [moffs]
             w = 16 if op == 0xA1 else 8
             off = self.fetch16()

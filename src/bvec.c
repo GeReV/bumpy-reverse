@@ -1,23 +1,44 @@
 #include "bumpy.h"
 #include "dosio.h"
 #include "vec.h"
+#include "video.h"
 #include <stdio.h>
+#include <string.h>
 
-/* VEC render core — first end-to-end slice.
-   Usage: BVEC [in.VEC] [out.bin]
-   Loads a .VEC, decodes it to a 320x200 16-colour chunky buffer (one byte =
-   colour index 0..15 per pixel), and writes that buffer to a file. The chunky
-   artifact is diffed pixel-for-pixel against the Python oracle (vec_render.py).
+/* VEC render core — faithful planar-VGA pipeline.
+   Usage:
+     BVEC [in.VEC] [out.bin]  — decode .VEC, blit to VGA, write planar
+     BVEC --selftest           — write a synthetic pattern to VGA and exit
 
-   Capture route (1): write the decoded chunky buffer via DOS INT 21h. This
-   sidesteps planar-VGA-under-emulator while still validating the hard part
-   (the RLE + planar decode). */
+   Capture route (2): blit planar buffer plane-by-plane via VGA sequencer;
+   the harness captures from host.plane[].
+
+   Note on segment layout: the large static buffers are split across
+   bvec_buf1.c (g_file + g_scratch) and bvec_buf2.c (g_chunky + g_planar)
+   to stay within the 64 KB per-segment limit of the large memory model. */
 
 #define VEC_FILE_MAX 0x4000u   /* 16 KB: largest .VEC (TITRE ~12.6 KB) */
+#define PLANAR_BYTES 32000u    /* 4 planes * 8000 bytes */
 
-static u8 g_file[VEC_FILE_MAX];
-static u8 g_scratch[VEC_DECODE_MAX];
-static u8 g_chunky[VEC_CHUNKY];
+/* Large buffers declared __far in bvec_buf1.c / bvec_buf2.c to keep each
+   segment under the 64 KB DGROUP limit. */
+extern u8 __far g_file[];    /* VEC_FILE_MAX bytes */
+extern u8 __far g_scratch[]; /* VEC_DECODE_MAX bytes */
+extern u8 __far g_chunky[];  /* VEC_CHUNKY bytes */
+extern u8 __far g_planar[];  /* PLANAR_BYTES bytes */
+
+/* Synthesise a test pattern: pat[p*8000 + i] = (u8)((i + p*37) & 0xFF) */
+static void selftest_fill(u8 *planar)
+{
+    u16 p;
+    u16 i;
+
+    for (p = 0; p < 4u; p++) {
+        for (i = 0; i < 8000u; i++) {
+            planar[p * 8000u + i] = (u8)((i + p * 37u) & 0xFFu);
+        }
+    }
+}
 
 int main(int argc, char **argv)
 {
@@ -26,8 +47,19 @@ int main(int argc, char **argv)
     s16 n;
     u16 hdr;
 
+    /* --- selftest mode ---- */
+    if (argc >= 2 && strcmp(argv[1], "--selftest") == 0) {
+        selftest_fill(g_planar);
+        video_set_mode_0d();
+        video_blit_planar(g_planar);
+        video_restore_text();
+        printf("selftest: blit done\n");
+        return 0;
+    }
+
+    /* --- normal decode mode --- */
     in_path  = (argc > 1) ? argv[1] : "TITRE.VEC";
-    out_path = (argc > 2) ? argv[2] : "TITRE.RAW";
+    out_path = (argc > 2) ? argv[2] : "TITRE.PLN";
 
     n = dosio_load(in_path, g_file, VEC_FILE_MAX);
     if (n <= 0) {
@@ -41,12 +73,20 @@ int main(int argc, char **argv)
         printf("ERR: not a full-screen raster .VEC\n");
         return 2;
     }
-    printf("decoded image (header %u bytes, planar @%u)\n", hdr, hdr);
+    printf("decoded image (header %u bytes)\n", hdr);
 
-    if (dosio_save(out_path, g_chunky, VEC_CHUNKY) != 0) {
+    /* The planar buffer lives at g_scratch + hdr (past the header). */
+    memcpy(g_planar, g_scratch + hdr, PLANAR_BYTES);
+
+    video_set_mode_0d();
+    video_blit_planar(g_planar);
+    video_restore_text();
+    printf("blit complete\n");
+
+    if (dosio_save(out_path, g_planar, PLANAR_BYTES) != 0) {
         printf("ERR: cannot write %s\n", out_path);
         return 3;
     }
-    printf("wrote %u-byte chunky image -> %s\n", (u16)VEC_CHUNKY, out_path);
+    printf("wrote %u-byte planar image -> %s\n", PLANAR_BYTES, out_path);
     return 0;
 }

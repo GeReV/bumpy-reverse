@@ -7,15 +7,19 @@ create/write so the decoded image lands on the host disk), and runs to program
 exit. Input .VEC reads are resolved against --in-dir; the file the program
 creates is written under --out-dir.
 
-This is the route-(1) capture path: BVEC.EXE decodes the .VEC into a 320x200
-chunky byte buffer (one byte = colour index 0..15) and writes it via DOS file
-I/O. The harness simply lets that write reach disk; the diff tool then compares
-the file against the Python oracle. No planar-VGA emulation is involved.
+VGA model: the Host class now contains a faithful port of the mode-0D planar VGA
+hardware model from tools/emu/pydos.py (vga_write, vga_read, on_out for ports
+0x3C4/0x3C5/0x3CE/0x3CF/0x3C8/0x3C9).  Plane-major writes made by
+video_blit_planar() are captured in self.plane[0..3], and dumped to
+local/build/render/<name>.PLN after the run (32000 planar bytes + 768 DAC bytes).
 
 Usage:
     python3 tools/run_bvec.py --exe local/build/src/BVEC.EXE \\
         --in-dir local/build/capture/game --out-dir local/build/render \\
-        --args "TITRE.VEC TITRE.RAW"
+        --args "TITRE.VEC TITRE.PLN"
+
+    # selftest (no .VEC needed):
+    python3 tools/run_bvec.py --args "--selftest"
 """
 from __future__ import annotations
 
@@ -45,7 +49,12 @@ def load_mz(path: str) -> Tuple[bytes, List[Tuple[int, int]], Dict[str, int]]:
 
 
 class Host:
-    """Minimal DOS host: just enough INT 21h for BVEC.EXE to load, decode, save."""
+    """DOS host: INT 21h file I/O + planar-VGA hardware model (mode 0x0D).
+
+    VGA model ported faithfully from tools/emu/pydos.py (Machine class).
+    Plane data is captured from writes to 0xA0000-0xAFFFF via the CPU's
+    mmio_write hook.  DAC state is captured from OUT 0x3C8/0x3C9.
+    """
 
     def __init__(self, exe: str, in_dir: str, out_dir: str) -> None:
         self.exe = exe
@@ -62,6 +71,22 @@ class Host:
         self.exited: Optional[int] = None
         self.cpu: Optional[vec_cpu.CPU] = None
         self.written: List[str] = []
+
+        # ---- VGA hardware state (ported from pydos.py Machine.__init__) ----
+        # 4 planes of 64 KB each; only [0:8000] is the mode-0D framebuffer.
+        self.plane: List[bytearray] = [bytearray(0x10000) for _ in range(4)]
+        # Sequencer and GC register files.
+        self.seq: bytearray = bytearray(0x20)
+        self.gc: bytearray = bytearray(0x20)
+        # DAC: 256 entries of [R, G, B] (6-bit each, values 0..63).
+        self.dac: List[List[int]] = [[0, 0, 0] for _ in range(256)]
+        # VGA latch registers (one byte per plane).
+        self.latch: List[int] = [0, 0, 0, 0]
+        # Internal index/sub-channel state.
+        self.seq_i: int = 0
+        self.gc_i: int = 0
+        self.dac_i: int = 0
+        self.dac_sub: int = 0
 
     # ---- boot ----
     def load(self, cmdtail: str) -> None:
@@ -95,6 +120,10 @@ class Host:
         cpu.int_handler = self.on_int
         cpu.io_in = self.on_in
         cpu.io_out = self.on_out
+        # ---- wire VGA MMIO hooks (matches pydos.py Machine.load()) ----
+        cpu.mmio_lo = 0xA0000
+        cpu.mmio_read = self.vga_read
+        cpu.mmio_write = self.vga_write
         self.cpu = cpu
         self.base = base
         self.alloc = base + (len(img) + 15) // 16 + 0x100
@@ -140,6 +169,9 @@ class Host:
         al = ax & 0xFF
         if n == 0x21:
             return self.int21(cpu, ah, al)
+        if n == 0x10:
+            # INT 10h: BIOS video — just accept the mode set silently.
+            return True
         if n == 0x20:
             self.exited = 0
             cpu.halted = True
@@ -257,12 +289,102 @@ class Host:
             return True
         return True                          # default: succeed/no-op
 
-    # ---- ports (BVEC.EXE only touches INT 10h mode-set, no port I/O expected) ----
+    # ---- ports (VGA sequencer / GC / DAC) ----
+    # Ported faithfully from tools/emu/pydos.py Machine.on_out / Machine.on_in.
+
     def on_in(self, cpu: "vec_cpu.CPU", port: int, size: int) -> int:
         return 0xFF
 
     def on_out(self, cpu: "vec_cpu.CPU", port: int, size: int, value: int) -> None:
-        return None
+        value &= 0xFFFF
+        if port in (0x3C4, 0x3CE):
+            # Index write: latch index + optionally the data byte (16-bit OUT).
+            reg = self.seq if port == 0x3C4 else self.gc
+            if port == 0x3C4:
+                self.seq_i = value & 0xFF
+            else:
+                self.gc_i = value & 0xFF
+            if size == 2:
+                reg[value & 0xFF] = (value >> 8) & 0xFF
+            return
+        if port in (0x3C5, 0x3CF):
+            # Data write: store into previously latched index.
+            reg = self.seq if port == 0x3C5 else self.gc
+            idx = self.seq_i if port == 0x3C5 else self.gc_i
+            reg[idx] = value & 0xFF
+            return
+        if port == 0x3C8:
+            # DAC write address register.
+            self.dac_i = value & 0xFF
+            self.dac_sub = 0
+            return
+        if port == 0x3C9:
+            # DAC data: three successive writes = R, G, B for current entry.
+            self.dac[self.dac_i & 0xFF][self.dac_sub] = value & 0x3F
+            self.dac_sub += 1
+            if self.dac_sub == 3:
+                self.dac_sub = 0
+                self.dac_i = (self.dac_i + 1) & 0xFF
+            return
+
+    # ---- VGA planar memory (0xA0000-0xAFFFF) ----
+    # Ported faithfully from tools/emu/pydos.py Machine.vga_write / vga_read.
+
+    def vga_write(self, lin: int, val: int) -> None:
+        if lin >= 0xB0000:
+            return
+        off = (lin - 0xA0000) & 0xFFFF
+        gc = self.gc
+        seq = self.seq
+        latch = self.latch
+        wm = gc[5] & 3
+        mm = seq[2] & 0xF
+        bm = gc[8]
+        sr = gc[0]
+        esr = gc[1]
+        fn = (gc[3] >> 3) & 3
+        rot = gc[3] & 7
+        for p in range(4):
+            if not (mm & (1 << p)):
+                continue
+            lat = latch[p]
+            if wm == 1:
+                res = lat
+            elif wm == 2:
+                v = 0xFF if (val & (1 << p)) else 0
+                if fn == 1:
+                    v &= lat
+                elif fn == 2:
+                    v |= lat
+                elif fn == 3:
+                    v ^= lat
+                res = (v & bm) | (lat & ~bm)
+            elif wm == 3:
+                rv = ((val >> rot) | (val << (8 - rot))) & 0xFF if rot else val
+                m = bm & rv
+                sv = 0xFF if (sr & (1 << p)) else 0
+                res = (sv & m) | (lat & ~m)
+            else:
+                # Write mode 0 (the normal / blit mode).
+                v = ((val >> rot) | (val << (8 - rot))) & 0xFF if rot else val
+                if esr & (1 << p):
+                    v = 0xFF if (sr & (1 << p)) else 0
+                if fn == 1:
+                    v &= lat
+                elif fn == 2:
+                    v |= lat
+                elif fn == 3:
+                    v ^= lat
+                res = (v & bm) | (lat & ~bm)
+            self.plane[p][off] = res & 0xFF
+
+    def vga_read(self, lin: int) -> int:
+        if lin >= 0xB0000:
+            return 0
+        off = (lin - 0xA0000) & 0xFFFF
+        for p in range(4):
+            self.latch[p] = self.plane[p][off]
+        return self.plane[self.gc[4] & 3][off]
 
     # ---- run loop with a hard instruction cap + heartbeat ----
     def run(self, max_instr: int = 50_000_000) -> int:
@@ -281,14 +403,28 @@ class Host:
                     total // 1_000_000, cpu.s["cs"], cpu.ip), flush=True)
         return total
 
+    def dump_planar(self, out_name: str) -> str:
+        """Write captured VGA planes to <out_dir>/<out_name> and return the path.
+
+        File layout: 32000 planar bytes (host.plane[p][:8000] for p=0..3
+        concatenated) followed by 768 DAC bytes (R,G,B for entries 0..255).
+        """
+        out_path = os.path.join(self.out_dir, self.basename(out_name))
+        with open(out_path, "wb") as f:
+            for p in range(4):
+                f.write(bytes(self.plane[p][:8000]))
+            for entry in self.dac:
+                f.write(bytes(entry))
+        return out_path
+
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--exe", default=os.path.join(ROOT, "local/build/src/BVEC.EXE"))
     ap.add_argument("--in-dir", default=os.path.join(ROOT, "local/build/capture/game"))
     ap.add_argument("--out-dir", default=os.path.join(ROOT, "local/build/render"))
-    ap.add_argument("--args", default="TITRE.VEC TITRE.RAW",
-                    help="command tail passed to BVEC (input output)")
+    ap.add_argument("--args", default="--selftest",
+                    help="command tail passed to BVEC (e.g. '--selftest' or 'TITRE.VEC TITRE.PLN')")
     ap.add_argument("--max-instr", type=int, default=50_000_000)
     args = ap.parse_args()
 
@@ -300,6 +436,20 @@ def main() -> None:
     if host.exited is None:
         print("WARNING: program did not exit cleanly (instruction cap hit)", flush=True)
         sys.exit(2)
+
+    # Capture planar output from VGA plane state.
+    # Use the out-arg name from --args if present, else default to SELFTEST.PLN.
+    arg_parts = args.args.strip().split()
+    if arg_parts and arg_parts[0] == "--selftest":
+        pln_name = "SELFTEST.PLN"
+    elif len(arg_parts) >= 2:
+        pln_name = arg_parts[1]
+    else:
+        pln_name = "BVEC.PLN"
+
+    pln_path = host.dump_planar(pln_name)
+    print("captured planar -> %s" % pln_path, flush=True)
+
     for p in host.written:
         sz = os.path.getsize(p) if os.path.exists(p) else -1
         print("wrote %s (%d bytes)" % (p, sz), flush=True)
