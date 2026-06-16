@@ -8,7 +8,7 @@
 #define VEC_H          200
 #define VEC_PLANAR     32000u                /* 4 planes x 8000 bytes         */
 #define VEC_CHUNKY     64000u                /* one colour index/pixel        */
-#define VEC_DECODE_MAX 0x7d63u               /* full-screen decode buffer     */
+#define VEC_DECODE_MAX 0x7d63u               /* 51 hdr + 48 palette + 32000 planar = 32099 */
 
 /* Read big-endian 16-bit word at offset o. */
 u16 vec_be16(const u8 *b, u16 o);

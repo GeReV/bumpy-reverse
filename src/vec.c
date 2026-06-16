@@ -94,6 +94,7 @@ u16 vec_decode_image(const u8 *data, u16 n, u8 *scratch, u8 *chunky)
     u16 hdr;
 
     /* Record 0 header word w1 is the decoded size; payload starts at offset 12. */
+    if (n < 12) { return 0xffffu; }
     decoded_size = vec_be16(data, 2);
     if (decoded_size > VEC_DECODE_MAX) {
         decoded_size = VEC_DECODE_MAX;

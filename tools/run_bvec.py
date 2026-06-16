@@ -34,7 +34,8 @@ RAM = 0x110000
 
 
 def load_mz(path: str) -> Tuple[bytes, List[Tuple[int, int]], Dict[str, int]]:
-    x = open(path, "rb").read()
+    with open(path, "rb") as f:
+        x = f.read()
     e_crlc, e_cparhdr = struct.unpack_from("<HH", x, 6)
     e_ss, e_sp, _chk, e_ip, e_cs = struct.unpack_from("<HHHHH", x, 0x0E)
     e_lfarlc = struct.unpack_from("<H", x, 0x18)[0]
@@ -219,6 +220,13 @@ class Host:
             h = cpu.r["bx"]
             cx = cpu.r["cx"]
             src = (cpu.s["ds"] << 4) + cpu.r["dx"]
+            if h in (1, 2):
+                dest = sys.stdout.buffer if h == 1 else sys.stderr.buffer
+                dest.write(bytes(cpu.m[src:src + cx]))
+                dest.flush()
+                cpu.r["ax"] = cx
+                self.cf(False)
+                return True
             f = self.write_handles.get(h)
             if f:
                 f.write(bytes(cpu.m[src:src + cx]))
