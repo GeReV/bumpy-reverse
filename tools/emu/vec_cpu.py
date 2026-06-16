@@ -390,6 +390,10 @@ class CPU:
             self.do_string(op, rep, "stos"); return
         if op in (0xAC, 0xAD):  # lods
             self.do_string(op, rep, "lods"); return
+        if op in (0xA6, 0xA7):  # cmps
+            self.do_string(op, rep, "cmps"); return
+        if op in (0xAE, 0xAF):  # scas
+            self.do_string(op, rep, "scas"); return
         if op in (0xA8, 0xA9):  # test al/ax, imm
             w = 16 if op == 0xA9 else 8
             imm = self.fetch16() if w == 16 else self.fetch8()
@@ -750,7 +754,25 @@ class CPU:
                 v = self.r16(self.lin(sseg, self.r["si"])) if w == 16 else self.r8(self.lin(sseg, self.r["si"]))
                 (self.s16 if w == 16 else self.s8)(0, v)
                 self.r["si"] = (self.r["si"] + step) & 0xFFFF
-        if rep:
+            elif kind in ("cmps", "scas"):
+                if kind == "cmps":
+                    a = self.r16(self.lin(sseg, self.r["si"])) if w == 16 else self.r8(self.lin(sseg, self.r["si"]))
+                    self.r["si"] = (self.r["si"] + step) & 0xFFFF
+                else:
+                    a = self.r["ax"] if w == 16 else self.r["ax"] & 0xFF
+                b = self.r16(self.lin(self.s["es"], self.r["di"])) if w == 16 else self.r8(self.lin(self.s["es"], self.r["di"]))
+                self.r["di"] = (self.r["di"] + step) & 0xFFFF
+                self.sub(a, b, w)            # set flags only (CMP)
+                if rep:
+                    self.r["cx"] = (self.r["cx"] - 1) & 0xFFFF
+                    zf = bool(self.flags & ZF)
+                    # F3 = REPE (continue while ZF), F2 = REPNE (continue while !ZF)
+                    if (rep == 0xF3 and not zf) or (rep == 0xF2 and zf):
+                        return
+                    if self.r["cx"] == 0:
+                        return
+                continue
+        if rep and kind in ("movs", "stos", "lods"):
             self.r["cx"] = 0
 
     def check_ret(self):
