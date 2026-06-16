@@ -1,6 +1,6 @@
 # Bumpy's Arcade Fantasy — reverse engineering
 
-Reverse-engineering of **[Bumpy's Arcade Fantasy](https://www.mobygames.com/game/3832/bumpys-arcade-fantasy/)** (1992, Loriciel) — the DOS English
+This is a Claude-led reverse-engineering effort of **[Bumpy's Arcade Fantasy](https://www.mobygames.com/game/3832/bumpys-arcade-fantasy/)** (1992, Loriciel) — the DOS English
 release — into documentation and **pure-Python asset extractors/renderers**, plus a
 Ghidra-based decompilation of the engine.
 
@@ -36,3 +36,20 @@ The original game files are copyright and **not distributed here**; you supply y
 
 See [`docs/`](docs/README.md) for the file-format references and the game's
 data/resource and copy-protection systems.
+
+## Notes and Thoughts
+
+This was initially supposed to be a weekend challenge for Claude Fable 5, before it was banned. I decided to nevertheless
+continue this project using Opus 4.8.
+
+Bumpy was chosen after trying to find a classic game candidate that was both influential enough to be widely 
+known and have some emotional resonance with me, and have no prior reversing or reimplementation work done.
+
+The effort itself took about 4 work days of Claude driving its own efforts with myself generally steering it.
+
+Claude has overall performed remarkably. While it required a bit of pushing from my side to keep it digging at the
+problems that it ran into, and occasionally throwing an idea to make it try a different approach or method.  
+Despite this, it eventually managed to crack every single problem it ran into, performing work that would have 
+taken me (a very inexperienced reverse-engineer) weeks or months, if I succeeded at all.
+
+I _would_ say I am impressed.
