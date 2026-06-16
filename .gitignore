@@ -8,6 +8,8 @@
 # Build cruft
 __pycache__/
 *.pyc
+*.obj
+*.o
 
 # Root dotfiles (sandbox-mounted shell/editor/agent config — not part of the repo)
 /.*
