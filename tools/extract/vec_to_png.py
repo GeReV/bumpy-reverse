@@ -17,12 +17,14 @@ was a dosemu artifact of reading the planar at offset 0 instead of 99. Validated
 from __future__ import annotations
 import os
 import sys
+from typing import List, Optional, Tuple
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.join(ROOT, "tools/render"))
 sys.path.insert(0, os.path.join(ROOT, "tools/extract"))
 from op12_port import Op12, DG          # noqa: E402
 from vec_render import render_planar, write_png  # noqa: E402
+
+Pal = List[Tuple[int, int, int]]
 
 W, H = 320, 200
 STREAM = 0x67bf0                 # arbitrary 16-aligned load base for the flat buffer
@@ -31,27 +33,28 @@ PALETTE_OFFSET = 51             # 16 x 6-bit RGB triples in the header
 PLANAR_OFFSET = 99             # 320x200 4-plane planar data starts here
 
 
-def _e6(v):
+def _e6(v: int) -> int:
     return ((v & 0x3F) << 2) | ((v & 0x3F) >> 4)
 
 
-def embedded_palette(decoded):
+def embedded_palette(decoded: bytes) -> Pal:
     """The 16-colour palette embedded in a decoded full-screen .VEC (6-bit RGB)."""
     o = PALETTE_OFFSET
     return [(_e6(decoded[o + 3*k]), _e6(decoded[o + 3*k + 1]), _e6(decoded[o + 3*k + 2]))
             for k in range(16)]
 
 
-def decode_vec_to_framebuffer(vec_bytes, stream=STREAM, declared_len=DECLARED_LEN):
+def decode_vec_to_framebuffer(vec_bytes: bytes, stream: int = STREAM,
+                              declared_len: int = DECLARED_LEN) -> Tuple[bytearray, int]:
     """Run the full op4 -> vec_run -> op12 chain on a flat buffer; return the
     (mem, stream) so the caller can read the 320x200 planar framebuffer at `stream`."""
     mem = bytearray(0xA0000)
     mem[stream:stream + len(vec_bytes)] = vec_bytes
 
-    def sv(o, v):
+    def sv(o: int, v: int) -> None:
         mem[DG + o] = v & 0xFF; mem[DG + o + 1] = (v >> 8) & 0xFF
 
-    def setlin(off_o, seg_o, lin):
+    def setlin(off_o: int, seg_o: int, lin: int) -> None:
         sv(off_o, lin & 0xF); sv(seg_o, (lin >> 4) & 0xFFFF)
 
     setlin(0x4e0e, 0x4e10, stream)                    # vec_stream
@@ -63,7 +66,7 @@ def decode_vec_to_framebuffer(vec_bytes, stream=STREAM, declared_len=DECLARED_LE
     return mem, stream
 
 
-def decode_vec_to_png(vec_path, png_path, pal=None):
+def decode_vec_to_png(vec_path: str, png_path: str, pal: Optional[Pal] = None) -> Tuple[bytearray, int]:
     vec = open(vec_path, "rb").read()
     mem, stream = decode_vec_to_framebuffer(vec)
     decoded = bytes(mem[stream:stream + DECLARED_LEN])
@@ -74,7 +77,7 @@ def decode_vec_to_png(vec_path, png_path, pal=None):
     return mem, stream
 
 
-def main():
+def main() -> None:
     args = sys.argv[1:]
     if not args:
         vec = os.path.join(ROOT, "local/build/capture/game/MONDE1.VEC")

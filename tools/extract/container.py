@@ -12,16 +12,21 @@ Usage: container.py <file.{VEC,PAV,DEC,BUM}> ...
 Writes a per-file report to build/extract/container/<name>.txt and prints a
 one-line summary per file.
 """
+from __future__ import annotations
+
 import sys, os, struct, collections
 
 OUT = "local/build/extract/container"
 
+# A tokenized body word: ("op", opcode, flag) | ("zero", 0, 0) | ("xy", word, 0).
+Token = tuple
 
-def be16(b, o):
+
+def be16(b: bytes, o: int) -> int:
     return (b[o] << 8) | b[o + 1]
 
 
-def parse(path):
+def parse(path: str) -> tuple[bytes, dict[str, int], collections.Counter, int, list[Token]]:
     b = open(path, "rb").read()
     n = len(b)
     hdr = {
@@ -31,9 +36,9 @@ def parse(path):
         "cksum_b": be16(b, 6),
     }
     # Tokenize the body as big-endian words.
-    opc = collections.Counter()
+    opc: collections.Counter = collections.Counter()
     coords = 0
-    tokens = []
+    tokens: list[Token] = []
     o = 8
     while o + 1 < n:
         w = be16(b, o)
@@ -50,7 +55,7 @@ def parse(path):
     return b, hdr, opc, coords, tokens
 
 
-def main():
+def main() -> None:
     os.makedirs(OUT, exist_ok=True)
     for path in sys.argv[1:]:
         b, hdr, opc, coords, tokens = parse(path)

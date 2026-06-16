@@ -7,24 +7,24 @@ Empirical layout (DDFNT2.CAR):
   glyph's bitmap spans [offset[i], offset[i+1]). Glyph bit layout (planar/packed)
   not yet confirmed - this carves the per-glyph byte ranges for inspection.
 
-Usage: carfont.py <file.CAR> ...  -> build/extract/car/<name>/glyph_NNN.bin + report
+Usage: carfont.py <file.CAR> ...  -> local/build/extract/car/<name>/glyph_NNN.bin + report
 """
 import sys, os
 
 OUT = "local/build/extract/car"
 
 
-def be16(b, o):
+def be16(b: bytes, o: int) -> int:
     return (b[o] << 8) | b[o + 1]
 
 
-def main():
+def main() -> None:
     for path in sys.argv[1:]:
         b = open(path, "rb").read()
         name = os.path.basename(path)
         first_char, second, dim_a, dim_b = b[0], b[1], b[2], b[3]
         # Read BE16 offsets from offset 4 while monotonically increasing & in range.
-        offs = []
+        offs: list[int] = []
         o = 4
         prev = -1
         while o + 2 <= len(b):

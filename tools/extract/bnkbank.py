@@ -18,14 +18,14 @@ Reference layout:
   Name index @ offset_names: num_instruments * { u16 index; u8 used; char name[9] }
   Instrument data @ offset_data: 30-byte OPL2 register records (modulator+carrier)
 
-Usage: bnkbank.py <file.BNK> ...  -> build/extract/bnk/<name>/{instruments.csv,NNN_<name>.sbi}
+Usage: bnkbank.py <file.BNK> ...  -> local/build/extract/bnk/<name>/{instruments.csv,NNN_<name>.sbi}
 """
 import sys, os, struct
 
 OUT = "local/build/extract/bnk"
 
 
-def main():
+def main() -> None:
     for path in sys.argv[1:]:
         b = open(path, "rb").read()
         name = os.path.basename(path)

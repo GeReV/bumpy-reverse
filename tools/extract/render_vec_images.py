@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Batch-render every full-screen Bumpy .VEC image to PNG via the standalone, pure-
 Python decoder in vec_to_png.py (op4 -> vec_run -> op12 -> planar@99 + embedded
-palette@51). World maps go to results/levels_png/, other screens to results/images/.
+palette@51). World maps go to local/results/levels_png/, other screens to local/results/images/.
 
 Usage: render_vec_images.py            # render the default set
 """
@@ -22,11 +22,12 @@ TARGETS = ([("MONDE%d.VEC" % n, "local/results/levels_png", "world%d.png" % n) f
               ("MASKBUMP.VEC", "local/results/images", "maskbump.png")])  # EASY/MEDIUM/HARD difficulty UI
 
 
-def main():
+def main() -> None:
     for vec, outdir, name in TARGETS:
         src = os.path.join(GAME, vec)
         if not os.path.exists(src):
-            print("skip %s (missing)" % vec); continue
+            print("skip %s (missing)" % vec)
+            continue
         dst = os.path.join(ROOT, outdir, name)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         decode_vec_to_png(src, dst)

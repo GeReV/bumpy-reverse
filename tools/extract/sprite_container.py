@@ -12,24 +12,27 @@ Header (6 BE16 words at frame_ptr-0xc .. frame_ptr), read by prepare_sprite_fram
 Confirmed against the runtime: the loader resolves table[i] -> a far pointer
 base+0x800+off; the op12 seed's p1 frame 0 sits at file 0x80c, dims 4x16.
 
-Codec: ctrl & 0x40 -> mask-RLE packed pixels expanded by prepare_sprite_frames (with a
-bit-reverse LUT) into a scratch buffer; otherwise the raw frame data is used directly.
-The final pixels are plotted by a runtime codegen blitter (blit_sprite_vga ->
-FUN_203b_f8fd/f87d), so pixel extraction is emulator-assisted — see
-tools/extract/sprite_oracle.py (drives prepare_sprite_frames in vec_cpu).
+Codec: ctrl & 0x40 -> mask-RLE packed pixels (raw frames otherwise). This tool only
+maps the container (table + per-frame headers/dims); the pure-Python pixel decode for
+the raw-frame case lives in tools/extract/sprite_sheet.py.
 """
 import os, struct, sys
 
 DATA = 0x800
 
 
-def main():
+def main() -> None:
     os.chdir(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     path = sys.argv[1] if len(sys.argv) > 1 else "local/build/capture/game/BUMSPJEU.BIN"
     b = open(path, "rb").read()
     N = len(b)
-    be32 = lambda o: struct.unpack(">I", b[o:o+4])[0]
-    be16 = lambda o: struct.unpack(">H", b[o:o+2])[0]
+
+    def be32(o: int) -> int:
+        return struct.unpack(">I", b[o:o + 4])[0]
+
+    def be16(o: int) -> int:
+        return struct.unpack(">H", b[o:o + 2])[0]
+
     print("%s  %d bytes; data base %#x" % (os.path.basename(path), N, DATA))
     n = 0
     for i in range(DATA // 4):

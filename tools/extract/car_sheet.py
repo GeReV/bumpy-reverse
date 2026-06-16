@@ -3,28 +3,32 @@ header [first_char, last, cell_w, cell_h]; BE16 offset table from offset 4 up to
 first offset; table[0] is a phantom entry, so char C -> table index (C - first_char + 1).
 Each glyph = [width][height][00][height rows of 8px bitmap, MSB-first][2-byte trailer]."""
 import os, sys
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-os.chdir('/home/amirg/fable5-retro-greenfield')
-sys.path.insert(0, 'tools/extract')
-from vec_render import write_png
+from typing import List, Tuple
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(ROOT, "tools/extract"))
+from vec_render import write_png  # noqa: E402
 
 
-def load_car(path):
+def load_car(path: str) -> Tuple[bytes, int, List[int], List[int]]:
+    """Return (file, first_char, BE16 glyph-offset table, blob bounds incl. EOF)."""
     b = open(path, 'rb').read()
     first = b[0]
-    offs = []
+    offs: List[int] = []
     o = 4
     while o + 2 <= len(b):
-        v = (b[o] << 8) | b[o+1]
+        v = (b[o] << 8) | b[o + 1]
         if offs and o >= offs[0]:
             break
-        offs.append(v); o += 2
+        offs.append(v)
+        o += 2
     bounds = offs + [len(b)]
     return b, first, offs, bounds
 
 
-def glyph_bitmap(b, bounds, idx):
-    g = b[bounds[idx]:bounds[idx+1]]
+def glyph_bitmap(b: bytes, bounds: List[int], idx: int) -> Tuple[int, int, List[int]]:
+    """Return (width, height, row bytes) for glyph `idx`; an 8px-wide MSB-first bitmap."""
+    g = b[bounds[idx]:bounds[idx + 1]]
     if len(g) < 3:
         return 0, 0, []
     w, h = g[0], g[1]
@@ -32,9 +36,9 @@ def glyph_bitmap(b, bounds, idx):
     return w, h, rows
 
 
-def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else 'local/build/capture/game/DDFNT2.CAR'
-    out = sys.argv[2] if len(sys.argv) > 2 else 'local/results/images/ddfnt2_sheet.png'
+def main() -> None:
+    path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, 'local/build/capture/game/DDFNT2.CAR')
+    out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(ROOT, 'local/results/images/ddfnt2_sheet.png')
     b, first, offs, bounds = load_car(path)
     print("%s: first_char=%#x glyphs=%d" % (os.path.basename(path), first, len(offs)))
     chars = list(range(0x20, 0x80))      # printable ASCII

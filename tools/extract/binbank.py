@@ -9,20 +9,22 @@ records; FLECHE has a single entry.) Internal sprite encoding is not decoded her
 - this carves the records. See docs/formats/BIN.md.
 
 Usage: binbank.py <file.BIN> ...
-Extracts to build/extract/bin/<name>/NNNN.bin and prints a summary.
+Extracts to local/build/extract/bin/<name>/NNNN.bin and prints a summary.
 """
 import sys, os, struct
 
 OUT = "local/build/extract/bin"
 
 
-def be32(b, o):
+def be32(b: bytes, o: int) -> int:
     return struct.unpack_from(">I", b, o)[0]
 
 
-def read_dir(b):
+def read_dir(b: bytes) -> list[int]:
+    """Read the leading BE32 offset directory: entries while they stay strictly
+    increasing, in-range, and before the first blob's data begins."""
     n = len(b)
-    offs = []
+    offs: list[int] = []
     o = 0
     prev = -1
     while o + 4 <= n:
@@ -39,7 +41,7 @@ def read_dir(b):
     return offs
 
 
-def main():
+def main() -> None:
     for path in sys.argv[1:]:
         b = open(path, "rb").read()
         name = os.path.basename(path)
