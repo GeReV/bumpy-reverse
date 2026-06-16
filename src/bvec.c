@@ -23,7 +23,7 @@
    declared in bvec_buf2.c.  Both use __far so the linker places them outside
    the 64 KB DGROUP limit of the large memory model. */
 
-#define VEC_FILE_MAX 0x4000u   /* 16 KB: largest .VEC (TITRE ~12.6 KB) */
+#define VEC_FILE_MAX 0x8400u   /* 33792 B — covers SCORE.VEC (32099 B), the largest .VEC */
 #define PLANAR_BYTES 32000u    /* 4 planes * 8000 bytes */
 
 /* Large buffers declared __far in bvec_buf1.c / bvec_buf2.c to keep each

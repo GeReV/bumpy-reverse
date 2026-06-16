@@ -1,5 +1,5 @@
 /*
- * vec.c — VEC opcode interpreter: op4 path, plane-major planar output.
+ * vec.c — VEC opcode interpreter: op4 path, op0 raw path, plane-major planar output.
  *
  * Faithfully reconstructed from the engine's real vec_run (1c28:0000).
  *
@@ -7,10 +7,11 @@
  *   Extracted from DGROUP:0x4e37 in the unpacked BUMPY.EXE image and
  *   confirmed against the runtime op4_seed_mem.bin full-memory snapshot:
  *
+ *     op  0     : raw / uncompressed (SCORE.VEC — file IS the decoded buffer)
  *     op  1..3  : 1c28:0193  (single RET — no-op; not used by TITRE.VEC)
  *     op  4     : 1c28:0194  (RLE decompressor + in-place decode loop)
  *     op  5..11 : 1c28:0193  (no-op)
- *     op 12     : 1c28:04b0  (masked-blit compositor — deferred to Plan 3)
+ *     op 12     : 1c28:04b0  (masked-blit compositor — deferred to Plan 4)
  *     op 13..16 : 1c28:0193  (no-op)
  *
  * ── op4 handler summary (1c28:0194) ──────────────────────────────────────
@@ -34,12 +35,27 @@
  *   and the existing vec_rle_decode implementation below.  Equivalence confirmed:
  *   both produce the same 32099-byte decoded buffer for TITRE.VEC.
  *
+ * ── op0 raw path (SCORE.VEC) ─────────────────────────────────────────────
+ *   SCORE.VEC has all-zero record header (w0=w1=w2=w3=w4=w5=0, opcode=0).
+ *   The file is the decoded buffer directly — no RLE, no record indirection:
+ *   [0..51) meta, [51..99) 48-byte palette, [99..32099) four planes.
+ *   Spike verification: de-planing SCORE.VEC[99:] with embedded palette ==
+ *   results/images/score.png (0/64000 pixel diff). CONFIRMED.
+ *
  * ── vec_run structure ─────────────────────────────────────────────────────
  *   vec_run reads records in a loop via vec_read_record(); each 12-byte record
  *   has six big-endian words [w0..w5], where w4 (low 15 bits) is the opcode
  *   and w5 is the XOR checksum.  Termination when vec_read_record sets CF=1
  *   (w0 > 0x0f, bad high bits in w4, or checksum mismatch).  For TITRE.VEC
  *   there is exactly one record (op4) carrying the entire compressed payload.
+ *
+ * ── Record loop (this implementation) ────────────────────────────────────
+ *   We decode only the leading op4 or op0 record, which carries the full image
+ *   for all currently targeted screens.  Trailing records (if any) that cannot
+ *   be handled produce a clean early return.  This is sufficient for TITRE
+ *   (op4) and SCORE (op0).  Screens whose op4 payload decompresses into an
+ *   inner op12 record stream (DESSFIN, MASKBUMP, BUMPRESE) are not yet
+ *   supported — op12 is deferred to Plan 4.
  *
  * ── Output buffer layout ─────────────────────────────────────────────────
  *   The decoded buffer is 0x7d63 bytes = 99-byte header + 32000-byte planar.
@@ -158,11 +174,33 @@ u16 vec_decode_planar(const u8 *data, u16 n, u8 *planar, u8 *pal_out)
     if (checksum_actual != checksum_expected) { return 0xffffu; }
 
     /* ── Opcode dispatch ─────────────────────────────────────────────────── */
+
+    /* op0: raw / uncompressed (SCORE.VEC).
+       The file itself IS the decoded buffer: [0..51) meta, [51..99) palette,
+       [99..32099) four planes.  No RLE, no record-stream indirection.
+       w0=0,w1=0 → checksum 0^0^0^0^0=0 passes above; opcode=0 detected here
+       BEFORE the op4 size checks so the zero w1_decoded_size does not reject it.
+       VERIFIED: de-planing SCORE.VEC[99:] with the embedded palette ==
+       results/images/score.png (0/64000 pixel diff). */
+    if (opcode == 0u) {
+        if (n < (u16)(VEC_HDR_BYTES + VEC_PLANAR)) {
+            return 0xffffu;
+        }
+        if (pal_out != (u8 *)0) {
+            memcpy(pal_out, data + VEC_PAL_OFF, VEC_PAL_BYTES);
+        }
+        copy_planes(data, planar);
+        return 0u;
+    }
+
     if (opcode == 4u) {
         /* op4 RLE decompressor (1c28:0194).
            Inline payload starts at byte 12 of the record; the first byte of
            the payload is the RLE escape byte, payload data follows from byte 13.
-           w1_decoded_size is the uncompressed target size. */
+           w1_decoded_size is the uncompressed target size.
+           NOTE: for TITRE.VEC this is 32099 (full planar).  For DESSFIN/MASKBUMP,
+           the decoded payload is an inner op12 record stream — those screens require
+           op12 support (deferred to Plan 4) and will return 0xffff here. */
         if (w1_decoded_size < VEC_HDR_BYTES || w1_decoded_size > VEC_DECODE_MAX) {
             return 0xffffu;
         }
@@ -176,7 +214,10 @@ u16 vec_decode_planar(const u8 *data, u16 n, u8 *planar, u8 *pal_out)
             memcpy(pal_out, vec_decode_scratch + VEC_PAL_OFF, VEC_PAL_BYTES);
         }
 
-        /* Check we have a full planar payload (99 header + 32000 planar). */
+        /* Check we have a full planar payload (99 header + 32000 planar).
+           DESSFIN (17922 decoded) and MASKBUMP (3358 decoded) fail here because
+           their payloads are inner record streams, not direct planar pixels.
+           They require op12 (Plan 4). */
         if (decoded < (u16)(VEC_HDR_BYTES + VEC_PLANAR)) { return 0xffffu; }
 
         /* Copy the four planes into the caller's plane-major planar buffer. */
@@ -185,7 +226,7 @@ u16 vec_decode_planar(const u8 *data, u16 n, u8 *planar, u8 *pal_out)
     }
 
     if (opcode == 12u) {
-        /* op12 masked-blit compositor (1c28:04b0) — deferred to Plan 3. */
+        /* op12 masked-blit compositor (1c28:04b0) — deferred to Plan 4. */
         return 0xffffu;
     }
 

@@ -10,6 +10,6 @@
    Note: the decode scratch buffer (VEC_DECODE_MAX bytes) is now declared
    static inside vec.c (vec_decode_scratch) and is not exposed here. */
 
-#define VEC_FILE_MAX 0x4000u   /* 16 KB */
+#define VEC_FILE_MAX 0x8400u   /* 33792 bytes — covers SCORE.VEC (32099 B), the largest .VEC */
 
-u8 __far g_file[VEC_FILE_MAX];   /* raw .VEC bytes  (~16 KB max) */
+u8 __far g_file[VEC_FILE_MAX];   /* raw .VEC bytes  (~33 KB max) */
