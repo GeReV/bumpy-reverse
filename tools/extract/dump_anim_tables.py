@@ -46,24 +46,24 @@ NUM_FRAMES = 512
 POSC_ANCHOR = struct.pack("<8H", 8, 8, 48, 8, 88, 8, 128, 8)
 
 
-def build(exe):
+def build(exe: bytes) -> dict:
     lms = struct.unpack_from("<H", exe, 8)[0] * 16        # MZ load-module start
     a = exe.find(POSC_ANCHOR)
     if a < 0:
         raise SystemExit("posC anchor not found — is this the unpacked BUMPY executable?")
     dgfile = a - POS_C                                    # DGROUP data at this file offset
 
-    def e16(fo):
+    def e16(fo: int) -> int:
         return exe[fo] | (exe[fo + 1] << 8)
 
-    def dg(off):
+    def dg(off: int) -> int:
         return e16(dgfile + off)
 
-    def postable(base):
+    def postable(base: int) -> list[list[int]]:
         return [[dg(base + c * 4), dg(base + c * 4 + 2)] for c in range(48)]
 
-    def codemap(remap_base, desc_base, frame_bias):
-        out = {}
+    def codemap(remap_base: int, desc_base: int, frame_bias: int) -> dict[str, dict[str, int]]:
+        out: dict[str, dict[str, int]] = {}
         for code in range(1, 64):
             remap = exe[dgfile + remap_base + code]
             if remap == 0:
@@ -93,7 +93,7 @@ def build(exe):
     }
 
 
-def main():
+def main() -> None:
     exe_path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_EXE
     if not os.path.exists(exe_path):
         raise SystemExit("missing %s — unpack BUMPY.EXE with tools/tinyprog_unpack.py first"

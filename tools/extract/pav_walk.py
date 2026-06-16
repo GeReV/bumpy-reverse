@@ -11,7 +11,7 @@ def main() -> None:
     def be(o: int) -> int:
         return (d[o] << 8) | d[o + 1]
 
-    def rec(o: int):
+    def rec(o: int) -> tuple[list[int], bool]:
         w = [be(o + i * 2) for i in range(6)]
         chk = w[0] ^ w[1] ^ w[2] ^ w[3] ^ w[4]
         return w, chk == w[5]

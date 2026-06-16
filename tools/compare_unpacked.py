@@ -1,8 +1,22 @@
+#!/usr/bin/env python3
+"""Diff two unpacked MZ executables — their load-module bodies and relocation tables.
+
+Used in the unpacking write-up (docs/02-unpacking-tinyprog.md) to confirm that our
+TinyProg unpack of BUMPY.EXE matches a reference cracked build: how much of the load
+module is byte-identical, how the reloc sets overlap, and where the residual byte
+differences cluster (as contiguous runs).
+
+Usage: compare_unpacked.py <ours.exe> <cracked.exe>
+"""
 import struct, sys
+from typing import Dict
+
 a = open(sys.argv[1], "rb").read()
 b = open(sys.argv[2], "rb").read()
 
-def parse(x):
+
+def parse(x: bytes) -> Dict:
+    """Parse an MZ header -> {body (load module past the header), relocs set, entry regs}."""
     cblp, cp, crlc, cparhdr, mina, maxa, ss, sp, csum, ip, cs, lfarlc = struct.unpack_from("<HHHHHHHHHHHH", x, 2)
     h = cparhdr * 16
     relocs = set(struct.unpack_from("<HH", x, lfarlc + i * 4) for i in range(crlc))

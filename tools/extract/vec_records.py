@@ -13,22 +13,30 @@ This recovers the opcode -> inline-length map empirically, with no DOS binary.
 
 Usage: vec_records.py <file> [maxrecords]
 """
-import sys, collections
+import os, sys, collections
+from typing import List, Optional, Tuple
+
+# One walked record: (file_pos, opcode, flag, 6 header words, inline-data length).
+Record = Tuple[int, int, int, List[int], int]
 
 
-def be(b, o):
+def be(b: bytes, o: int) -> int:
     return (b[o] << 8) | b[o + 1]
 
 
-def valid(b, p):
+def valid(b: bytes, p: int) -> bool:
+    """True if a 12-byte record at `p` has a self-consistent XOR checksum (w5)."""
     if p + 12 > len(b):
         return False
     w = [be(b, p + 2 * i) for i in range(6)]
     return (w[0] ^ w[1] ^ w[2] ^ w[3] ^ w[4]) == w[5]
 
 
-def walk(b):
-    pos, recs = 0, []
+def walk(b: bytes) -> Tuple[List[Record], Optional[str]]:
+    """Walk records from offset 0, deriving each one's inline length from the gap to
+    the next checksum-valid record. Returns (records, error-or-None)."""
+    pos: int = 0
+    recs: List[Record] = []
     if not valid(b, 0):
         return recs, "header record @0 does NOT validate"
     while pos + 12 <= len(b):
@@ -46,8 +54,7 @@ def walk(b):
     return recs, None
 
 
-def dump_blobs(path, b, recs):
-    import os
+def dump_blobs(path: str, b: bytes, recs: List[Record]) -> str:
     name = os.path.basename(path)
     outdir = os.path.join("local/build/extract/vec", name)
     os.makedirs(outdir, exist_ok=True)
@@ -60,7 +67,7 @@ def dump_blobs(path, b, recs):
     return outdir
 
 
-def main():
+def main() -> None:
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     path = args[0]
     cap = int(args[1]) if len(args) > 1 else 0
