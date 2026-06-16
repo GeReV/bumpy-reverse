@@ -4,7 +4,7 @@ each block = 4 colour-plane words [p0,p1,p2,p3] (MSB=left); width = w*4 px, h ro
 0 = transparent. Palette = the world-1 level palette."""
 import os, sys, struct
 os.chdir('/home/amirg/fable5-retro-greenfield')
-sys.path.insert(0, 'tools/render'); sys.path.insert(0, 'tools/extract')
+sys.path.insert(0, 'tools/extract')
 from vec_render import write_png
 from op12_port import Op12, DG
 b = open('local/build/capture/game/BUMSPJEU.BIN', 'rb').read()

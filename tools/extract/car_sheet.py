@@ -5,7 +5,7 @@ Each glyph = [width][height][00][height rows of 8px bitmap, MSB-first][2-byte tr
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 os.chdir('/home/amirg/fable5-retro-greenfield')
-sys.path.insert(0, 'tools/render')
+sys.path.insert(0, 'tools/extract')
 from vec_render import write_png
 
 

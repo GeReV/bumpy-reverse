@@ -10,10 +10,10 @@ The original game files are copyright and **not distributed here**; you supply y
 
 | Path | What |
 |------|------|
-| `tools/extract/` | pure-Python decoders/renderers for the game's data (`.PAV/.DEC/.BUM`, `.VEC`, `.BIN`, `.CAR`, `.BNK`) → level PNGs, sprite sheets, world maps, JSON level tables |
-| `tools/render/`  | the Unicorn-based DOS emulator (`dosemu.py`) + the `vec_cpu` oracle used to validate the pure-Python ports |
+| `tools/extract/` | pure-Python decoders/renderers for the game's data (`.PAV/.DEC/.BUM`, `.VEC`, `.BIN`, `.CAR`, `.BNK`) → level PNGs, sprite sheets, world maps, JSON level tables. Self-contained: the only third-party deps are the emulators below. |
+| `tools/emu/`     | the from-scratch 16-bit x86 interpreter (`vec_cpu.py`) + pure-Python DOS host (`pydos.py`) and the Unicorn-based DOS emulators (`dosemu.py`, `vec_emu.py`, `vec_interp.py`) used while reversing the renderer |
 | `tools/ghidra_scripts/`, `tools/bin/ghidra-headless` | Ghidra analysis scripts + headless wrapper |
-| `tools/*.py`     | TinyProg unpacker (`tinyprog_unpack.py`) and small RE helpers |
+| `tools/*.py`     | TinyProg unpacker (`tinyprog_unpack.py`) and the relocation/diff helpers (`inspect_relocs.py`, `compare_unpacked.py`) behind the unpacking write-up |
 | `docs/`          | the write-up: inventory, unpacking, copy-protection, engine, and `docs/formats/*.md` (file-format specs) |
 | `local/`         | **git-ignored** working tree: your game files, the toolchain (Ghidra/JDK/DOSBox), build intermediates, and generated `results/` |
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Pure-Python DOS host that boots Bumpy on our own 16-bit CPU (vec_cpu.py) — no
-emulator dependency. It is a faithful port of tools/render/dosemu.py's environment
+emulator dependency. It is a faithful port of tools/emu/dosemu.py's environment
 (MZ loader, INT 21h file I/O, INT 10h/16h, PIT/VGA ports, mode-0Dh planar VGA, the
 timer-ISR IRET stubs, keyboard-matrix injection to drive title->menu->PLAY, and the
 DOSEMU_LEVEL force) onto the pure-Python interpreter instead of Unicorn.
@@ -15,7 +15,7 @@ import struct
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.join(ROOT, "tools/extract"))
+sys.path.insert(0, os.path.join(ROOT, "tools/emu"))
 import vec_cpu  # noqa: E402
 
 GAME_DIR = os.path.join(ROOT, "local/originals/old-games/bumpy")
