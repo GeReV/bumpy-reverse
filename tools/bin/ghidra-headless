@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Wrapper for Ghidra analyzeHeadless with a sandbox-friendly, self-contained env.
+# Location-independent: derives ROOT from this script's own path, so it keeps
+# working after the project tree is moved.
+set -euo pipefail
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"   # tools/bin -> project root
+export JAVA_HOME="$SELF/local/toolchain/jdk-21.0.11+10"
+export XDG_CONFIG_HOME="$SELF/local/toolchain/ghidra-home/.config"
+export XDG_CACHE_HOME="$SELF/local/toolchain/ghidra-home/.cache"
+export TMPDIR="$SELF/local/toolchain/ghidra-home/tmp"
+mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$TMPDIR"
+# Ghidra derives its user-temp dir from java.io.tmpdir (ignores $TMPDIR), and the
+# default /tmp/<user>-ghidra is not writable in the sandbox. Keep the VMARGS line
+# in launch.properties pinned to this tree's tmp dir.
+LP="$SELF/local/toolchain/ghidra_12.1.2_PUBLIC/support/launch.properties"
+TMPLINE="VMARGS=-Djava.io.tmpdir=$TMPDIR"
+if ! grep -qxF "$TMPLINE" "$LP"; then
+  sed -i '/^VMARGS=-Djava\.io\.tmpdir=/d' "$LP"
+  printf '\n%s\n' "$TMPLINE" >> "$LP"
+fi
+exec "$SELF/local/toolchain/ghidra_12.1.2_PUBLIC/support/analyzeHeadless" "$@"

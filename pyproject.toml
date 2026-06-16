@@ -1,0 +1,16 @@
+[project]
+name = "bumpy-re"
+version = "0.1.0"
+description = "Pure-Python reverse-engineering and asset-extraction toolkit for Bumpy's Arcade Fantasy (1992, Loriciel)."
+readme = "README.md"
+requires-python = ">=3.10"
+# Only the emulator/disassembly tools need third-party packages; the asset
+# extractors/renderers are pure stdlib. Run tools with `uv run python tools/...`.
+dependencies = [
+    "unicorn>=2.0.1",   # tools/render/dosemu.py + the vec_cpu oracle (16-bit x86 emulation)
+    "capstone>=5.0",    # tools/disasm_*.py (x86 disassembly)
+]
+
+[tool.uv]
+# This is a collection of scripts, not an installable package — manage deps only.
+package = false
