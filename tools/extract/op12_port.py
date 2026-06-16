@@ -1,33 +1,37 @@
 #!/usr/bin/env python3
 """Faithful pure-Python transliteration of op12 (Bumpy renderer's masked-blit record
-op), phases 1b/2/3 (1c28:066b..0a08), as a pc-dispatch state machine over a flat
-linear address space. The 0xcda far-pointer helpers are flat arithmetic with es:di
-preserved (confirmed from disasm). Seeded from the post-recursion snapshot
-(op12_mid.bin, captured at 0x66b) so phases 1b/2/3 are validated independently of the
-phase-1 recursion; output framebuffer is checked against the vec_cpu oracle
-(call7_truth.bin). DGROUP runtime segment 0x114b (disasm's 0x103b + 0x110 reloc).
+op), as a pc-dispatch state machine over a flat linear address space. Covers the whole
+op — phase 1, the phase-1 recursion (vec_run_7e), and phases 1b/2/3 (1c28:066b..0a08);
+the 0xcda far-pointer helpers are flat arithmetic with es:di preserved (confirmed from
+disasm).
+
+This is the production renderer imported by render_levels / vec_to_png; it was
+validated byte-for-byte against the vec_cpu emulator oracle. DGROUP runtime segment
+0x114b (disasm's 0x103b + 0x110 reloc).
 """
 from __future__ import annotations
-import os
+from typing import List, Optional
 
-ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-BR = os.path.join(ROOT, "local/build/render")
-DG = 0x114b0
-W = lambda lin: lin & 0xFFFF
+DG = 0x114b0           # DGROUP runtime linear base (disasm seg 0x103b + 0x110 reloc, <<4)
 
 
 class Op12:
-    def __init__(self, mem):
-        self.m = mem
-        self.stack = []
+    """op12 renderer state machine over a flat linear address space (see module docstring)."""
 
-    def gv(self, o):
+    def __init__(self, mem: bytearray) -> None:
+        self.m = mem
+        self.stack: List[int] = []
+        self.bp = 0
+
+    def gv(self, o: int) -> int:
+        """Read a 16-bit little-endian word from DGROUP offset `o`."""
         return self.m[DG + o] | (self.m[DG + o + 1] << 8)
 
-    def sv(self, o, v):
+    def sv(self, o: int, v: int) -> None:
+        """Write a 16-bit little-endian word to DGROUP offset `o`."""
         self.m[DG + o] = v & 0xFF; self.m[DG + o + 1] = (v >> 8) & 0xFF
 
-    def phase1(self):
+    def phase1(self) -> bool:
         """op12 0x4b0..0x66b: bound check, fill read, coord, dst2, coord-copy (mask
         setup from the stream), the recursion vec_run(0x7e), marker check.
         Returns False if op12 should terminate (marker 2 / out of bounds)."""
@@ -88,7 +92,7 @@ class Op12:
             return False
         return True
 
-    def vec_run_7e(self):
+    def vec_run_7e(self) -> None:
         """The recursion leaf (1c28:007e): compute srcp/dst2/dst/dstend from vec_src
         (rounded up to 0x10) + the backward word-copy dst->dst2."""
         m = self.m; gv = self.gv; sv = self.sv
@@ -125,7 +129,7 @@ class Op12:
             n = (n - 2) & 0xFFFFFFFF
         sv(0x4e14, 0); sv(0x4e12, 1)
 
-    def vec_read_record(self):
+    def vec_read_record(self) -> Optional[int]:
         """vec_read_record (1c28:0a09): peek the 12-byte big-endian record at the
         stream pointer; set vec_src=w0:w1, coord=w2:w3, opcode=w4. Returns the opcode
         (low 15 bits) or None to terminate. vec_run terminates (CF set) when ANY of:
@@ -154,7 +158,7 @@ class Op12:
             return None
         return w4 & 0x7FFF
 
-    def vec_run(self, dispatch_current=True, trace=None):
+    def vec_run(self, dispatch_current: bool = True, trace: Optional[list] = None) -> None:
         """vec_run record loop: dispatch op12/op4 by opcode until opcode<=0.
         dispatch_current: if seeded mid-loop (op12 entry), dispatch the already-read
         record first."""
@@ -176,7 +180,7 @@ class Op12:
             sv(0x4e2a, gv(0x4e35)); sv(0x4e28, gv(0x4e33))
             op = self.vec_read_record()
 
-    def op4_handler(self):
+    def op4_handler(self) -> None:
         """op4 (1c28:0194): in-place LZSS/RLE decompressor. Pure-Python port.
 
         The real handler relocates the compressed payload to the top of the buffer
@@ -227,7 +231,7 @@ class Op12:
         else:
             m[win: win + 0x400] = inp[-0x400:]
 
-    def run(self):
+    def run(self) -> None:
         m = self.m; gv = self.gv; sv = self.sv
         # ---- phase 1b (0x66b): save 6 words, set up src/srcp/dst/dstend/mask ----
         for o in (0x4e26, 0x4e24, 0x4e2a, 0x4e28, 0x4e0c, 0x4e0a):
@@ -235,7 +239,7 @@ class Op12:
         srcp = (gv(0x4e08) << 4) + gv(0x4e06)
         vsav = gv(0x4e28) | (gv(0x4e2a) << 16)
         src = srcp + vsav
-        sv(0x4e04, W(src >> 4) if False else (src >> 4) & 0xFFFF); sv(0x4e02, src & 0xF)
+        sv(0x4e04, (src >> 4) & 0xFFFF); sv(0x4e02, src & 0xF)
         crd = gv(0x4e1e) | (gv(0x4e20) << 16)
         t = srcp + crd
         srcp2 = t + 0xE
@@ -254,17 +258,17 @@ class Op12:
         self.bp = 0
         self.plot_loop()
 
-    def _norm(self, off_o, seg_o):
+    def _norm(self, off_o: int, seg_o: int) -> None:
         lin = (self.gv(seg_o) << 4) + self.gv(off_o)
         self.sv(off_o, lin & 0xF); self.sv(seg_o, (lin >> 4) & 0xFFFF)
 
-    def getlin(self, off_o, seg_o):
+    def getlin(self, off_o: int, seg_o: int) -> int:
         return (self.gv(seg_o) << 4) + self.gv(off_o)
 
-    def setlin(self, off_o, seg_o, lin):
+    def setlin(self, off_o: int, seg_o: int, lin: int) -> None:
         self.sv(off_o, lin & 0xF); self.sv(seg_o, (lin >> 4) & 0xFFFF)
 
-    def plot_loop(self):
+    def plot_loop(self) -> None:
         m = self.m; gv = self.gv; sv = self.sv
         while True:
             # 0x71d: decrement bit counter; reload mask when it goes negative (jns)
@@ -291,7 +295,7 @@ class Op12:
             # 0x828: relocation gate (fires at most once, then resumes plotting)
             self.phase3_relocate()
 
-    def _advance_dst_check_wrap(self):
+    def _advance_dst_check_wrap(self) -> None:
         """after writing one dst byte: advance dst, bump counter, wrap at dstend."""
         gv = self.gv; sv = self.sv
         c = (gv(0x4e12) + 1) & 0xFFFF
@@ -302,7 +306,7 @@ class Op12:
             self.setlin(0x4df6, 0x4df8, DG + 0x4e97)
             sv(0x4e1c, 0); sv(0x4e1a, 1)
 
-    def do_plot(self):                              # 0x789
+    def do_plot(self) -> None:                      # 0x789
         m = self.m
         dst = self.getlin(0x4df6, 0x4df8)
         src = self.getlin(0x4e06, 0x4e08)
@@ -312,14 +316,14 @@ class Op12:
         self.setlin(0x4df6, 0x4df8, dst + 1)
         self._advance_dst_check_wrap()
 
-    def do_fill(self):                              # 0x8d7
+    def do_fill(self) -> None:                      # 0x8d7
         m = self.m; gv = self.gv
         dst = self.getlin(0x4df6, 0x4df8)
         m[dst] = gv(0x4e22) & 0xFF
         self.setlin(0x4df6, 0x4df8, dst + 1)
         self._advance_dst_check_wrap()
 
-    def phase3_relocate(self):                       # 0x828 .. 0x8d4
+    def phase3_relocate(self) -> None:               # 0x828 .. 0x8d4
         """In-place LZ overlap management: when the forward write ptr (dst) catches
         the unread source (srcp <= dst), relocate the unread source [srcp,src) up so
         it ends at vec_end, then resume the plot loop (0x8d4 jmp 0x71d) — it fires at
@@ -347,7 +351,7 @@ class Op12:
         self.setlin(0x4e06, 0x4e08, di)        # srcp = dst2
         sv(0x4e04, gv(0x4e0c)); sv(0x4e02, gv(0x4e0a))   # src = vec_end
 
-    def finalize(self):                              # 0x934
+    def finalize(self) -> None:                      # 0x934
         gv = self.gv; sv = self.sv; m = self.m
         for o in (0x4e0a, 0x4e0c, 0x4e28, 0x4e2a, 0x4e24, 0x4e26):
             sv(o, self.stack.pop())
@@ -373,37 +377,3 @@ class Op12:
         for _ in range(0x100):
             m[di:di + 4] = m[si:si + 4]
             si += 4; di += 4
-
-
-def main():
-    import sys
-    # "entry": run full op12 (phase1+recursion+1b/2/3) from the op12 entry snapshot;
-    # default: run phases 1b/2/3 only from the post-recursion snapshot.
-    entry = len(sys.argv) > 1 and sys.argv[1] == "entry"
-    seed = "op12_seed_mem.bin" if entry else "op12_mid.bin"
-    mem = bytearray(open(os.path.join(BR, seed), "rb").read())
-    mem += bytes(max(0, 0xA0000 - len(mem)))
-    fb = ((mem[DG + 0x4e10] | (mem[DG + 0x4e10 + 1] << 8)) << 4)
-    op = Op12(mem)
-    try:
-        if entry:
-            if op.phase1():
-                op.run()
-        else:
-            op.run()
-    except Exception as e:
-        print("port raised: %s: %s" % (type(e).__name__, e))
-    truth = open(os.path.join(BR, "call7_truth.bin"), "rb").read()
-    got = bytes(mem[fb:fb + len(truth)])
-    diffs = [i for i in range(min(len(truth), len(got))) if got[i] != truth[i]]
-    if not diffs:
-        print("EXACT MATCH vs oracle!")
-    else:
-        match = len(truth) - len(diffs)
-        print("matched %d/%d (%.1f%%); first divergence @%#x got=%s want=%s" % (
-            match, len(truth), 100 * match / len(truth), diffs[0],
-            got[diffs[0]:diffs[0]+6].hex(), truth[diffs[0]:diffs[0]+6].hex()))
-
-
-if __name__ == "__main__":
-    main()
