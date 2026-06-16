@@ -1,6 +1,6 @@
 # Bumpy's Arcade Fantasy — reverse engineering
 
-Reverse-engineering of **Bumpy's Arcade Fantasy** (1992, Loriciel) — the DOS English
+Reverse-engineering of **[Bumpy's Arcade Fantasy](https://www.mobygames.com/game/3832/bumpys-arcade-fantasy/)** (1992, Loriciel) — the DOS English
 release — into documentation and **pure-Python asset extractors/renderers**, plus a
 Ghidra-based decompilation of the engine.
 
