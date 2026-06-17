@@ -13,7 +13,7 @@ SPR_OBJS = bsprite.obj bsprite_buf.obj sprite.obj dosio.obj
 .EXTENSIONS:
 .EXTENSIONS: .exe .obj .c
 
-all: $(TARGET) $(SPRITE) sprite_blit.obj sprite_chain.obj
+all: $(TARGET) $(SPRITE) sprite_blit.obj sprite_chain.obj sprite_anim.obj
 
 $(TARGET): $(OBJS)
 	mkdir -p $(OUTDIR) && $(LINK) $(LFLAGS) -fe=$(TARGET) $(OBJS)
