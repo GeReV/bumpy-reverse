@@ -39,3 +39,28 @@ int dosio_save(const char *path, const u8 *buf, u16 len)
     }
     return 0;
 }
+
+int dosio_create(const char *path)
+{
+    return open(path, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, S_IREAD | S_IWRITE);
+}
+
+int dosio_write(int fd, const u8 __far *buf, u16 len)
+{
+    return write(fd, buf, len);
+}
+
+int dosio_open_read(const char *path)
+{
+    return open(path, O_RDONLY | O_BINARY);
+}
+
+int dosio_read(int fd, u8 __far *buf, u16 len)
+{
+    return read(fd, buf, len);
+}
+
+int dosio_close(int fd)
+{
+    return close(fd);
+}

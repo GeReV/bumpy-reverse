@@ -358,6 +358,41 @@ def main() -> None:
 
     uc.hook_add(UC_HOOK_CODE, hook_blit, None, BLIT_LIN, BLIT_LIN)
 
+    # --- CONFIRMATION PROBE: is decode_2bpp_planes (1cec:00aa) the load-time bank
+    # transform? Overlay seg S -> runtime linear 0x1100 + (S-0x1000)*16 + off
+    # (dosemu's overlay formula). Count calls + log first few param ptrs. -----------
+    DEC2BPP_LIN = 0x1100 + (0x1cec - 0x1000) * 16 + 0x00aa   # = 0xe06a
+    dec2 = dict(calls=0, samples=[])
+
+    def hook_dec2bpp(uc, addr, size, _) -> None:
+        dec2["calls"] += 1
+        if len(dec2["samples"]) < 8:
+            ss = uc.reg_read(UC_X86_REG_SS); sp = uc.reg_read(UC_X86_REG_SP)
+            # near __cdecl: param_1 (far, 4B) then param_2 (far/near) above ret addr
+            args = bytes(uc.mem_read(ss * 16 + sp + 2, 8))
+            dec2["samples"].append((tr.get("instr_total", 0), args.hex()))
+
+    uc.hook_add(UC_HOOK_CODE, hook_dec2bpp, None, DEC2BPP_LIN, DEC2BPP_LIN)
+
+    # Overlay-mapping check: does blit_sprite_vga (1cec:31b7) fire at the dosemu
+    # formula address? It MUST run if sprites are drawn. If 0, the overlay-seg->linear
+    # mapping for 1cec is wrong (overlay swapping) and DEC2BPP_LIN is meaningless.
+    BLITVGA_LIN = 0x1100 + (0x1cec - 0x1000) * 16 + 0x31b7
+    bvga = dict(calls=0)
+
+    def hook_bvga(uc, addr, size, _) -> None:
+        bvga["calls"] += 1
+        # On the first blit, the 0x2000 overlay (the real blit code) is resident.
+        # CALL 0x2000:fcad / fc2d -> runtime linear 0x1100+(0x2000-0x1000)*16+off.
+        if bvga["calls"] == 1:
+            base2000 = 0x1100 + (0x2000 - 0x1000) * 16   # 0x21100? -> actually 0x11100
+            bvga["base2000"] = base2000
+            bvga["dump"] = bytes(uc.mem_read(base2000, 0x10000))  # whole 0x2000 segment
+            bvga["fc2d"] = bytes(uc.mem_read(base2000 + 0xfc2d, 48))
+            bvga["fcad"] = bytes(uc.mem_read(base2000 + 0xfcad, 48))
+
+    uc.hook_add(UC_HOOK_CODE, hook_bvga, None, BLITVGA_LIN, BLITVGA_LIN)
+
     uc.hook_add(UC_HOOK_INTR, hook_intr)
     uc.hook_add(UC_HOOK_MEM_UNMAPPED, hook_unmapped)
     uc.hook_add(UC_HOOK_MEM_WRITE, hook_vga_write, None, 0xA0000, 0xAFFFF)
@@ -455,11 +490,48 @@ def main() -> None:
     pmode = uc.mem_read(DG_LIN + OFF_PALETTE_MODE, 1)[0]
     lut = bytes(uc.mem_read(DG_LIN + OFF_BITREV_LUT, 256))
 
+    # Dump the in-memory (transformed) BUMSPJEU bank for byte-exact 5a validation.
+    # Bank far ptr = sprite-sheet ptr the objects use (DGROUP 0xa0c6 off / 0xa0c8 seg).
+    BANK_SIZE = 89116                                   # == on-disk BUMSPJEU.BIN size
+    bank_off = struct.unpack("<H", uc.mem_read(DG_LIN + 0xa0c6, 2))[0]
+    bank_seg = struct.unpack("<H", uc.mem_read(DG_LIN + 0xa0c8, 2))[0]
+    bank_lin = (bank_seg * 16 + bank_off) & 0xFFFFF
+    bank_inmem = bytes(uc.mem_read(bank_lin, BANK_SIZE))
+    with open(os.path.join(OUT_DIR, "bank_inmem.bin"), "wb") as bf:
+        bf.write(bank_inmem)
+    print("[sprite_oracle] in-mem bank @%#x (off=%#x seg=%#x) %d B -> bank_inmem.bin"
+          % (bank_lin, bank_off, bank_seg, len(bank_inmem)), flush=True)
+    print("[sprite_oracle]   table[0..16]=%s data[0x800..0x810]=%s"
+          % (bank_inmem[:16].hex(), bank_inmem[0x800:0x810].hex()), flush=True)
+
     print("[sprite_oracle] ran %d Minstr; mode=%s; palette_mode=%d; PAV=%s BUM=%s" % (
         total // 1_000_000, hex(tr["mode"]) if tr["mode"] is not None else None,
         pmode, opened(PAVNAME), opened(BUMNAME)), flush=True)
     if err:
         print("[sprite_oracle] emu error:", err, flush=True)
+    # Dump the 203b overlay thunks (203b -> DGROUP base 0x114b0). If the overlay
+    # manager patched them with far jumps (0xEA off seg), follow to the loaded code.
+    for nm, foff in (("f87d", 0xf87d), ("f8fd", 0xf8fd)):
+        b = bytes(uc.mem_read(DG_LIN + foff, 16))
+        line = "[sprite_oracle] thunk 203b:%s @%#x = %s" % (nm, DG_LIN + foff, b.hex())
+        if b[0] == 0xEA:
+            toff, tseg = struct.unpack_from("<HH", b, 1)
+            line += "  -> FAR JMP %04x:%04x (lin %#x)" % (tseg, toff, (tseg * 16 + toff) & 0xFFFFF)
+        print(line, flush=True)
+    print("[sprite_oracle] decode_2bpp_planes(1cec:00aa @%#x) calls=%d" % (
+        DEC2BPP_LIN, dec2["calls"]), flush=True)
+    for it, args in dec2["samples"]:
+        print("   [dec2bpp] args=%s" % args, flush=True)
+    print("[sprite_oracle] blit_sprite_vga(1cec:31b7 @%#x) calls=%d" % (BLITVGA_LIN, bvga["calls"]), flush=True)
+    if bvga.get("dump"):
+        ov_path = os.path.join(OUT_DIR, "ov2000.bin")
+        with open(ov_path, "wb") as f:
+            f.write(bvga["dump"])
+        nz = sum(1 for b in bvga["dump"] if b)
+        print("[sprite_oracle] ov2000 base=%#x nonzero=%d -> %s" % (
+            bvga["base2000"], nz, ov_path), flush=True)
+        print("[sprite_oracle]   @fc2d: %s" % bvga["fc2d"].hex(), flush=True)
+        print("[sprite_oracle]   @fcad: %s" % bvga["fcad"].hex(), flush=True)
     print("[sprite_oracle] LUT first16:", lut[:16].hex(), flush=True)
     print("[sprite_oracle] LUT nonzero=%d distinct=%d" % (
         sum(1 for b in lut if b), len(set(lut))), flush=True)

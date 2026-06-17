@@ -5,19 +5,24 @@ LINK    = wcl
 LFLAGS  = -ml -bt=dos -zq
 OUTDIR  = ../local/build/src
 TARGET  = $(OUTDIR)/BVEC.EXE
+SPRITE  = $(OUTDIR)/BSPRITE.EXE
 
 OBJS = bvec.obj bvec_buf1.obj bvec_buf2.obj globals.obj prng.obj dosio.obj vec.obj op12.obj video.obj
+SPR_OBJS = bsprite.obj bsprite_buf.obj sprite.obj dosio.obj
 
 .EXTENSIONS:
 .EXTENSIONS: .exe .obj .c
 
-all: $(TARGET)
+all: $(TARGET) $(SPRITE)
 
 $(TARGET): $(OBJS)
 	mkdir -p $(OUTDIR) && $(LINK) $(LFLAGS) -fe=$(TARGET) $(OBJS)
+
+$(SPRITE): $(SPR_OBJS)
+	mkdir -p $(OUTDIR) && $(LINK) $(LFLAGS) -fe=$(SPRITE) $(SPR_OBJS)
 
 .c.obj:
 	$(CC) $(CFLAGS) -fo=$^&.obj $^&.c
 
 clean: .SYMBOLIC
-	rm -f *.obj $(TARGET)
+	rm -f *.obj $(TARGET) $(SPRITE)
