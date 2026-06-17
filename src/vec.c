@@ -64,7 +64,12 @@
  */
 
 #include "vec.h"
+#include "op12.h"
 #include <string.h>
+
+/* op12 decode arena (declared in bvec_buf2.c) — holds the inner record stream
+   and where op12_vec_run builds the decoded image for op12 / inner-op4 screens. */
+extern u8 __far g_op12_arena[];
 
 /* ── Internal decode scratch buffer ──────────────────────────────────────── */
 /* The RLE decoder needs a VEC_DECODE_MAX work buffer.  It is declared as the
@@ -193,14 +198,13 @@ u16 vec_decode_planar(const u8 *data, u16 n, u8 *planar, u8 *pal_out)
         return 0u;
     }
 
-    if (opcode == 4u) {
-        /* op4 RLE decompressor (1c28:0194).
+    if (opcode == 4u && w1_decoded_size == VEC_DECODE_MAX) {
+        /* op4 full-screen direct-planar path (TITRE.VEC).
            Inline payload starts at byte 12 of the record; the first byte of
            the payload is the RLE escape byte, payload data follows from byte 13.
-           w1_decoded_size is the uncompressed target size.
-           NOTE: for TITRE.VEC this is 32099 (full planar).  For DESSFIN/MASKBUMP,
-           the decoded payload is an inner op12 record stream — those screens require
-           op12 support (deferred to Plan 4) and will return 0xffff here. */
+           w1_decoded_size == 0x7d63 means the op4 record decodes straight to a
+           full 99+32000 planar image — no inner record stream.  This is the
+           verified TITRE path and is kept unchanged. */
         if (w1_decoded_size < VEC_HDR_BYTES || w1_decoded_size > VEC_DECODE_MAX) {
             return 0xffffu;
         }
@@ -214,10 +218,6 @@ u16 vec_decode_planar(const u8 *data, u16 n, u8 *planar, u8 *pal_out)
             memcpy(pal_out, vec_decode_scratch + VEC_PAL_OFF, VEC_PAL_BYTES);
         }
 
-        /* Check we have a full planar payload (99 header + 32000 planar).
-           DESSFIN (17922 decoded) and MASKBUMP (3358 decoded) fail here because
-           their payloads are inner record streams, not direct planar pixels.
-           They require op12 (Plan 4). */
         if (decoded < (u16)(VEC_HDR_BYTES + VEC_PLANAR)) { return 0xffffu; }
 
         /* Copy the four planes into the caller's plane-major planar buffer. */
@@ -225,9 +225,29 @@ u16 vec_decode_planar(const u8 *data, u16 n, u8 *planar, u8 *pal_out)
         return 0u;
     }
 
-    if (opcode == 12u) {
-        /* op12 masked-blit compositor (1c28:04b0) — deferred to Plan 4. */
-        return 0xffffu;
+    if (opcode == 4u || opcode == 12u) {
+        /* Inner-record-stream path (MASKBUMP / DESSFIN = op4 with a small
+           decoded size; BUMPRESE = op12 at record 0).  Faithful to op12_port:
+           the raw .VEC bytes are the inner stream; vec_run dispatches op4
+           (outer RLE) and op12 (masked-blit) records over the arena until the
+           stream terminates, leaving the final 99+32000 decoded image there.
+
+           We load the raw file into g_op12_arena and run op12_vec_run with
+           declared_len = VEC_DECODE_MAX (op12_port DECLARED_LEN) and
+           payload_len = n (op12_port's vsav seed = file size). */
+        u32 i32;
+
+        if (n > OP12_ARENA_SIZE) { return 0xffffu; }
+        for (i32 = 0; i32 < (u32)n; i32++) {
+            g_op12_arena[(u16)i32] = data[(u16)i32];
+        }
+        op12_vec_run(g_op12_arena, VEC_DECODE_MAX, (u16)n);
+
+        if (pal_out != (u8 *)0) {
+            memcpy(pal_out, g_op12_arena + VEC_PAL_OFF, VEC_PAL_BYTES);
+        }
+        copy_planes(g_op12_arena, planar);
+        return 0u;
     }
 
     /* All other opcodes (op1-3, 5-11, 13+) are no-ops in the real engine

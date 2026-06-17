@@ -6,7 +6,7 @@ LFLAGS  = -ml -bt=dos -zq
 OUTDIR  = ../local/build/src
 TARGET  = $(OUTDIR)/BVEC.EXE
 
-OBJS = bvec.obj bvec_buf1.obj bvec_buf2.obj globals.obj prng.obj dosio.obj vec.obj video.obj
+OBJS = bvec.obj bvec_buf1.obj bvec_buf2.obj globals.obj prng.obj dosio.obj vec.obj op12.obj video.obj
 
 .EXTENSIONS:
 .EXTENSIONS: .exe .obj .c

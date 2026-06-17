@@ -28,8 +28,9 @@
 
 /* Large buffers declared __far in bvec_buf1.c / bvec_buf2.c to keep each
    segment under the 64 KB DGROUP limit. */
-extern u8 __far g_file[];    /* VEC_FILE_MAX bytes */
-extern u8 __far g_planar[];  /* PLANAR_BYTES bytes */
+extern u8 __far g_file[];        /* VEC_FILE_MAX bytes */
+extern u8 __far g_planar[];      /* PLANAR_BYTES bytes */
+extern u8 __far g_op12_arena[];  /* OP12_ARENA_SIZE bytes (op12 decode arena) */
 
 /* 16-colour 6-bit DAC palette (48 bytes: 16 x R,G,B). */
 static u8 g_pal[VEC_PAL_BYTES];
@@ -51,6 +52,7 @@ int main(int argc, char **argv)
 {
     const char *in_path;
     const char *out_path;
+    const char *arena_path;
     s16 n;
     u16 rc;
 
@@ -65,8 +67,12 @@ int main(int argc, char **argv)
     }
 
     /* --- normal decode mode --- */
-    in_path  = (argc > 1) ? argv[1] : "TITRE.VEC";
-    out_path = (argc > 2) ? argv[2] : "TITRE.PLN";
+    in_path    = (argc > 1) ? argv[1] : "TITRE.VEC";
+    out_path   = (argc > 2) ? argv[2] : "TITRE.PLN";
+    /* Optional 3rd positional arg: dump the op12 decode arena (VEC_DECODE_MAX
+       bytes) to this file for the buffer-level differential harness
+       (tools/op12_ref.py + tools/arena_diff.py). */
+    arena_path = (argc > 3) ? argv[3] : (const char *)0;
 
     n = dosio_load(in_path, g_file, VEC_FILE_MAX);
     if (n <= 0) {
@@ -84,6 +90,16 @@ int main(int argc, char **argv)
         return 2;
     }
     printf("decoded planar image ok\n");
+
+    /* Optional arena dump for the differential harness (before VGA blit). */
+    if (arena_path != (const char *)0) {
+        if (dosio_save(arena_path, g_op12_arena, VEC_DECODE_MAX) != 0) {
+            printf("ERR: cannot write arena %s\n", arena_path);
+        } else {
+            printf("dumped op12 arena (%u bytes) -> %s\n",
+                   (unsigned)VEC_DECODE_MAX, arena_path);
+        }
+    }
 
     /* Faithful planar-VGA pipeline. */
     video_set_mode_0d();
