@@ -393,6 +393,52 @@ def main() -> None:
 
     uc.hook_add(UC_HOOK_CODE, hook_bvga, None, BLITVGA_LIN, BLITVGA_LIN)
 
+    # --- BLIT ORACLE (5b): snapshot the planar blitter sprite_blit_planar_vga
+    # (1cec:10e1) at each call. SI = the 0x18-byte blit descriptor built by
+    # setup/clip (DGROUP 0x26bd5): [0]=src far ptr, [8]=dest(VGA) far ptr,
+    # [0x10]=width, [0x12]=rows, [0x15]=sel, [0x16]=shift, [0x17]=clip-flags.
+    # We record (descriptor, source bytes, all 4 VGA planes) at ENTRY of each
+    # call; consecutive plane snapshots give before/after for one sprite (only
+    # setup/clip run between back-to-back calls -> no intervening VGA writes).
+    PLANAR_LIN = 0x1100 + (0x1cec - 0x1000) * 16 + 0x10e1   # = 0xf0a1 (entry)
+    PLANAR_EXIT_LIN = PLANAR_LIN + (0x2139 - 0x10e1)        # = 0x100f9 (single exit)
+    BLIT_ORACLE = bool(os.environ.get("BLIT_ORACLE"))
+    MAX_BLIT_CAPS = int(os.environ.get("BLIT_ORACLE_CAPS", "24"))
+    SRC_CHUNK = 0x4000
+    blit_caps: list = []
+    pending: dict = {}
+
+    def snap_planes() -> bytes:
+        return b"".join(bytes(plane[p]) for p in range(4))
+
+    def hook_planar(uc, addr, size, _) -> None:
+        # ENTRY: record descriptor + source + the BEFORE planes for this one blit.
+        if not (BLIT_ORACLE and tr.get("watch")) or len(blit_caps) >= MAX_BLIT_CAPS:
+            return
+        ds = uc.reg_read(UC_X86_REG_DS) & 0xFFFF
+        si = uc.reg_read(UC_X86_REG_SI) & 0xFFFF
+        desc = bytes(uc.mem_read((ds * 16 + si) & 0xFFFFF, 0x20))
+        src_off, src_seg = struct.unpack_from("<HH", desc, 0)
+        src_lin = (src_seg * 16 + src_off) & 0xFFFFF
+        try:
+            src = bytes(uc.mem_read(src_lin, SRC_CHUNK))
+        except UcError:
+            src = b""
+        pending.clear()
+        pending.update(ds=ds, si=si, desc=desc, src_lin=src_lin, src=src,
+                       before=snap_planes())
+
+    def hook_planar_exit(uc, addr, size, _) -> None:
+        # EXIT (0x2139): pair the AFTER planes with the pending entry capture.
+        if not (BLIT_ORACLE and pending) or len(blit_caps) >= MAX_BLIT_CAPS:
+            return
+        cap = dict(pending); cap["after"] = snap_planes()
+        blit_caps.append(cap)
+        pending.clear()
+
+    uc.hook_add(UC_HOOK_CODE, hook_planar, None, PLANAR_LIN, PLANAR_LIN)
+    uc.hook_add(UC_HOOK_CODE, hook_planar_exit, None, PLANAR_EXIT_LIN, PLANAR_EXIT_LIN)
+
     uc.hook_add(UC_HOOK_INTR, hook_intr)
     uc.hook_add(UC_HOOK_MEM_UNMAPPED, hook_unmapped)
     uc.hook_add(UC_HOOK_MEM_WRITE, hook_vga_write, None, 0xA0000, 0xAFFFF)
@@ -468,6 +514,9 @@ def main() -> None:
         if not opened(PAVNAME):
             force_level()
         tr["watch"] = opened(PAVNAME)
+        if BLIT_ORACLE and len(blit_caps) >= MAX_BLIT_CAPS:
+            print("[sprite_oracle] blit oracle: captured %d planar-blit snapshots" % len(blit_caps), flush=True)
+            break
         if not opened(PAVNAME):
             if c <= 14:
                 set_key(0x3D, True); set_key(0x41, True)
@@ -547,6 +596,30 @@ def main() -> None:
     for (idx, ctrl, w, h), data in frames.items():
         print("   frame idx=%d ctrl=%#04x w=%d h=%d prep_len=%d  head=%s" % (
             idx, ctrl, w, h, len(data), data[:16].hex()), flush=True)
+
+    # --- BLIT ORACLE output (5b): planar-blit snapshots --------------------------
+    if BLIT_ORACLE:
+        blt_path = os.path.join(OUT_DIR, "blit_oracle.bin")
+        with open(blt_path, "wb") as f:
+            f.write(b"BLT2")
+            f.write(struct.pack("<H", len(blit_caps)))
+            for cap in blit_caps:
+                f.write(struct.pack("<HH", cap["ds"], cap["si"]))
+                f.write(cap["desc"])                                  # 0x20 bytes
+                f.write(struct.pack("<II", cap["src_lin"], len(cap["src"])))
+                f.write(cap["src"])
+                f.write(struct.pack("<I", len(cap["before"])))       # 4 * 0x10000
+                f.write(cap["before"])
+                f.write(cap["after"])                                # same length
+        print("[sprite_oracle] wrote %s : %d planar-blit snapshots" % (blt_path, len(blit_caps)), flush=True)
+        for i, cap in enumerate(blit_caps):
+            d = cap["desc"]
+            srcp = struct.unpack_from("<HH", d, 0)
+            dstp = struct.unpack_from("<HH", d, 8)
+            w16, rows = struct.unpack_from("<HH", d, 0x10)
+            print("   blit[%d] src=%04x:%04x dst=%04x:%04x w=%d rows=%d sel=%#x shift=%d clip=%#x desc=%s" % (
+                i, srcp[1], srcp[0], dstp[1], dstp[0], w16, rows, d[0x15], d[0x16], d[0x17],
+                d.hex()), flush=True)
 
 
 if __name__ == "__main__":
