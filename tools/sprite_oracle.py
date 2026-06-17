@@ -477,6 +477,11 @@ def main() -> None:
     bg_static: dict = {}
 
     def hook_restore_bg(uc, addr, size, _) -> None:
+        # ENTRY: args + planes. Consecutive entries give a clean per-cell delta:
+        # during the build the cells draw back-to-back with no other VGA writes,
+        # so planes(cell N+1) - planes(cell N) is exactly cell N's tile (the
+        # entry/exit window is NOT clean -- the build redraws over leftover menu
+        # content, so most of a tile's bytes are unchanged within a single call).
         if not (BG_ORACLE and tr.get("watch")) or len(bg_caps) >= MAX_BG_CAPS:
             return
         try:
