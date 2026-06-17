@@ -24,19 +24,24 @@ def ror16(v: int, n: int) -> int:
 
 def load_oracle(path: str):
     b = open(path, "rb").read()
-    assert b[:4] == b"BLT2", "expected BLT2 (before+after) format"
+    assert b[:4] == b"BLT3", "expected BLT3 format"
     n = struct.unpack_from("<H", b, 4)[0]
-    o = 6
+    _dgwin_off, dgwin_len = struct.unpack_from("<HH", b, 6)
+    o = 10
     caps = []
     for _ in range(n):
         ds, si = struct.unpack_from("<HH", b, o); o += 4
         desc = b[o:o + 0x20]; o += 0x20
+        setup_ds, setup_di = struct.unpack_from("<HH", b, o); o += 4
+        obj = b[o:o + 0x20]; o += 0x20
+        dgwin = b[o:o + dgwin_len]; o += dgwin_len
         src_lin, src_len = struct.unpack_from("<II", b, o); o += 8
         src = b[o:o + src_len]; o += src_len
         plen = struct.unpack_from("<I", b, o)[0]; o += 4
         before = b[o:o + plen]; o += plen
         after = b[o:o + plen]; o += plen
-        caps.append(dict(desc=desc, src=src, before=before, after=after))
+        caps.append(dict(desc=desc, src=src, before=before, after=after,
+                         obj=obj, dgwin=dgwin, setup_di=setup_di))
     return caps
 
 

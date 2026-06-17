@@ -402,14 +402,35 @@ def main() -> None:
     # setup/clip run between back-to-back calls -> no intervening VGA writes).
     PLANAR_LIN = 0x1100 + (0x1cec - 0x1000) * 16 + 0x10e1   # = 0xf0a1 (entry)
     PLANAR_EXIT_LIN = PLANAR_LIN + (0x2139 - 0x10e1)        # = 0x100f9 (single exit)
+    SETUP_LIN = 0x1100 + (0x1cec - 0x1000) * 16 + 0x103d    # sprite_blit_setup entry
+    # DGROUP window captured at setup entry (holds the chain's input globals + the
+    # descriptor-in-progress).  Runtime DGROUP offset = Ghidra(203b)-offset + 0x139.
+    DGWIN_OFF = 0x5000
+    DGWIN_LEN = 0x2000
     BLIT_ORACLE = bool(os.environ.get("BLIT_ORACLE"))
     MAX_BLIT_CAPS = int(os.environ.get("BLIT_ORACLE_CAPS", "24"))
     SRC_CHUNK = 0x4000
     blit_caps: list = []
     pending: dict = {}
+    setup_ctx: dict = {}
 
     def snap_planes() -> bytes:
         return b"".join(bytes(plane[p]) for p in range(4))
+
+    def hook_setup(uc, addr, size, _) -> None:
+        # sprite_blit_setup(103d) ENTRY: DI = the sprite object ptr; capture the
+        # object struct + the DGROUP window (view bounds, cur_sprite_data, etc.).
+        if not (BLIT_ORACLE and tr.get("watch")) or len(blit_caps) >= MAX_BLIT_CAPS:
+            return
+        ds = uc.reg_read(UC_X86_REG_DS) & 0xFFFF
+        di = uc.reg_read(UC_X86_REG_DI) & 0xFFFF
+        try:
+            obj = bytes(uc.mem_read((ds * 16 + di) & 0xFFFFF, 0x20))
+            dgwin = bytes(uc.mem_read((DG_LIN + DGWIN_OFF) & 0xFFFFF, DGWIN_LEN))
+        except UcError:
+            return
+        setup_ctx.clear()
+        setup_ctx.update(setup_ds=ds, setup_di=di, obj=obj, dgwin=dgwin)
 
     def hook_planar(uc, addr, size, _) -> None:
         # ENTRY: record descriptor + source + the BEFORE planes for this one blit.
@@ -426,7 +447,7 @@ def main() -> None:
             src = b""
         pending.clear()
         pending.update(ds=ds, si=si, desc=desc, src_lin=src_lin, src=src,
-                       before=snap_planes())
+                       before=snap_planes(), **setup_ctx)
 
     def hook_planar_exit(uc, addr, size, _) -> None:
         # EXIT (0x2139): pair the AFTER planes with the pending entry capture.
@@ -436,6 +457,7 @@ def main() -> None:
         blit_caps.append(cap)
         pending.clear()
 
+    uc.hook_add(UC_HOOK_CODE, hook_setup, None, SETUP_LIN, SETUP_LIN)
     uc.hook_add(UC_HOOK_CODE, hook_planar, None, PLANAR_LIN, PLANAR_LIN)
     uc.hook_add(UC_HOOK_CODE, hook_planar_exit, None, PLANAR_EXIT_LIN, PLANAR_EXIT_LIN)
 
@@ -600,12 +622,19 @@ def main() -> None:
     # --- BLIT ORACLE output (5b): planar-blit snapshots --------------------------
     if BLIT_ORACLE:
         blt_path = os.path.join(OUT_DIR, "blit_oracle.bin")
+        empty_obj = b"\x00" * 0x20
+        empty_dg = b"\x00" * DGWIN_LEN
         with open(blt_path, "wb") as f:
-            f.write(b"BLT2")
+            f.write(b"BLT3")
             f.write(struct.pack("<H", len(blit_caps)))
+            f.write(struct.pack("<HH", DGWIN_OFF, DGWIN_LEN))        # chain-window meta
             for cap in blit_caps:
                 f.write(struct.pack("<HH", cap["ds"], cap["si"]))
                 f.write(cap["desc"])                                  # 0x20 bytes
+                # chain inputs (object + DGROUP window) — zero-filled if setup missed
+                f.write(struct.pack("<HH", cap.get("setup_ds", 0), cap.get("setup_di", 0)))
+                f.write(cap.get("obj", empty_obj))                    # 0x20 bytes
+                f.write(cap.get("dgwin", empty_dg))                   # DGWIN_LEN
                 f.write(struct.pack("<II", cap["src_lin"], len(cap["src"])))
                 f.write(cap["src"])
                 f.write(struct.pack("<I", len(cap["before"])))       # 4 * 0x10000

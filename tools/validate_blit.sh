@@ -21,10 +21,16 @@ fi
 
 echo "== Open Watcom 16-bit compile check =="
 ( cd src && source ../local/toolchain/open-watcom/ow-env.sh \
-    && wcc -ml -bt=dos -zq -wx sprite_blit.c -fo="${TMPDIR:-/tmp}/sprite_blit.obj" )
-echo "   sprite_blit.c builds clean (wcc -ml -wx)"
+    && wcc -ml -bt=dos -zq -wx sprite_blit.c  -fo="${TMPDIR:-/tmp}/sprite_blit.obj" \
+    && wcc -ml -bt=dos -zq -wx sprite_chain.c -fo="${TMPDIR:-/tmp}/sprite_chain.obj" )
+echo "   sprite_blit.c + sprite_chain.c build clean (wcc -ml -wx)"
 
 echo "== host byte-exact replay vs engine =="
-OUT="${TMPDIR:-/tmp}/blit_ctest"
-cc -O2 -Wall -o "$OUT" tools/blit_ctest.c
-"$OUT" "$ORACLE"
+BOUT="${TMPDIR:-/tmp}/blit_ctest"
+COUT="${TMPDIR:-/tmp}/chain_ctest"
+cc -O2 -Wall -o "$BOUT" tools/blit_ctest.c
+cc -O2 -Wall -o "$COUT" tools/chain_ctest.c
+echo "-- blitter (descriptor -> VGA planes):"
+"$BOUT" "$ORACLE"
+echo "-- chain (object -> descriptor):"
+"$COUT" "$ORACLE"

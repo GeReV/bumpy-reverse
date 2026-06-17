@@ -40,20 +40,29 @@ int main(int argc, char **argv)
     b = malloc(sz);
     if (fread(b, 1, sz, f) != (size_t)sz) { fprintf(stderr, "read fail\n"); return 2; }
     fclose(f);
-    if (memcmp(b, "BLT2", 4) != 0) { fprintf(stderr, "bad magic\n"); return 2; }
+    if (memcmp(b, "BLT3", 4) != 0) { fprintf(stderr, "bad magic (want BLT3)\n"); return 2; }
     n = rd16(b + 4);
-    o = 6;
+    /* header: DGWIN_OFF, DGWIN_LEN */
+    {
+        u16 dgwin_len_hdr = rd16(b + 8);
+        o = 10;
+        (void)dgwin_len_hdr;
+    }
 
     u8 *work = malloc(4 * PLANE);
     for (i = 0; i < n; i++) {
         const u8 *desc, *src, *before, *after;
         u32 src_len, plen, dlin;
-        u16 voff, dst_stride, full_w, cols, rows;
+        u16 voff, dst_stride, full_w, cols, rows, dgwin_len;
         u8 shift;
         long diffs = 0, p;
 
         o += 4;                       /* ds, si */
         desc = b + o; o += 0x20;
+        o += 4;                       /* setup_ds, setup_di */
+        o += 0x20;                    /* object struct */
+        dgwin_len = rd16(b + 8);
+        o += dgwin_len;               /* DGROUP window */
         /* src_lin */ o += 4;
         src_len = *(u32 *)(b + o); o += 4;
         src = b + o; o += src_len;
