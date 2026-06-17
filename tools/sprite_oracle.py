@@ -461,6 +461,45 @@ def main() -> None:
     uc.hook_add(UC_HOOK_CODE, hook_planar, None, PLANAR_LIN, PLANAR_LIN)
     uc.hook_add(UC_HOOK_CODE, hook_planar_exit, None, PLANAR_EXIT_LIN, PLANAR_EXIT_LIN)
 
+    # --- BG ORACLE (6a): the background TILE build. restore_bg_tile_run
+    # (1000:0a90) is called per playfield cell during start_level; it reads the
+    # tile id from the level map (_cur_level_ptr, far ptr @ DGROUP 0x6bca) and
+    # blits 16xH tiles from the PAV atlas (far ptr @ DGROUP 0x6fa6/0x6fa8). We
+    # capture its args (run_code, cell_x, cell_y, frame) + the VGA planes at each
+    # call; consecutive snapshots give before/after for one cell (the build is
+    # back-to-back blits with no other VGA writes between).
+    RBTR_LIN = 0x1100 + 0x0a90                          # restore_bg_tile_run entry
+    ATLAS_PTR_OFF = 0x6fa6                              # level_pav_buf off / +2 seg
+    MAP_PTR_OFF = 0x6bca                                # _cur_level_ptr (far)
+    BG_ORACLE = bool(os.environ.get("BG_ORACLE"))
+    MAX_BG_CAPS = int(os.environ.get("BG_ORACLE_CAPS", "48"))
+    bg_caps: list = []
+    bg_static: dict = {}
+
+    def hook_restore_bg(uc, addr, size, _) -> None:
+        if not (BG_ORACLE and tr.get("watch")) or len(bg_caps) >= MAX_BG_CAPS:
+            return
+        try:
+            ss = uc.reg_read(UC_X86_REG_SS); sp = uc.reg_read(UC_X86_REG_SP)
+            # near __cdecl: [SP]=ret, [SP+2]=run_code, +4=cell_x, +6=cell_y, +8=frame
+            run_code, cell_x, cell_y, frame = struct.unpack(
+                "<HHHH", uc.mem_read(ss * 16 + sp + 2, 8))
+            if not bg_static:
+                a_off, a_seg = struct.unpack("<HH", uc.mem_read(DG_LIN + ATLAS_PTR_OFF, 4))
+                a_base = (a_seg * 16 + a_off) & 0xFFFFF       # buffer base (raster at +6)
+                m_off, m_seg = struct.unpack("<HH", uc.mem_read(DG_LIN + MAP_PTR_OFF, 4))
+                m_base = (m_seg * 16 + m_off) & 0xFFFFF
+                bg_static["atlas_lin"] = a_base
+                bg_static["atlas"] = bytes(uc.mem_read(a_base, 0x8000))
+                bg_static["map_lin"] = m_base
+                bg_static["map"] = bytes(uc.mem_read(m_base, 0x1000))
+        except UcError:
+            return
+        bg_caps.append(dict(run_code=run_code, cell_x=cell_x, cell_y=cell_y,
+                            frame=frame, planes=snap_planes()))
+
+    uc.hook_add(UC_HOOK_CODE, hook_restore_bg, None, RBTR_LIN, RBTR_LIN)
+
     uc.hook_add(UC_HOOK_INTR, hook_intr)
     uc.hook_add(UC_HOOK_MEM_UNMAPPED, hook_unmapped)
     uc.hook_add(UC_HOOK_MEM_WRITE, hook_vga_write, None, 0xA0000, 0xAFFFF)
@@ -538,6 +577,9 @@ def main() -> None:
         tr["watch"] = opened(PAVNAME)
         if BLIT_ORACLE and len(blit_caps) >= MAX_BLIT_CAPS:
             print("[sprite_oracle] blit oracle: captured %d planar-blit snapshots" % len(blit_caps), flush=True)
+            break
+        if BG_ORACLE and len(bg_caps) >= MAX_BG_CAPS:
+            print("[sprite_oracle] bg oracle: captured %d tile-blit snapshots" % len(bg_caps), flush=True)
             break
         if not opened(PAVNAME):
             if c <= 14:
@@ -618,6 +660,29 @@ def main() -> None:
     for (idx, ctrl, w, h), data in frames.items():
         print("   frame idx=%d ctrl=%#04x w=%d h=%d prep_len=%d  head=%s" % (
             idx, ctrl, w, h, len(data), data[:16].hex()), flush=True)
+
+    # --- BG ORACLE output (6a): tile-blit snapshots + the PAV atlas --------------
+    if BG_ORACLE:
+        bg_path = os.path.join(OUT_DIR, "bg_oracle.bin")
+        atlas = bg_static.get("atlas", b"")
+        bmap = bg_static.get("map", b"")
+        with open(bg_path, "wb") as f:
+            f.write(b"BG02")
+            f.write(struct.pack("<H", len(bg_caps)))
+            f.write(struct.pack("<II", bg_static.get("atlas_lin", 0), len(atlas)))
+            f.write(atlas)
+            f.write(struct.pack("<II", bg_static.get("map_lin", 0), len(bmap)))
+            f.write(bmap)
+            for cap in bg_caps:
+                f.write(struct.pack("<HHHH", cap["run_code"], cap["cell_x"], cap["cell_y"], cap["frame"]))
+                f.write(struct.pack("<I", len(cap["planes"])))
+                f.write(cap["planes"])                               # 4 * 0x10000
+        print("[sprite_oracle] wrote %s : %d tile-build snapshots, atlas %d B @%#x, map %d B @%#x" % (
+            bg_path, len(bg_caps), len(atlas), bg_static.get("atlas_lin", 0),
+            len(bmap), bg_static.get("map_lin", 0)), flush=True)
+        for i, cap in enumerate(bg_caps[:16]):
+            print("   bg[%d] run_code=%#x cell_x=%d cell_y=%d frame=%d" % (
+                i, cap["run_code"], cap["cell_x"], cap["cell_y"], cap["frame"]), flush=True)
 
     # --- BLIT ORACLE output (5b): planar-blit snapshots --------------------------
     if BLIT_ORACLE:
