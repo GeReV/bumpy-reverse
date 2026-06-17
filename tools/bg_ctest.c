@@ -91,5 +91,35 @@ int main(int argc, char **argv)
         }
     }
     printf("%d/%d bg cells byte-exact (in-region, C port)\n", ok, total);
+
+    /* End-to-end: render the FULL grid from the initial canvas, then verify each
+       captured cell's footprint matches the engine's cumulative state after it.
+       (Every cell draws an opaque base, so the result is determined by the tiles.) */
+    {
+        int gok = 0, gtot = 0;
+        memcpy(work, cells[0].planes, 4 * PLANE);
+        bg_render_grid(work, atlas + 6, bmap);
+        for (i = 0; i < n - 1; i++) {
+            cell_t *c = &cells[i];
+            const u8 *after = cells[i + 1].planes;
+            /* tile region only: the clear-ahead bytes are filled by the next cell
+               in a full render, but are still 0 in this cell's per-cell snapshot. */
+            int c0 = c->cx * 2, c1 = c->cx * 2 + 2;
+            int r0 = c->cy * 8, r1 = c->cy * 8 + 16;
+            long diffs = 0;
+            int p, row, col;
+            if (c1 > 40) c1 = 40;
+            for (p = 0; p < 4; p++)
+                for (row = r0; row < r1; row++)
+                    for (col = c0; col < c1; col++) {
+                        u32 x = (u32)p * PLANE + (u32)row * 40 + col;
+                        if (work[x] != after[x]) diffs++;
+                    }
+            gtot++;
+            if (diffs == 0) gok++;
+        }
+        printf("%d/%d cells match after full bg_render_grid (loop + blit)\n", gok, gtot);
+        if (gok != gtot) return 1;
+    }
     return (ok == total && total > 0) ? 0 : 1;
 }

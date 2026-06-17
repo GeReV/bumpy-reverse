@@ -80,3 +80,16 @@ void bg_tile_run(u8 __huge *planes, const u8 __huge *atlas, const u8 __far *map,
         sub++;
     }
 }
+
+void bg_render_grid(u8 __huge *planes, const u8 __huge *atlas, const u8 __far *map)
+{
+    u16 cell_x;
+    u16 cell_y;
+
+    for (cell_y = 0; cell_y <= 24; cell_y += 2) {
+        for (cell_x = 0; cell_x < 20; cell_x++) {
+            u8 run_code = map[(u32)cell_x * 0x27 + (u32)(cell_y >> 1) * 3 + 0x20];
+            bg_tile_run(planes, atlas, map, run_code, cell_x, cell_y);
+        }
+    }
+}

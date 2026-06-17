@@ -28,4 +28,9 @@
 void bg_tile_run(u8 __huge *planes, const u8 __huge *atlas, const u8 __far *map,
                  u8 run_code, u16 cell_x, u16 cell_y);
 
+/* Build the whole playfield background: iterate the 20x13 cell grid (cell_x 0..19,
+   cell_y 0,2,..,24) and draw each cell.  The per-cell run_code is the grid byte
+   map[cx*0x27 + (cy>>1)*3 + 0x20].  Mirrors start_level's tile loop. */
+void bg_render_grid(u8 __huge *planes, const u8 __huge *atlas, const u8 __far *map);
+
 #endif /* BG_RENDER_H */
