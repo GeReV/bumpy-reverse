@@ -21,6 +21,12 @@
    (the runtime linear address of bank[0]).  Frame table is at the object's
    frame_table far ptr (obj+6); frame index at obj+4.  Validated descriptor-/
    field-exact against the engine's post-select objects by tools/anim_ctest.c. */
+/* --- RECONSTRUCTION FIDELITY (deviates from the engine) ---
+   * Faithful transcription of prepare_sprite_frames' per-object select logic, BUT
+     the frame-table far pointers are resolved to bank OFFSETS relative to
+     bank_base_lin (mirroring src/sprite.c's bank_ptr) instead of the engine's direct
+     far-pointer dereference.  Functionally identical; chosen for host testability.
+   * The ctrl&0x40 packed-pixel EXPANSION branch is omitted (dead for these sprites). */
 void sprite_prepare_frame(u8 __far *obj, u8 __huge *bank, u32 bank_base_lin);
 
 #endif /* SPRITE_ANIM_H */

@@ -15,7 +15,14 @@
    The transform is in place. */
 
 /* Transform the whole sprite bank in place for the given palette_mode
-   (2 = EGA/VGA on the real DOS build).  Walks the frame table to the 0 terminator. */
+   (2 = EGA/VGA on the real DOS build).  Walks the frame table to the 0 terminator.
+
+   --- RECONSTRUCTION FIDELITY (deviates from the engine) ---
+   * Faithful transcription of sprite_bank_relocate_frames + sprite_frame_transform,
+     with bank addressing via the bank_ptr() far-pointer normalization (a
+     reconstruction of the engine's segmented arithmetic).
+   * Only palette_mode==2 (EGA/VGA) is validated byte-exact against the engine; the
+     palette_mode==0 (CGA bit-reverse) path is ported from the decomp but UNVALIDATED. */
 void sprite_bank_load_transform(u8 __far *bank, u8 palette_mode);
 
 #endif /* SPRITE_H */

@@ -24,7 +24,17 @@
      map     the level grid (_cur_level_ptr), 3 bytes/cell.
 
    The opaque write also clears 2 bytes past the tile each row (clipped at the
-   right screen edge); the masked overlay writes per-bit where any plane bit is set. */
+   right screen edge); the masked overlay writes per-bit where any plane bit is set.
+
+   --- RECONSTRUCTION FIDELITY (deviates from the engine) ---
+   * The run-loop (bg_tile_run) faithfully mirrors restore_bg_tile_run (1000:0a90).
+   * The actual tile blit is BEHAVIOR-faithful, not a port: the engine builds a
+     descriptor and calls restore_bg_view -> the BGI overlay (palette_mode dispatch)
+     to do the masked planar putimage, which is not cleanly decompilable.  Here the
+     "build descriptor + BGI putimage" is collapsed into a direct blit whose pixel
+     output was reconstructed byte-exact against the engine.
+   * Operates on a 4-plane MEMORY image, not the VGA-hardware OUT sequence (the plane
+     bytes are identical; the register OUTs / 0xA000 writes are not reproduced). */
 void bg_tile_run(u8 __huge *planes, const u8 __huge *atlas, const u8 __far *map,
                  u8 run_code, u16 cell_x, u16 cell_y);
 

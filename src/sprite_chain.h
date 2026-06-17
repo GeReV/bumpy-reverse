@@ -34,7 +34,13 @@ typedef struct {
 /* Build the blit descriptor for one sprite object. Returns 1 and fills desc[0x18]
    if the sprite is visible and overlaps the view; 0 (descriptor untouched) if the
    object is hidden or fully culled.  Mirrors object_list's per-object body +
-   clip + setup. */
+   clip + setup.
+
+   --- RECONSTRUCTION FIDELITY (deviates from the engine) ---
+   * CONSOLIDATION: this one function combines three engine functions —
+     sprite_blit_object_list (1cec:0e48, per-object body), sprite_blit_clip
+     (1cec:0f50), and sprite_blit_setup (1cec:103d).  The logic of each is a faithful
+     transcription of the (clean) decomp; only the function boundaries are merged. */
 int sprite_blit_build_desc(const u8 __far *obj, const sprite_view *view, u8 *desc);
 
 #endif /* SPRITE_CHAIN_H */

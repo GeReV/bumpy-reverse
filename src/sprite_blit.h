@@ -31,7 +31,16 @@
 
    Limited to the dominant path (sel==0, clip==0), which covers every blit observed
    under the engine.  sel!=0 (alternate column dispatch) and the clip left-edge carry
-   preload (descriptor +0x17 bit 1) are not yet ported. */
+   preload (descriptor +0x17 bit 1) are not yet ported.
+
+   --- RECONSTRUCTION FIDELITY (deviates from the engine) ---
+   * BEHAVIOR-faithful, NOT structure-faithful: 1cec:10e1 does not decompile (a
+     self-modifying, unrolled, jump-table blitter), so this is a semantic
+     reconstruction validated byte-exact against the engine's plane output, NOT a
+     transcription of the original code.  The original's structure is not preserved.
+   * Operates on a 4-plane MEMORY image; the engine drives VGA hardware (out 0x3ce/
+     0x3c4 map-mask/bit-mask + 0xA000 RMW writes).  The plane bytes produced are
+     identical; the register-OUT sequence is not reproduced. */
 void sprite_blit_planar_vga(u8 __huge *planes, const u8 __far *src,
                             u16 voff, u16 dst_stride, u16 full_w,
                             u16 cols, u16 rows, u8 shift);
