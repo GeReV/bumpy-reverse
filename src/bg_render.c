@@ -15,8 +15,15 @@ static void blit_tile(u8 __huge *planes, const u8 __huge *atlas,
     u16 ry;
     u8 bx;
     u8 p;
+    /* The last grid row (cell_y==24) is the engine's restore_bg_tile_run
+       descriptor +0x20==1 case: the 16-row tile is clipped to the 200-row screen
+       (rows 200..207 are off-screen), so only 200 - cell_y*8 rows are drawn. */
+    u16 rows_drawn = 16;
 
-    for (ry = 0; ry < 16; ry++) {
+    if ((u16)(cell_y * 8 + 16) > 200) {
+        rows_drawn = (u16)(200 - cell_y * 8);
+    }
+    for (ry = 0; ry < rows_drawn; ry++) {
         u16 srow = (u16)(arow * 16 + ry);
         u16 drow = (u16)(cell_y * 8 + ry);
         u32 drow_off = (u32)drow * ROW_BYTES;

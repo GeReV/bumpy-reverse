@@ -473,6 +473,10 @@ def main() -> None:
     MAP_PTR_OFF = 0x6bca                                # _cur_level_ptr (far)
     BG_ORACLE = bool(os.environ.get("BG_ORACLE"))
     MAX_BG_CAPS = int(os.environ.get("BG_ORACLE_CAPS", "48"))
+    # capture cells with cell_y < BG_LO_CY OR cell_y >= BG_MIN_CY (covers the top rows
+    # plus the bottom rows incl. the cy=24 screen-clip edge in one compact oracle).
+    BG_MIN_CY = int(os.environ.get("BG_ORACLE_MIN_CY", "0"))
+    BG_LO_CY = int(os.environ.get("BG_ORACLE_LO_CY", "999"))
     bg_caps: list = []
     bg_static: dict = {}
 
@@ -489,6 +493,8 @@ def main() -> None:
             # near __cdecl: [SP]=ret, [SP+2]=run_code, +4=cell_x, +6=cell_y, +8=frame
             run_code, cell_x, cell_y, frame = struct.unpack(
                 "<HHHH", uc.mem_read(ss * 16 + sp + 2, 8))
+            if not (cell_y < BG_LO_CY or cell_y >= BG_MIN_CY):
+                return
             if not bg_static:
                 a_off, a_seg = struct.unpack("<HH", uc.mem_read(DG_LIN + ATLAS_PTR_OFF, 4))
                 a_base = (a_seg * 16 + a_off) & 0xFFFFF       # buffer base (raster at +6)

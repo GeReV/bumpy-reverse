@@ -29,9 +29,10 @@
      rows       row count (descriptor +0x12)
      shift      sub-byte horizontal shift 0..7 (descriptor +0x16)
 
-   Limited to the dominant path (sel==0, clip==0), which covers every blit observed
-   under the engine.  sel!=0 (alternate column dispatch) and the clip left-edge carry
-   preload (descriptor +0x17 bit 1) are not yet ported.
+   The dominant path (sel==0) covers every blit observed under the engine.  The clip
+   left-edge carry preload (clip_flags bit 1) is ported but UNVALIDATED (no captured
+   blit is left-clipped).  sel!=0 (the alternate column dispatch) is not reconstructed
+   — see the note in sprite_blit.c.
 
    --- RECONSTRUCTION FIDELITY (deviates from the engine) ---
    * BEHAVIOR-faithful, NOT structure-faithful: 1cec:10e1 does not decompile (a
@@ -43,6 +44,6 @@
      identical; the register-OUT sequence is not reproduced. */
 void sprite_blit_planar_vga(u8 __huge *planes, const u8 __far *src,
                             u16 voff, u16 dst_stride, u16 full_w,
-                            u16 cols, u16 rows, u8 shift);
+                            u16 cols, u16 rows, u8 shift, u8 clip_flags);
 
 #endif /* SPRITE_BLIT_H */

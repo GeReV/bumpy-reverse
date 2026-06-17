@@ -79,7 +79,8 @@ int main(int argc, char **argv)
         shift = desc[0x16];
 
         memcpy(work, before, 4 * PLANE);
-        sprite_blit_planar_vga(work, src, voff, dst_stride, full_w, cols, rows, shift);
+        sprite_blit_planar_vga(work, src, voff, dst_stride, full_w, cols, rows,
+                               shift, desc[0x17]);
         for (p = 0; p < (long)(4 * PLANE); p++) {
             if (work[p] != after[p]) diffs++;
         }

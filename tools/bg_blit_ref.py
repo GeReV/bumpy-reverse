@@ -57,7 +57,12 @@ def blit_cell(planes, atlas, bmap, cell, clear_ahead=True, mask_overlay=True):
         tid = code - 1
         acol, arow = tid % 20, tid // 20
         masked = mask_overlay and sub > 0          # run-cell overlays are masked
-        for ry in range(16):
+        # last grid row (cy==24, engine descriptor +0x20==1) clips to the 200-row
+        # screen: rows 200..207 are off-screen and not drawn.
+        rows_drawn = 16
+        if cy * 8 + 16 > 200:
+            rows_drawn = 200 - cy * 8
+        for ry in range(rows_drawn):
             srow = arow * 16 + ry
             drow = cy * 8 + ry
             for bx in range(2):

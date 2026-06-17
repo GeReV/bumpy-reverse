@@ -3,7 +3,14 @@
 /* See sprite_blit.h.  This mirrors the inner per-column arithmetic of the engine
    blitter exactly (ror / current-column mask / inter-column carry / RMW plane
    store), validated byte-exact against the engine plane capture by
-   tools/blit_ref.py over 23 distinct real blits (w=1,2,4; shift=0,1). */
+   tools/blit_ref.py over 23 distinct real blits (w=1,2,4; shift=0,1).
+
+   On `sel`: the engine's 10e1 dispatches on descriptor[0x15] through a 6-byte table
+   at 1cec:0x328f, selecting one of several unrolled column-blit variants.  The
+   SPRITE pipeline always sets sel==0 (sprite_blit_setup hardcodes descriptor[0x15]=0),
+   so this reconstruction implements the sel==0 path, which is exhaustive for every
+   sprite blit.  The sel!=0 table entries are reached only by OTHER (non-sprite)
+   callers of 10e1 and are out of scope here (not a dead branch of the sprite path). */
 
 #define PLANE_SIZE  0x10000UL
 
@@ -25,7 +32,7 @@ static u16 swap_bytes(u16 v)
 
 void sprite_blit_planar_vga(u8 __huge *planes, const u8 __far *src,
                             u16 voff, u16 dst_stride, u16 full_w,
-                            u16 cols, u16 rows, u8 shift)
+                            u16 cols, u16 rows, u8 shift, u8 clip_flags)
 {
     u16 src_stride = (u16)(4u * full_w);
     /* di = (0xff >> shift) replicated into both bytes = the bits kept in the
@@ -40,6 +47,18 @@ void sprite_blit_planar_vga(u8 __huge *planes, const u8 __far *src,
         u32 d = (u32)voff + (u32)row * dst_stride;
         u16 bx = 0;
         u16 cx = 0;
+
+        /* Left-edge clip carry preload (engine 1cec:0x210b -> 0x2117): when the
+           sprite is clipped on the left (clip_flags bit 1), the first column's
+           carry comes from the off-screen column just before `s` (s[-4..-1]),
+           rotated like a normal column.  UNVALIDATED: no captured engine blit is
+           left-clipped, so this path has no oracle coverage. */
+        if (clip_flags & 2) {
+            u16 pax = ror16((u16)(((u16)s[-3] << 8) | s[-4]), shift);
+            u16 pdx = ror16((u16)(((u16)s[-1] << 8) | s[-2]), shift);
+            bx = (u16)(swap_bytes(pax) & ndi);
+            cx = (u16)(swap_bytes(pdx) & ndi);
+        }
 
         for (col = 0; col <= cols; col++) {
             u16 sav_ax = 0;
