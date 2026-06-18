@@ -13,11 +13,13 @@ bgref = importlib.util.module_from_spec(spec); spec.loader.exec_module(bgref)
 PLANE = 0x10000
 
 
-def load(path: str):
+def load(path: str) -> tuple[bytes, bytes, bytes, bytes]:
     """Read an FRM2 or FRM3 file and return the bg-relevant fields.
 
     Accepts FRM3 (new) as well as the legacy FRM2 tag so the bg-diff path
     continues to work after the oracle is regenerated.
+
+    Returns a 4-tuple (planes, dac, atlas, bmap) of bytes.
     """
     d = load_frame3(path)
     return d["planes"], d["dac"], d["atlas"], d["map"]
@@ -27,7 +29,7 @@ def load_frame3(path: str) -> Dict:
     """Parse an FRM3 oracle file into a dict with all blocks.
 
     Keys returned:
-        tag (bytes)        — b"FRM3"
+        tag (bytes)        — b"FRM3" or b"FRM2" (legacy; new-block fields are empty stubs)
         planes (bytes)     — 4 VGA planes, 0x10000 B each (total 0x40000 B)
         dac (bytes)        — 256*3 palette (0..63 per channel)
         atlas (bytes)      — PAV atlas raster (0x8000 B)
@@ -44,7 +46,8 @@ def load_frame3(path: str) -> Dict:
                                (A_off, A_seg, B_off, B_seg)
         dg (bytes)         — 0x10000 B full DGROUP snapshot
     """
-    b = open(path, "rb").read()
+    with open(path, "rb") as fh:
+        b = fh.read()
     tag = b[:4]
     assert tag in (b"FRM2", b"FRM3"), "unexpected tag: %r" % tag
 

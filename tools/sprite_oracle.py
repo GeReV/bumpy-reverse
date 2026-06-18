@@ -623,43 +623,61 @@ def main() -> None:
             # --- 6b: capture entity runtime state at this exact settled frame -----
             # Level index (1-based)
             frame_snap["level"] = LEVEL
-            # BUM per-level header block (lives outside DGROUP).
-            # tilemap far ptr @ DGROUP:0xa0d8 → per-level block base.
-            # Payload: buffer+2 + (LEVEL-1)*0xc2  →  0xc2 bytes of level header.
-            bum_off, bum_seg = struct.unpack("<HH", uc.mem_read(DG_LIN + 0xa0d8, 4))
-            bum_block_lin = (bum_seg * 16 + bum_off) & 0xFFFFF
-            hdr_lin = bum_block_lin + 2 + (LEVEL - 1) * 0xC2
-            frame_snap["bum"] = bytes(uc.mem_read(hdr_lin, 0xC2))
-            # Sprite object structs (each 0x18 bytes, fixed DGROUP addresses).
-            # P1 obj @ 0x792e, P2 obj @ 0x795a.
-            frame_snap["p1_obj"] = bytes(uc.mem_read(DG_LIN + 0x792e, 0x18))
-            frame_snap["p2_obj"] = bytes(uc.mem_read(DG_LIN + 0x795a, 0x18))
-            # Player globals — NOT contiguous; read each field separately.
-            # p1: pixel_x@0x9290(2B)  pixel_y@0x9292(2B)  move_anim@0x824a(2B)
-            frame_snap["p1_glob"] = (bytes(uc.mem_read(DG_LIN + 0x9290, 2))
-                                     + bytes(uc.mem_read(DG_LIN + 0x9292, 2))
-                                     + bytes(uc.mem_read(DG_LIN + 0x824a, 2)))
-            # p2: pixel_x@0x79ba(2B)  pixel_y@0x79bc(2B)  move_anim@0x8560(2B)
-            frame_snap["p2_glob"] = (bytes(uc.mem_read(DG_LIN + 0x79ba, 2))
-                                     + bytes(uc.mem_read(DG_LIN + 0x79bc, 2))
-                                     + bytes(uc.mem_read(DG_LIN + 0x8560, 2)))
-            # Anim channel records: read by fixed DGROUP offsets (stride 0xc).
-            # Layer-A: 3 records at 0x4c40 / 0x4c4c / 0x4c58
-            # Layer-B: 4 records at 0x4c80 / 0x4c8c / 0x4c98 / 0x4ca4
-            raw_a = bytes(uc.mem_read(DG_LIN + 0x4c40, 3 * 0xc))
-            raw_b = bytes(uc.mem_read(DG_LIN + 0x4c80, 4 * 0xc))
-            frame_snap["chan_a_raw"] = raw_a
-            frame_snap["chan_b_raw"] = raw_b
-            # Also capture the raw far-ptr table words so Tasks 4-6 can verify
-            # that the table pointers resolve into the captured records.
-            # A: off@0x4c70  seg@0x4c72  B: off@0x4cbc  seg@0x4cbe  (4 u16 = 8 bytes)
-            frame_snap["chan_tbl_raw"] = (bytes(uc.mem_read(DG_LIN + 0x4c70, 2))
-                                          + bytes(uc.mem_read(DG_LIN + 0x4c72, 2))
-                                          + bytes(uc.mem_read(DG_LIN + 0x4cbc, 2))
-                                          + bytes(uc.mem_read(DG_LIN + 0x4cbe, 2)))
-            # Full 64KB DGROUP snapshot — supersets all per-field captures above.
-            # Tasks 4-6 can read any static table by DGROUP offset without re-running.
-            frame_snap["dg"] = bytes(uc.mem_read(DG_LIN, 0x10000))
+            # Entity-state reads: BUM far-ptr deref + sprite objs + globals +
+            # anim channel records + full DGROUP snapshot.  Any of these can
+            # fault with UcError if the BUM far ptr resolves outside mapped
+            # memory (e.g. on levels other than level 1 during development).
+            # Guard the whole block and fall back to zero-padded sentinels so
+            # the FRM3 writer can proceed and the reader won't misparse layout.
+            try:
+                # BUM per-level header block (lives outside DGROUP).
+                # tilemap far ptr @ DGROUP:0xa0d8 → per-level block base.
+                # Payload: buffer+2 + (LEVEL-1)*0xc2  →  0xc2 bytes of level header.
+                bum_off, bum_seg = struct.unpack("<HH", uc.mem_read(DG_LIN + 0xa0d8, 4))
+                bum_block_lin = (bum_seg * 16 + bum_off) & 0xFFFFF
+                hdr_lin = bum_block_lin + 2 + (LEVEL - 1) * 0xC2
+                frame_snap["bum"] = bytes(uc.mem_read(hdr_lin, 0xC2))
+                # Sprite object structs (each 0x18 bytes, fixed DGROUP addresses).
+                # P1 obj @ 0x792e, P2 obj @ 0x795a.
+                frame_snap["p1_obj"] = bytes(uc.mem_read(DG_LIN + 0x792e, 0x18))
+                frame_snap["p2_obj"] = bytes(uc.mem_read(DG_LIN + 0x795a, 0x18))
+                # Player globals — NOT contiguous; read each field separately.
+                # p1: pixel_x@0x9290(2B)  pixel_y@0x9292(2B)  move_anim@0x824a(2B)
+                frame_snap["p1_glob"] = (bytes(uc.mem_read(DG_LIN + 0x9290, 2))
+                                         + bytes(uc.mem_read(DG_LIN + 0x9292, 2))
+                                         + bytes(uc.mem_read(DG_LIN + 0x824a, 2)))
+                # p2: pixel_x@0x79ba(2B)  pixel_y@0x79bc(2B)  move_anim@0x8560(2B)
+                frame_snap["p2_glob"] = (bytes(uc.mem_read(DG_LIN + 0x79ba, 2))
+                                         + bytes(uc.mem_read(DG_LIN + 0x79bc, 2))
+                                         + bytes(uc.mem_read(DG_LIN + 0x8560, 2)))
+                # Anim channel records: read by fixed DGROUP offsets (stride 0xc).
+                # Layer-A: 3 records at 0x4c40 / 0x4c4c / 0x4c58
+                # Layer-B: 4 records at 0x4c80 / 0x4c8c / 0x4c98 / 0x4ca4
+                raw_a = bytes(uc.mem_read(DG_LIN + 0x4c40, 3 * 0xc))
+                raw_b = bytes(uc.mem_read(DG_LIN + 0x4c80, 4 * 0xc))
+                frame_snap["chan_a_raw"] = raw_a
+                frame_snap["chan_b_raw"] = raw_b
+                # Also capture the raw far-ptr table words so Tasks 4-6 can verify
+                # that the table pointers resolve into the captured records.
+                # A: off@0x4c70  seg@0x4c72  B: off@0x4cbc  seg@0x4cbe  (4 u16 = 8 bytes)
+                frame_snap["chan_tbl_raw"] = (bytes(uc.mem_read(DG_LIN + 0x4c70, 2))
+                                              + bytes(uc.mem_read(DG_LIN + 0x4c72, 2))
+                                              + bytes(uc.mem_read(DG_LIN + 0x4cbc, 2))
+                                              + bytes(uc.mem_read(DG_LIN + 0x4cbe, 2)))
+                # Full 64KB DGROUP snapshot — supersets all per-field captures above.
+                # Tasks 4-6 can read any static table by DGROUP offset without re-running.
+                frame_snap["dg"] = bytes(uc.mem_read(DG_LIN, 0x10000))
+            except UcError as _ent_err:
+                print("[sprite_oracle] WARNING: entity capture UcError (%s) — using zero sentinels" % _ent_err, flush=True)
+                frame_snap.setdefault("bum", bytes(0xC2))
+                frame_snap.setdefault("p1_obj", bytes(0x18))
+                frame_snap.setdefault("p2_obj", bytes(0x18))
+                frame_snap.setdefault("p1_glob", bytes(6))
+                frame_snap.setdefault("p2_glob", bytes(6))
+                frame_snap.setdefault("chan_a_raw", bytes(3 * 0xc))
+                frame_snap.setdefault("chan_b_raw", bytes(4 * 0xc))
+                frame_snap.setdefault("chan_tbl_raw", bytes(8))
+                frame_snap.setdefault("dg", bytes(0x10000))
             print("[sprite_oracle] frame oracle: captured settled level frame (countdown=%d)" % countdown, flush=True)
             break
         if countdown is not None:
