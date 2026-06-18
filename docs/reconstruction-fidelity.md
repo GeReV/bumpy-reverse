@@ -26,8 +26,9 @@ feasible, bring back toward 1:1. Each module's `.h` carries the detailed in-code
 | `sprite_anim.c` | Transcription | `sprite_prepare_frame` = the per-frame select in `prepare_sprite_frames`. The dead `ctrl&0x40` expansion path is reconstructed and kept, marked UNVALIDATED. |
 | `sprite_blit.c` | **Behavior-faithful** | `sprite_blit_planar_vga` reconstructs `1cec:10e1`, which does not decompile (self-modifying, unrolled, jump-table). Models the GC/Seq map-mask + bit-mask RMW as a portable 4-plane memory op, **not** VGA-hardware port writes. Validated byte-exact. `sel!=0` + left-edge clip-carry preload ported but UNVALIDATED. |
 | `bg_render.c` | **Behavior-faithful** | `bg_tile_run` / `bg_render_grid` reconstruct `restore_bg_tile_run`'s loop + the mode-01 BGI-overlay tile blitter (`1ab9:0aa0`), which does not decompile. Same memory-image-vs-hardware caveat as `sprite_blit`. Validated byte-exact (119/119 cells). |
+| `bgi_overlay.c` | **Behavior-faithful** | `restore_bg_view` (`1000:80bc` → `1ab9:0d77`) and `render_player_view` (`1000:93b8` → `1ab9:1028` → `1ab9:0db0`) reconstruct the two BGI-overlay dispatch wrappers. `render_player_view` sub-handler 0 (full 4-plane GC Read-Map-Select + rep-movsw copy) is fully reconstructed; sub-handlers 3–6 (masked copy variants) are STUBBED and UNVALIDATED. **Key finding:** both functions are structural NOPs in the layer-A/B draw context (code-embedded view descriptors at `0x114b:0x74a0` / `0x751e` have `word[0]` / `word[0x0e]` > 1 → NOP guard fires; see `present_model.md` §5). The NOP path is exercised by the harness via a `nop_view` descriptor mirroring the code-embedded values. |
 | `sprite_chain.c` | Transcription | `sprite_blit_object_list` (0e48) + `sprite_blit_clip` (0f50) + `sprite_blit_setup` (103d) reconstructed 1:1 from the clean decomp. `sprite_blit_build_desc` is a thin public wrapper. One documented residual deviation: `sprite_blit_setup` fills the descriptor rather than tail-calling `sprite_blit_planar_vga` (the composite invokes the blitter separately). Validated descriptor-exact (17/17). |
-| `entity.c` | Mixed | Layer-C/A/B placement + `draw_p1/p2_sprite` are transcriptions of the `spawn_and_draw_level_entities` (`1000:2a78`) loops and the draw fns. **Deviations:** `entity_blit_object` is a shared helper the engine doesn't have (the engine inlines/repeats the prepare→blit per call); the engine's erase (`restore_bg_view`) and `render_player_view` save-under/read-back steps are **omitted** (the composite builds bg first and models a single page). See [rendering-pipeline.md](rendering-pipeline.md). |
+| `entity.c` | Mixed | Layer-C/A/B placement + `draw_p1/p2_sprite` are transcriptions of the `spawn_and_draw_level_entities` (`1000:2a78`) loops and the draw fns. `entity_blit_object` is a shared helper the engine doesn't have (the engine inlines/repeats the prepare→blit per call). `entity_draw_layer_a/_b` now mirror the engine's full 3-step draw sequence: **erase (`restore_bg_view`) → blit (`blit_sprite`) → save-under (`render_player_view`)** — both erase and save-under are STRUCTURALLY PRESENT, called via `nop_view`, and are effective NOPs (code-embedded views in the engine; see `bgi_overlay.c` entry). Composite unchanged: 54152/64000 (world-8 live page). See [rendering-pipeline.md](rendering-pipeline.md). |
 
 ## Host/validation tooling (not part of the decompilation)
 
@@ -47,7 +48,10 @@ clearly separate from the documentary `src/` mirror:
 1. **Blitters**: the two behavior-faithful blitters are the best achievable for
    non-decompiling self-modifying overlay code; keep the disasm-grounded reconstruction +
    document that the structure is intentionally not preserved.
-2. **`entity.c`**: the omitted erase / `render_player_view` save-under path is documented
-   in [rendering-pipeline.md](rendering-pipeline.md); decide whether the `src/` mirror
-   should include those engine steps (for fidelity) even though the memory-image composite
-   doesn't need them.
+2. **`bgi_overlay.c` sub-handlers 3–6**: the masked copy variants (`1ab9:0ecc`–`0e3c`) are
+   STUBBED.  They are not triggered by any oracle-captured path (fullscreen_buf and
+   layer-A/B NOP; sub-handler 0 is the only active path seen in the oracle).  Reconstruct
+   when a call site that exercises them is identified.
+3. **`restore_bg_view` inner blit**: the outer dispatch wrapper is reconstructed; the inner
+   `1ab9:0aa0` bg-tile blitter is NOT separately exposed from `bg_render.c` — it is covered
+   there as `bg_tile_run`.  Structural consolidation may be desirable for completeness.

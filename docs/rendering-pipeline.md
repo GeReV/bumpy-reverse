@@ -155,6 +155,13 @@ misattribution; there is no dedicated exit/item draw to port.)
 > call `restore_bg_view` (erase) and `render_player_view` (mode-10) around each
 > `blit_sprite`. Per §1–§2 these are erase/save-under/read-back operations on the
 > double-buffer pages, **not** a second visible draw of the entity. The visible entity
-> pixels come from `blit_sprite` writing the current page. (Earlier reconstruction notes
-> that treated `render_player_view` as a missing visible entity draw, or as
-> "out of scope," were mistaken — corrected here.)
+> pixels come from `blit_sprite` writing the current page.
+>
+> **Reconstruction status:** Both functions are reconstructed in `src/bgi_overlay.c`
+> (behavior-faithful; see [reconstruction-fidelity.md](reconstruction-fidelity.md)).
+> `entity_draw_layer_a/_b` now call them in the engine's 3-step order (erase → blit →
+> save-under). Both are effective NOPs in the layer-A/B context (code-embedded view
+> descriptors, `word > 1` → NOP guard fires; grounded in `present_model.md §5`).
+> The composite result is unchanged: 54152/64000 (world-8, live page).
+> (Earlier reconstruction notes that treated `render_player_view` as a missing visible
+> entity draw, or as "out of scope," were mistaken — corrected here.)

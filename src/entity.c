@@ -1,5 +1,6 @@
 #include <string.h>
 #include "entity.h"
+#include "bgi_overlay.h"
 #include "sprite_anim.h"
 #include "sprite_chain.h"
 #include "sprite_blit.h"
@@ -70,6 +71,31 @@
 
 /* PLANE_SIZE must match sprite_blit.c's PLANE_SIZE */
 #define ENTITY_PLANE_SIZE  0x10000UL
+
+/* -----------------------------------------------------------------------
+   Code-embedded NOP view descriptor — mirrors the engine reality.
+
+   In draw_anim_channels_a/b (1000:165e / 1000:17c7), the erase_view and
+   draw_view far ptrs point into the code segment at 0x114b:0x74a0 and
+   0x114b:0x751e respectively.  Both start with machine code:
+     erase_view+0x0e = 0x85b3  (>1 → bgi_set_mode_01 NOP guard)
+     draw_view+0x00  = 0xc3fb  (>1 → bgi_set_mode_10 NOP guard)
+   So ALL restore_bg_view / render_player_view calls from draw_anim_channels_a/b
+   are structural NOPs at run time (per present_model.md §5).
+
+   We model this with a static bgi_view_desc whose NOP-guard fields are set to
+   values > 1, so the host reconstruction's NOP guards fire exactly as the
+   engine's guards do.  The composite result is therefore unchanged.
+   ----------------------------------------------------------------------- */
+static const bgi_view_desc nop_view = {
+    0xc3fbu,  /* word00  = 0xc3fb (machine code at draw_view site; >1 → mode-10 NOP) */
+    { 0u, 0u, 0u, 0u, 0u, 0u },
+    0x85b3u,  /* word0e  = 0x85b3 (machine code at erase_view site; >1 → mode-01 NOP) */
+    0u,       /* dest_off */
+    0u,       /* dest_seg */
+    { 0u, 0u, 0u, 0u },
+    0u        /* subhandler */
+};
 
 /* -----------------------------------------------------------------------
    Layer A/B descriptor lookup tables.
@@ -418,21 +444,36 @@ void entity_draw_p1(u8 __huge *planes, const u8 __far *dg,
    spawn_and_draw_level_entities (1000:2a78), draw side from draw_anim_channels_a
    (1000:165e).
 
-   Engine flow (abbreviated, per-cell):
+   Engine flow per-cell (draw_anim_channels_a: 1000:165e, abbreviated):
      cv = tilemap[0x00 + cell]     (bum[0x00 + cell] in our naming)
      if cv == 0: continue
      remap = dg[cv + 0x3d3a]
      if remap == 0: continue       (null descriptor; draw nothing)
      descfar = far ptr at dg[0x3d6a + remap*4]    -> {word0=yoff, word1=frame}
      // populate chan_a_rec[+1]=cell, [+8]=yoff, [+10]=frame; call draw_anim_channels_a
-     // which does:
-     obj[+0] = dg[0xf4 + cell*4]  (posA X)
-     obj[+2] = dg[0xf6 + cell*4] + yoff  (posA Y + yoff)
-     obj[+4] = frame
-     if ((frame & 0x200) == 0): blit_sprite(p1_sprite obj @0x792e)
-     // render_player_view: second draw (BGI overlay / double-buffer) — modeled
-     //   as the same single blit_sprite call (P1 validated with blit_sprite alone;
-     //   same approach here). See RECONSTRUCTION FIDELITY note in entity.h.
+     // which does (3-step draw sequence mirrored below):
+     //
+     // STEP 1 — ERASE (restore_bg_view):
+     //   les bx, [0x8d4]           ; load erase_view far ptr (0x114b:0x74a0)
+     //   mov es:[bx+0x1c], 0       ; set sub-handler
+     //   push [0x8d6],[0x8d4]      ; push view far ptr
+     //   call 0x80bc               ; restore_bg_view → bgi_set_mode_01 (1ab9:0d77)
+     //   NOP: erase_view+0x0e = 0x85b3 > 1 → guard fires (see present_model.md §5)
+     //
+     // STEP 2 — BLIT SPRITE (blit_sprite):
+     //   obj[+0] = dg[0xf4 + cell*4]     (posA X)
+     //   obj[+2] = dg[0xf6 + cell*4] + yoff  (posA Y + yoff)
+     //   obj[+4] = frame
+     //   if ((frame & 0x200) == 0): push p1_sprite @0x792e; call 0x942a
+     //                              (blit_sprite_vga → the validated pipeline)
+     //
+     // STEP 3 — SAVE-UNDER (render_player_view):
+     //   les bx, [0x8e0]           ; load draw_view far ptr (0x114b:0x751e)
+     //   mov es:[bx+0x10], ax      ; view+0x10 = sprite obj offset
+     //   mov es:[bx+0x12], ds      ; view+0x12 = DGROUP
+     //   mov es:[bx+0x1c], 0       ; sub-handler = 0
+     //   call 0x93b8               ; render_player_view → bgi_set_mode_10 (1ab9:1028)
+     //   NOP: draw_view+0x00 = 0xc3fb > 1 → guard fires (see present_model.md §5)
 
    DESCRIPTOR SOURCING: the far ptr at dg[0x3d6a + remap*4] lands at seg 0x114b
    (code-area data segment), NOT within the captured DGROUP snapshot.  It cannot
@@ -442,12 +483,12 @@ void entity_draw_p1(u8 __huge *planes, const u8 __far *dg,
    posA X/Y from dg[0xf4+cell*4] / dg[0xf6+cell*4] matches anim_tables.json posA
    exactly (verified for all 48 cells).
 
-   ERASE omitted: draw_anim_channels_a calls restore_bg_view (bg-tile erase) before
-   each blit.  In our composite, bg is built first and never needs erasing; skip it.
-
-   render_player_view: modeled as the same blit_sprite (entity_blit_object) call —
-   identical to the P1 approach (Task 5, bg+C+P1 validated).  VALIDATE EMPIRICALLY:
-   if layer A does not match with blit_sprite alone, investigate further.
+   ERASE / SAVE-UNDER: restore_bg_view and render_player_view are now called
+   in the engine's 3-step order.  Both are NOPs in this context (code-embedded
+   view descriptors, word > 1 → guard fires): the nop_view stub is passed to
+   model the exact engine NOP behavior (present_model.md §5).  The composite
+   result is therefore unchanged.  Both functions are STRUCTURALLY PRESENT,
+   documented, and UNVALIDATED (NOP path exercised only, not the active copy path).
    ----------------------------------------------------------------------- */
 void entity_draw_layer_a(u8 __huge *planes, const u8 __far *bum,
                          const u8 __far *dg, u8 __huge *bank,
@@ -482,6 +523,23 @@ void entity_draw_layer_a(u8 __huge *planes, const u8 __far *bum,
                 continue;
             }
 
+            /* -------------------------------------------------------
+               STEP 1: ERASE — restore_bg_view (1000:80bc → 1ab9:0d77)
+               Engine: les bx,[0x8d4]; call 0x80bc (erase_view far ptr).
+               NOP: erase_view+0x0e = 0x85b3 > 1 (code-embedded view;
+               bgi_set_mode_01 guard fires; see present_model.md §5).
+               We pass nop_view (word0e = 0x85b3) to model this exactly.
+               UNVALIDATED: NOP path only in this harness context.
+               ------------------------------------------------------- */
+            restore_bg_view(planes, (const u8 __huge *)NULL,
+                            (const bgi_view_desc __far *)&nop_view);
+
+            /* -------------------------------------------------------
+               STEP 2: BLIT SPRITE — entity_blit_object (= blit_sprite)
+               Populate sprite object and run the validated 3-stage pipeline:
+                 sprite_prepare_frame → sprite_blit_build_desc → sprite_blit_planar_vga
+               This is the ONLY step that writes visible entity pixels.
+               ------------------------------------------------------- */
             memset(obj, 0, sizeof(obj));
 
             /* Seed frametable far ptr from engine's p1_sprite obj (same obj used
@@ -503,6 +561,17 @@ void entity_draw_layer_a(u8 __huge *planes, const u8 __far *bum,
             obj[OBJ_FLAGS] = OBJ_VISIBLE;
 
             entity_blit_object(planes, obj, bank, bank_base_lin, view);
+
+            /* -------------------------------------------------------
+               STEP 3: SAVE-UNDER — render_player_view (1000:93b8 → 1ab9:1028)
+               Engine: les bx,[0x8e0]; set draw_view fields; call 0x93b8.
+               NOP: draw_view+0x00 = 0xc3fb > 1 (code-embedded view;
+               bgi_set_mode_10 guard fires; see present_model.md §5).
+               We pass nop_view (word00 = 0xc3fb) to model this exactly.
+               UNVALIDATED: NOP path only in this harness context.
+               ------------------------------------------------------- */
+            render_player_view(planes, (const u8 __huge *)NULL,
+                               (const bgi_view_desc __far *)&nop_view);
         }
     }
 }
@@ -512,25 +581,31 @@ void entity_draw_layer_a(u8 __huge *planes, const u8 __far *bum,
    spawn_and_draw_level_entities (1000:2a78), draw side from draw_anim_channels_b
    (1000:17c7).
 
-   Engine flow (abbreviated, per-cell):
+   Engine flow per-cell (draw_anim_channels_b: 1000:17c7, 3-step sequence):
      cv = tilemap[0x30 + cell]     (bum[0x30 + cell])
      if cv == 0 OR grid_col == 7: continue
      remap = dg[cv + 0x4086]
      if remap == 0: continue
      descfar = far ptr at dg[0x40a6 + remap*4] -> {word0=yoff, word1=frame}
-     obj[+0] = dg[0x3f4 + cell*4]  (posB X)
-     obj[+2] = dg[0x3f6 + cell*4] + yoff  (posB Y + yoff)
-     if ((frame & 0x200) == 0):
-       obj[+4] = frame + 0xf1      (layer-B frame bias)
-       blit_sprite(p1_sprite @0x792e)
-     render_player_view(...)       (modeled as same blit, see layer-A note)
+     //
+     // STEP 1 — ERASE (restore_bg_view):
+     //   Multiple erase calls (shadow/mask path in draw_anim_channels_b).
+     //   All NOP: code-embedded erase views, word0e > 1 (same as layer A).
+     //   Modeled with nop_view.  UNVALIDATED (NOP path only).
+     //
+     // STEP 2 — BLIT SPRITE (blit_sprite):
+     //   obj[+0] = dg[0x3f4 + cell*4]  (posB X)
+     //   obj[+2] = dg[0x3f6 + cell*4] + yoff  (posB Y + yoff)
+     //   if ((frame & 0x200) == 0):
+     //     obj[+4] = frame + 0xf1      (layer-B frame bias)
+     //     push p1_sprite @0x792e; call 0x942a (blit_sprite_vga)
+     //
+     // STEP 3 — SAVE-UNDER (render_player_view):
+     //   NOP: code-embedded draw_view, word00 > 1 (same as layer A).
+     //   Modeled with nop_view.  UNVALIDATED (NOP path only).
 
    DESCRIPTOR SOURCING: same reasoning as layer A — far ptr outside dg; fall back
    to anim_b_desc[] from anim_tables.json.
-
-   ERASE: draw_anim_channels_b additionally erases a shadow/mask (multiple
-   restore_bg_view calls with separate data ptrs).  All erase paths omitted for
-   the same reason as layer A: composite builds bg first.
 
    UNVALIDATED on level 1: level 1 has 0 layer-B cells (bum[0x30..0x5f] all zero),
    so entity_draw_layer_b is a structural no-op.  The positive blit path (including
@@ -573,6 +648,19 @@ void entity_draw_layer_b(u8 __huge *planes, const u8 __far *bum,
                 continue;
             }
 
+            /* -------------------------------------------------------
+               STEP 1: ERASE — restore_bg_view (1000:80bc → 1ab9:0d77)
+               Engine: multiple erase calls (shadow/mask path in
+               draw_anim_channels_b).  All NOP: code-embedded erase views,
+               word0e > 1 → guard fires (same as layer A).
+               UNVALIDATED: NOP path only in this harness context.
+               ------------------------------------------------------- */
+            restore_bg_view(planes, (const u8 __huge *)NULL,
+                            (const bgi_view_desc __far *)&nop_view);
+
+            /* -------------------------------------------------------
+               STEP 2: BLIT SPRITE — entity_blit_object (= blit_sprite)
+               ------------------------------------------------------- */
             memset(obj, 0, sizeof(obj));
 
             /* Seed frametable far ptr from p1_sprite obj (same obj for all layers). */
@@ -594,6 +682,15 @@ void entity_draw_layer_b(u8 __huge *planes, const u8 __far *bum,
             obj[OBJ_FLAGS] = OBJ_VISIBLE;
 
             entity_blit_object(planes, obj, bank, bank_base_lin, view);
+
+            /* -------------------------------------------------------
+               STEP 3: SAVE-UNDER — render_player_view (1000:93b8 → 1ab9:1028)
+               Engine: call render_player_view(draw_view).
+               NOP: draw_view+0x00 = 0xc3fb > 1 → guard fires.
+               UNVALIDATED: NOP path only in this harness context.
+               ------------------------------------------------------- */
+            render_player_view(planes, (const u8 __huge *)NULL,
+                               (const bgi_view_desc __far *)&nop_view);
         }
     }
 }
