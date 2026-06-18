@@ -26,7 +26,7 @@ feasible, bring back toward 1:1. Each module's `.h` carries the detailed in-code
 | `sprite_anim.c` | Transcription | `sprite_prepare_frame` = the per-frame select in `prepare_sprite_frames`. The dead `ctrl&0x40` expansion path is reconstructed and kept, marked UNVALIDATED. |
 | `sprite_blit.c` | **Behavior-faithful** | `sprite_blit_planar_vga` reconstructs `1cec:10e1`, which does not decompile (self-modifying, unrolled, jump-table). Models the GC/Seq map-mask + bit-mask RMW as a portable 4-plane memory op, **not** VGA-hardware port writes. Validated byte-exact. `sel!=0` + left-edge clip-carry preload ported but UNVALIDATED. |
 | `bg_render.c` | **Behavior-faithful** | `bg_tile_run` / `bg_render_grid` reconstruct `restore_bg_tile_run`'s loop + the mode-01 BGI-overlay tile blitter (`1ab9:0aa0`), which does not decompile. Same memory-image-vs-hardware caveat as `sprite_blit`. Validated byte-exact (119/119 cells). |
-| `sprite_chain.c` | **Reimplementation deviation** | `sprite_blit_build_desc` **merges three** original functions (`object_list` + `clip` + `setup`) into one descriptor builder. The three decompile cleanly and *should* be reconstructed 1:1; the merge is a convenience to revisit. Validated descriptor-exact. |
+| `sprite_chain.c` | Transcription | `sprite_blit_object_list` (0e48) + `sprite_blit_clip` (0f50) + `sprite_blit_setup` (103d) reconstructed 1:1 from the clean decomp. `sprite_blit_build_desc` is a thin public wrapper. One documented residual deviation: `sprite_blit_setup` fills the descriptor rather than tail-calling `sprite_blit_planar_vga` (the composite invokes the blitter separately). Validated descriptor-exact (17/17). |
 | `entity.c` | Mixed | Layer-C/A/B placement + `draw_p1/p2_sprite` are transcriptions of the `spawn_and_draw_level_entities` (`1000:2a78`) loops and the draw fns. **Deviations:** `entity_blit_object` is a shared helper the engine doesn't have (the engine inlines/repeats the prepare→blit per call); the engine's erase (`restore_bg_view`) and `render_player_view` save-under/read-back steps are **omitted** (the composite builds bg first and models a single page). See [rendering-pipeline.md](rendering-pipeline.md). |
 
 ## Host/validation tooling (not part of the decompilation)
@@ -44,12 +44,10 @@ clearly separate from the documentary `src/` mirror:
 
 ## Known open items (toward stricter fidelity)
 
-1. **`sprite_chain`**: split the merged `object_list`/`clip`/`setup` back into three 1:1
-   functions.
-2. **Blitters**: the two behavior-faithful blitters are the best achievable for
+1. **Blitters**: the two behavior-faithful blitters are the best achievable for
    non-decompiling self-modifying overlay code; keep the disasm-grounded reconstruction +
    document that the structure is intentionally not preserved.
-3. **`entity.c`**: the omitted erase / `render_player_view` save-under path is documented
+2. **`entity.c`**: the omitted erase / `render_player_view` save-under path is documented
    in [rendering-pipeline.md](rendering-pipeline.md); decide whether the `src/` mirror
    should include those engine steps (for fidelity) even though the memory-image composite
    doesn't need them.

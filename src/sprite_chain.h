@@ -33,14 +33,24 @@ typedef struct {
 
 /* Build the blit descriptor for one sprite object. Returns 1 and fills desc[0x18]
    if the sprite is visible and overlaps the view; 0 (descriptor untouched) if the
-   object is hidden or fully culled.  Mirrors object_list's per-object body +
-   clip + setup.
+   object is hidden or fully culled.
 
-   --- RECONSTRUCTION FIDELITY (deviates from the engine) ---
-   * CONSOLIDATION: this one function combines three engine functions —
-     sprite_blit_object_list (1cec:0e48, per-object body), sprite_blit_clip
-     (1cec:0f50), and sprite_blit_setup (1cec:103d).  The logic of each is a faithful
-     transcription of the (clean) decomp; only the function boundaries are merged. */
+   --- RECONSTRUCTION FIDELITY ---
+   The three original engine functions are each reconstructed 1:1 in sprite_chain.c:
+     sprite_blit_object_list (1cec:0e48) — per-object flags/cell-x-y/view-cull body;
+       in the engine this iterates a far-pointer list; here the list walk is external.
+     sprite_blit_clip        (1cec:0f50) — left/right/top/bottom clip margins,
+       visible width/height, dest byte offset.
+     sprite_blit_setup       (1cec:103d) — source offset/ptr + blit width; fills desc.
+   Control flow and data computation are transcribed directly from the clean decomp.
+
+   * ONE DOCUMENTED RESIDUAL DEVIATION: in the original, sprite_blit_setup ends by
+     tail-calling sprite_blit_planar_vga (1cec:10e1).  In this reconstruction setup
+     fills `desc` instead; the composite (composite_ctest.c / entity_blit_object)
+     invokes the blitter separately from the filled descriptor.
+
+   sprite_blit_build_desc is a thin public wrapper around object_list (which calls
+   setup, which calls clip) so all callers are unaffected. */
 int sprite_blit_build_desc(const u8 __far *obj, const sprite_view *view, u8 *desc);
 
 #endif /* SPRITE_CHAIN_H */
