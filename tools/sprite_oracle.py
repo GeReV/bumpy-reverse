@@ -563,6 +563,12 @@ def main() -> None:
         uc.mem_write(dg * 16 + 0x79B2, bytes([LEVEL & 0xFF]))
         uc.mem_write(dg * 16 + 0x119A, bytes([1]))
 
+    # --- FRAME ORACLE (6b): snapshot the full level frame (all 4 VGA planes + the
+    # DAC palette) once the level has settled, as the composite ground truth.
+    FRAME_ORACLE = bool(os.environ.get("FRAME_ORACLE"))
+    FRAME_SETTLE = int(os.environ.get("FRAME_SETTLE", "40"))
+    frame_snap: dict = {}
+
     begin = cur_lin(); err = None; CHUNK = 1_000_000; total = 0
     countdown = None
     print("[sprite_oracle] booting BUMPY (level %d)..." % LEVEL, flush=True)
@@ -602,10 +608,27 @@ def main() -> None:
             print("[sprite_oracle] level loaded (%s) at chunk %d — capturing frames" % (BUMNAME, c), flush=True)
         if countdown is not None and countdown > 96 and (c // 2) % 2 == 0:
             set_key(0x39, True)
+        if FRAME_ORACLE and countdown is not None and countdown <= FRAME_SETTLE and not frame_snap:
+            frame_snap["planes"] = snap_planes()
+            frame_snap["dac"] = b"".join(bytes(dac[i]) for i in range(256))
+            # also capture the PAV atlas + the level map so the bg can be rebuilt and
+            # diffed against this frame (atlas far ptr @ 0x6fa6/0x6fa8, map @ 0x6bca).
+            try:
+                a_off, a_seg = struct.unpack("<HH", uc.mem_read(DG_LIN + 0x6fa6, 4))
+                m_off, m_seg = struct.unpack("<HH", uc.mem_read(DG_LIN + 0x6bca, 4))
+                frame_snap["atlas"] = bytes(uc.mem_read((a_seg * 16 + a_off) & 0xFFFFF, 0x8000))
+                frame_snap["map"] = bytes(uc.mem_read((m_seg * 16 + m_off) & 0xFFFFF, 0x1000))
+            except UcError:
+                frame_snap["atlas"] = b""; frame_snap["map"] = b""
+            print("[sprite_oracle] frame oracle: captured settled level frame (countdown=%d)" % countdown, flush=True)
+            break
         if countdown is not None:
             countdown -= 1
             # stop early once we have enough distinct frames AND the level has settled
-            if (len(frames) >= 6 and countdown <= 96) or countdown <= 0:
+            # (FRAME_ORACLE wants the fully-settled frame, so it ignores this early-out)
+            if not FRAME_ORACLE and ((len(frames) >= 6 and countdown <= 96) or countdown <= 0):
+                break
+            if countdown <= 0:
                 break
         fire_int(8)
         begin = cur_lin()
@@ -671,6 +694,22 @@ def main() -> None:
     for (idx, ctrl, w, h), data in frames.items():
         print("   frame idx=%d ctrl=%#04x w=%d h=%d prep_len=%d  head=%s" % (
             idx, ctrl, w, h, len(data), data[:16].hex()), flush=True)
+
+    # --- FRAME ORACLE output (6b): the settled full level frame ------------------
+    if FRAME_ORACLE and frame_snap:
+        fr_path = os.path.join(OUT_DIR, "frame_oracle.bin")
+        atlas = frame_snap.get("atlas", b"")
+        bmap = frame_snap.get("map", b"")
+        with open(fr_path, "wb") as f:
+            f.write(b"FRM2")
+            f.write(struct.pack("<I", len(frame_snap["planes"])))
+            f.write(frame_snap["planes"])                            # 4 * 0x10000
+            f.write(frame_snap["dac"])                               # 256 * 3 (0..63)
+            f.write(struct.pack("<I", len(atlas)))
+            f.write(atlas)                                           # PAV atlas (0x8000)
+            f.write(struct.pack("<I", len(bmap)))
+            f.write(bmap)                                            # level map (0x1000)
+        print("[sprite_oracle] wrote %s : full frame + palette + atlas/map" % fr_path, flush=True)
 
     # --- BG ORACLE output (6a): tile-blit snapshots + the PAV atlas --------------
     if BG_ORACLE:
