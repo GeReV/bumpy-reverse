@@ -1,9 +1,10 @@
-/* Host composite driver — Task 3+4+5 of Plan 6b.
+/* Host composite driver — Task 3+4+5+6 of Plan 6b.
    Parses frame_oracle.bin (FRM3), renders the full background into a fresh
    4-plane buffer using src/bg_render.c bg_render_grid(), then draws layer-C
    static sprites using src/entity.c entity_draw_layer_c(), then draws P1
-   using entity_draw_p1() and P2 using entity_draw_p2().  Diffs against
-   the captured engine frame at each stage.
+   using entity_draw_p1(), P2 using entity_draw_p2(), then layer A using
+   entity_draw_layer_a(), and layer B using entity_draw_layer_b().
+   Diffs against the captured engine frame at each stage.
 
    Far/huge qualifiers are #define'd away for the host build (gcc/cc), exactly
    as tools/bg_ctest.c does it.
@@ -109,6 +110,7 @@ int main(int argc, char **argv)
 
     long  match = 0;
     long  match_bgC = 0;
+    long  match_bgCP1 = 0;
     int   x, y;
     int   assert_fail = 0;
     sprite_view view;
@@ -338,20 +340,21 @@ int main(int argc, char **argv)
     }
 
     /* --- Pixel-diff after bg + layer C + P1 --- */
-    match = 0;
+    match_bgCP1 = 0;
     for (y = 0; y < 200; y++) {
         for (x = 0; x < 320; x++) {
             if (idx_at(work_planes, x, y) == idx_at(cap_planes, x, y)) {
-                match++;
+                match_bgCP1++;
             }
         }
     }
+    match = match_bgCP1;
     printf("bg+C+P1: %ld/64000 pixels match (%.1f%%)\n",
-           match, (double)match / 64000.0 * 100.0);
+           match_bgCP1, (double)match_bgCP1 / 64000.0 * 100.0);
 
-    if (match < match_bgC) {
+    if (match_bgCP1 < match_bgC) {
         fprintf(stderr, "ASSERT FAIL: bg+C+P1 (%ld) < bg+C (%ld) — P1 draw regressed!\n",
-                match, match_bgC);
+                match_bgCP1, match_bgC);
         assert_fail = 1;
     }
 
@@ -372,7 +375,7 @@ int main(int argc, char **argv)
             fprintf(stderr, "ASSERT FAIL: p2_cell==-1 but planes changed after entity_draw_p2!\n");
             assert_fail = 1;
         }
-        printf("NOTE: P2 positive-path composite + object assert DEFERRED to P2-present level (Task 6)\n");
+        printf("NOTE: P2 positive-path composite + object assert DEFERRED to P2-present level (Task 7)\n");
     } else {
         /* P2 present: diff and report */
         match = 0;
@@ -388,7 +391,7 @@ int main(int argc, char **argv)
     }
 
     /* =========================================================
-       P2 OBJECT CONSTRUCTION ASSERTION (skeleton for Task 6)
+       P2 OBJECT CONSTRUCTION ASSERTION (skeleton for Task 7)
        On level 1, p2_cell == -1 (P2 absent) so this block is skipped.
        When P2 IS present (future level), verify captured-obj fields match
        the draw-time globals, mirroring the P1 assert above.
@@ -404,6 +407,67 @@ int main(int argc, char **argv)
         if (!x_ok || !frame_ok) {
             fprintf(stderr, "ASSERT FAIL: p2 obj x or frame mismatch\n");
             assert_fail = 1;
+        }
+    }
+
+    /* =========================================================
+       LAYER A DRAW: add layer-A static entities into the composite.
+       Sourced from bum[0x00+cell], dg posA tables (0xf4/0xf6).
+       Level 1: 27 layer-A cells (all cv=1 → frame=64, yoff=5).
+       The match count must RISE substantially above bg+C+P1.
+       ========================================================= */
+    entity_draw_layer_a(work_planes, bum, dg, bank, BANK_BASE_LIN, &view);
+
+    match = 0;
+    for (y = 0; y < 200; y++) {
+        for (x = 0; x < 320; x++) {
+            if (idx_at(work_planes, x, y) == idx_at(cap_planes, x, y)) {
+                match++;
+            }
+        }
+    }
+    printf("bg+C+P1+A: %ld/64000 pixels match (%.1f%%)\n",
+           match, (double)match / 64000.0 * 100.0);
+
+    if (match < match_bgCP1) {
+        fprintf(stderr, "ASSERT FAIL: bg+C+P1+A (%ld) < bg+C+P1 (%ld) — layer-A draw regressed!\n",
+                match, match_bgCP1);
+        assert_fail = 1;
+    }
+
+    /* =========================================================
+       LAYER B DRAW: add layer-B entities into the composite.
+       Sourced from bum[0x30+cell], dg posB tables (0x3f4/0x3f6); col==7 skipped.
+       Level 1: 0 layer-B cells — structural exercise only; planes UNCHANGED.
+       The positive blit path (frame += 0xf1 bias) is UNVALIDATED on level 1.
+       Validation deferred to Task 7 (richer level with B-layer entities).
+       ========================================================= */
+    memcpy(snap_planes, work_planes, sizeof(work_planes));
+
+    entity_draw_layer_b(work_planes, bum, dg, bank, BANK_BASE_LIN, &view);
+
+    {
+        long match_b = 0;
+        for (y = 0; y < 200; y++) {
+            for (x = 0; x < 320; x++) {
+                if (idx_at(work_planes, x, y) == idx_at(cap_planes, x, y)) {
+                    match_b++;
+                }
+            }
+        }
+        printf("bg+C+P1+A+B: %ld/64000 pixels match (%.1f%%)\n",
+               match_b, (double)match_b / 64000.0 * 100.0);
+
+        if (match_b < match) {
+            fprintf(stderr, "ASSERT FAIL: bg+C+P1+A+B (%ld) < bg+C+P1+A (%ld) — layer-B draw regressed!\n",
+                    match_b, match);
+            assert_fail = 1;
+        }
+
+        if (memcmp(work_planes, snap_planes, sizeof(work_planes)) == 0) {
+            printf("layer-B: 0 cells on level 1 — planes UNCHANGED (correct; UNVALIDATED positive path)\n");
+        } else {
+            printf("layer-B: planes CHANGED (layer-B cells present — validate positive path)\n");
         }
     }
 

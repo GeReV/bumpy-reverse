@@ -7,6 +7,8 @@
 #   5. Assert P1 object construction: x and frame match captured obj (y skew documented)
 #   6. Assert bg+C+P1 match count >= bg+C match count (no regression)
 #   7. Assert P2 absent on level 1: planes unchanged across entity_draw_p2
+#   8. Assert bg+C+P1+A match count > bg+C+P1 (layer-A entities added)
+#   9. Assert bg+C+P1+A+B match count >= bg+C+P1+A (no regression; B no-op on level 1)
 #
 # Requires: local/build/render/frame_oracle.bin (run FRAME_ORACLE=1 uv run python tools/sprite_oracle.py)
 # Requires: local/build/render/bank_inmem.bin (run uv run python tools/sprite_oracle.py)
@@ -57,6 +59,18 @@ fi
 C_BGCP1_COUNT=$(echo "$C_OUTPUT" | grep -F 'bg+C+P1: ' | grep -oE '[0-9]+/64000' | grep -oE '^[0-9]+')
 if [ -z "$C_BGCP1_COUNT" ]; then
   echo "ERROR: could not parse bg+C+P1 match count from C harness output" >&2
+  exit 1
+fi
+
+C_BGCP1A_COUNT=$(echo "$C_OUTPUT" | grep -F 'bg+C+P1+A: ' | grep -oE '[0-9]+/64000' | grep -oE '^[0-9]+')
+if [ -z "$C_BGCP1A_COUNT" ]; then
+  echo "ERROR: could not parse bg+C+P1+A match count from C harness output" >&2
+  exit 1
+fi
+
+C_BGCP1AB_COUNT=$(echo "$C_OUTPUT" | grep -F 'bg+C+P1+A+B: ' | grep -oE '[0-9]+/64000' | grep -oE '^[0-9]+')
+if [ -z "$C_BGCP1AB_COUNT" ]; then
+  echo "ERROR: could not parse bg+C+P1+A+B match count from C harness output" >&2
   exit 1
 fi
 
@@ -112,9 +126,36 @@ else
   exit 1
 fi
 
+echo "== Assertion: bg+C+P1+A match > bg+C+P1 (layer-A entities added) =="
+if [ "$C_BGCP1A_COUNT" -gt "$C_BGCP1_COUNT" ]; then
+  echo "   PASS: bg+C+P1+A ($C_BGCP1A_COUNT) > bg+C+P1 ($C_BGCP1_COUNT) — layer-A improved composite"
+else
+  echo "FAIL: bg+C+P1+A ($C_BGCP1A_COUNT) <= bg+C+P1 ($C_BGCP1_COUNT) — layer-A did not add pixels!" >&2
+  exit 1
+fi
+
+echo "== Assertion: bg+C+P1+A+B match >= bg+C+P1+A (no regression; B is no-op on level 1) =="
+if [ "$C_BGCP1AB_COUNT" -ge "$C_BGCP1A_COUNT" ]; then
+  echo "   PASS: bg+C+P1+A+B ($C_BGCP1AB_COUNT) >= bg+C+P1+A ($C_BGCP1A_COUNT)"
+else
+  echo "FAIL: bg+C+P1+A+B ($C_BGCP1AB_COUNT) < bg+C+P1+A ($C_BGCP1A_COUNT) — layer-B regressed!" >&2
+  exit 1
+fi
+
+echo "== Assertion: layer-B no-op on level 1 — planes unchanged =="
+if echo "$C_OUTPUT" | grep -q "layer-B:.*UNCHANGED"; then
+  echo "   PASS: entity_draw_layer_b no-op when 0 B-cells (level 1)"
+else
+  echo "FAIL: layer-B planes-unchanged assertion not found in C harness output" >&2
+  exit 1
+fi
+
 echo ""
 echo "== Summary =="
-echo "   bg:      $C_BG_COUNT/64000"
-echo "   bg+C:    $C_BGC_COUNT/64000"
-echo "   bg+C+P1: $C_BGCP1_COUNT/64000"
-echo "   P2: absent on level 1 (deferred to Task 6)"
+echo "   bg:          $C_BG_COUNT/64000"
+echo "   bg+C:        $C_BGC_COUNT/64000"
+echo "   bg+C+P1:     $C_BGCP1_COUNT/64000"
+echo "   bg+C+P1+A:   $C_BGCP1A_COUNT/64000"
+echo "   bg+C+P1+A+B: $C_BGCP1AB_COUNT/64000 (B no-op on level 1)"
+echo "   P2: absent on level 1 (deferred to Task 7)"
+echo "   Layer-B positive-path: UNVALIDATED on level 1 (Task 7)"

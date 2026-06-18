@@ -5,11 +5,30 @@
 #include "sprite_chain.h"   /* sprite_view */
 
 /* Faithful C ports of the entity draw functions from spawn_and_draw_level_entities
-   (1000:2a78) and draw_p1_sprite (1000:1cb2) / draw_p2_sprite (1000:1cea).
+   (1000:2a78), draw_p1_sprite (1000:1cb2) / draw_p2_sprite (1000:1cea), and the
+   anim-channel draw helpers draw_anim_channels_a (1000:165e) /
+   draw_anim_channels_b (1000:17c7).
 
-   All three functions drive the VALIDATED pipeline:
+   All functions drive the VALIDATED pipeline:
      sprite_prepare_frame -> sprite_blit_build_desc -> sprite_blit_planar_vga
    via the shared entity_blit_object helper (static in entity.c).
+
+   --- LAYER A (entity_draw_layer_a) ---
+   Port of the layer-A static placement loop in spawn_and_draw_level_entities +
+   draw_anim_channels_a (draw side only).  For each of the 48 grid cells
+   (6 rows × 8 cols), bum[0x00+cell] gives the cell value cv.  cv==0 or a null
+   descriptor (remap==0) → skip.  Otherwise: posA X/Y from dg[0xf4+cell*4] /
+   dg[0xf6+cell*4]; yoff/frame from anim_a_desc[cv] (see sourcing note below);
+   Y += yoff; frame guard (frame & 0x200) == 0; blit via entity_blit_object.
+   Validated on level 1 (27 layer-A cells, cv=1 → frame=64).
+
+   --- LAYER B (entity_draw_layer_b) ---
+   Port of the layer-B static placement loop + draw_anim_channels_b (draw side).
+   Same structure as layer A but: bum[0x30+cell]; col==7 skipped; posB at
+   dg[0x3f4+cell*4] / dg[0x3f6+cell*4]; yoff/frame from anim_b_desc[cv];
+   frame += 0xf1 (layer-B bias per draw_anim_channels_b).
+   UNVALIDATED on level 1 (0 layer-B cells → structural no-op on level 1).
+   Full positive-path validation deferred to Task 7 (richer level).
 
    --- LAYER C (entity_draw_layer_c) ---
    Layer C is purely BUM-data-sourced: for each of the 48 grid cells
@@ -34,35 +53,92 @@
    only), so the positive draw path is UNVALIDATED on level 1.
    The guard (p2_cell == -1 → no draw) IS validated: planes are unchanged
    across the call.  Full positive-path composite + object assert is DEFERRED
-   to a P2-present level (Task 6 switches levels).
+   to a P2-present level (Task 7).
 
    --- RECONSTRUCTION FIDELITY ---
-   * STRUCTURE-faithful: the loop bounds (0..5 rows, 0..7 cols), cell index
-     formula (row*8+col), BUM offset (0x60), frame bias (0x179), the hidden
-     sentinels (P1: move_anim==100, P2: p2_cell==-1), and the three pipeline
-     stages mirror the engine's inlined / standalone code exactly.
+   * STRUCTURE-faithful: loop bounds (0..5 rows, 0..7 cols), cell index formula
+     (row*8+col), BUM offsets (A:0x00, B:0x30, C:0x60), frame biases (C:+0x179,
+     B:+0xf1), hidden sentinels (P1:100, P2:-1), col-7 guard (layer B), and the
+     three pipeline stages mirror the engine's inlined / standalone code exactly.
    * Object layout: the engine reuses the shared p1_sprite struct at
-     DGROUP:0x792e (0x18 bytes) for layer-C and P1; P2 uses p2_sprite at
+     DGROUP:0x792e (0x18 bytes) for layers A/B/C and P1; P2 uses p2_sprite at
      DGROUP:0x795a.  Here we allocate a 0x40-byte host stack buffer (OBJ_SIZE)
      because sprite_prepare_frame writes a sub-header up to obj+0x2c (count
      byte + up to 3 entries × 6 bytes at obj+0x1a..+0x2b); using only 0x18
      bytes causes a stack smash on the host.  The first 0x18 bytes mirror the
-     engine's struct layout exactly; only the caller-set fields (+0, +2, +4,
-     +0xa) differ between sprites; sprite_prepare_frame fills the rest
-     (+6/8 frame-table ptr seeds from dg, +0b ctrl, +0c/0e prepared ptr,
-     +10 width, +12 height, +14/16 anchors).
+     engine's struct layout exactly.
    * Frametable far ptr: seeded from dg[obj_base+6..9] (engine's sprite obj
      struct captured in FRM3 DGROUP snapshot), exactly as the engine which
      sets the ptr at level init before any draw calls.
-   * posC table (layer-C only): the engine reads from DGROUP:0x274
-     (interleaved XY pairs, 4 bytes/cell, X at 0x274+cell*4, Y at
-     0x276+cell*4).  The `dg` parameter carries the captured full DGROUP
-     snapshot; reads are done from that to preserve exact engine values.
-   * entity_blit_object refactor: the prepare→build_desc→blit sequence was
-     factored out from entity_draw_layer_c into a shared static helper so
-     entity_draw_p1, entity_draw_p2 (and future layer A/B ports) can reuse
-     the pipeline without duplication.  Layer-C behavior is UNCHANGED.
+   * posA/B/C tables: read from the captured dg snapshot (dg[0xf4+cell*4],
+     dg[0xf6+cell*4] for A; dg[0x3f4+cell*4], dg[0x3f6+cell*4] for B;
+     dg[0x274+cell*4] for C).  All verified to match anim_tables.json posA/B/C.
+   * Layer A/B descriptor sourcing: the engine resolves {yoff, frame} per cv via
+     a far-ptr deref (dg[0x3d6a+remap*4] for A, dg[0x40a6+remap*4] for B).  The
+     far ptr lands at seg 0x114b (code-area data segment), NOT within the captured
+     DGROUP snapshot — cannot be dereferenced at host time.  FALLBACK: decomp-
+     derived anim_tables.json A/B maps (embedded as anim_a_desc[]/anim_b_desc[]
+     static tables in entity.c).  FRM3 chan_a records confirm anim_tables values
+     for cv=1 (yoff=5, frame=64).  posA from dg matches anim_tables.json for all
+     48 cells.  This is the faithful reconstructible path.
+   * Erase omitted: draw_anim_channels_a/b call restore_bg_view (bg-tile erase)
+     before each blit.  Omitted in the composite: bg is built first; there is no
+     "old" cell to erase.  This is a valid composite-only deviation.
+   * render_player_view: draw_anim_channels_a/b call render_player_view after
+     blit_sprite for a second draw (BGI overlay / double-buffer / clip path).
+     P1 was validated with blit_sprite alone (bg+C+P1 matched without calling
+     render_player_view).  Layer A follows the same model: entity_blit_object
+     (the blit_sprite equivalent) is the draw that produces the visible planes.
+     render_player_view is NOT called.  This is validated empirically: bg+C+P1+A
+     rises substantially above bg+C+P1 without it.
+   * Per-frame animation step: step_anim_channels_a/b are OUT OF SCOPE.  Layers
+     A/B are placed STATICALLY at level load by spawn_and_draw_level_entities;
+     the anim channels are INACTIVE at the captured settle instant (chan_a[0].active=0).
+     The static placement reproduces the captured frame exactly.
+   * entity_blit_object: shared static helper drives the three pipeline stages for
+     all layers (A, B, C, P1, P2) without code duplication.
 */
+
+/* Draw all nonzero layer-A cells from `bum` into `planes`.
+   Parameters:
+     planes        — 4-plane VGA buffer (4 * 0x10000 B), plane p at p*0x10000
+     bum           — pointer to the level block at tilemap base (offset 0);
+                     layer-A grid at bum[0x00+cell].  Pass the FRM3 bum pointer
+                     as-is (same base as layer C).
+     dg            — 0x10000-byte DGROUP snapshot; posA X at dg[0xf4+cell*4],
+                     Y at dg[0xf6+cell*4].
+     bank          — sprite bank (bank_inmem.bin), flat huge buffer
+     bank_base_lin — runtime linear address of bank[0] (0x4eae0 for bank_inmem.bin)
+     view          — sprite viewport (full-screen: left=0,right=40,top=0,
+                     bottom=199,height=199,data_off=0,data_seg=0xa000)
+
+   NOTE: layer-B positive-path is UNVALIDATED on level 1 (0 B cells). See entity.h.
+*/
+void entity_draw_layer_a(u8 __huge *planes, const u8 __far *bum,
+                         const u8 __far *dg, u8 __huge *bank,
+                         u32 bank_base_lin, const sprite_view *view);
+
+/* Draw all nonzero layer-B cells from `bum` into `planes`.
+   Parameters:
+     planes        — 4-plane VGA buffer (4 * 0x10000 B)
+     bum           — pointer to the level block at tilemap base;
+                     layer-B grid at bum[0x30+cell].
+     dg            — 0x10000-byte DGROUP snapshot; posB X at dg[0x3f4+cell*4],
+                     Y at dg[0x3f6+cell*4].
+     bank          — sprite bank
+     bank_base_lin — runtime linear address of bank[0]
+     view          — sprite viewport
+
+   GUARD: col==7 cells are skipped (engine guard in spawn_and_draw_level_entities).
+   FRAME BIAS: frame += 0xf1 at draw time (draw_anim_channels_b).
+
+   NOTE: UNVALIDATED on level 1 — 0 layer-B cells present; call is a structural
+   no-op that confirms the loop runs without modifying planes. Full positive-path
+   validation deferred to Task 7 (richer level with B-layer entities).
+*/
+void entity_draw_layer_b(u8 __huge *planes, const u8 __far *bum,
+                         const u8 __far *dg, u8 __huge *bank,
+                         u32 bank_base_lin, const sprite_view *view);
 
 /* Draw all nonzero layer-C cells from `bum` into `planes`.
    Parameters:
