@@ -16,7 +16,7 @@ spec.loader.exec_module(cc)
 src = sys.argv[1] if len(sys.argv) > 1 else "local/build/render/frame_oracle.bin"
 d = cc.load_frame3(src)
 
-assert d["tag"] == b"FRM3", d["tag"]
+assert d["tag"] in (b"FRM3", b"FRM4"), d["tag"]
 assert len(d["bum"]) == 0xc2, len(d["bum"])
 assert len(d["p1_obj"]) == 0x18 and len(d["p2_obj"]) == 0x18
 assert len(d["chan_a"]) == 3 and len(d["chan_b"]) == 4

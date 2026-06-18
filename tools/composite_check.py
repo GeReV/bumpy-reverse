@@ -14,10 +14,10 @@ PLANE = 0x10000
 
 
 def load(path: str) -> tuple[bytes, bytes, bytes, bytes]:
-    """Read an FRM2 or FRM3 file and return the bg-relevant fields.
+    """Read an FRM2, FRM3, or FRM4 file and return the bg-relevant fields.
 
-    Accepts FRM3 (new) as well as the legacy FRM2 tag so the bg-diff path
-    continues to work after the oracle is regenerated.
+    Accepts FRM4 (new) as well as FRM3 and legacy FRM2 tags so the bg-diff
+    path continues to work after the oracle is regenerated.
 
     Returns a 4-tuple (planes, dac, atlas, bmap) of bytes.
     """
@@ -29,7 +29,7 @@ def load_frame3(path: str) -> Dict:
     """Parse an FRM3 oracle file into a dict with all blocks.
 
     Keys returned:
-        tag (bytes)        — b"FRM3" or b"FRM2" (legacy; new-block fields are empty stubs)
+        tag (bytes)        — b"FRM4", b"FRM3" or b"FRM2" (legacy; new-block fields are empty stubs)
         planes (bytes)     — 4 VGA planes, 0x10000 B each (total 0x40000 B)
         dac (bytes)        — 256*3 palette (0..63 per channel)
         atlas (bytes)      — PAV atlas raster (0x8000 B)
@@ -49,7 +49,7 @@ def load_frame3(path: str) -> Dict:
     with open(path, "rb") as fh:
         b = fh.read()
     tag = b[:4]
-    assert tag in (b"FRM2", b"FRM3"), "unexpected tag: %r" % tag
+    assert tag in (b"FRM2", b"FRM3", b"FRM4"), "unexpected tag: %r" % tag
 
     o = 4
     plen = struct.unpack_from("<I", b, o)[0]; o += 4
@@ -68,8 +68,8 @@ def load_frame3(path: str) -> Dict:
                     chan_a=[], chan_b=[],
                     chan_tbl_raw=b"", dg=b"")
 
-    # FRM3 new blocks
-    assert tag == b"FRM3"
+    # FRM3 / FRM4 new blocks (identical positions for both tags)
+    assert tag in (b"FRM3", b"FRM4")
     level = struct.unpack_from("<H", b, o)[0]; o += 2
     bum = b[o:o + 0xc2]; o += 0xc2
     p1_obj = b[o:o + 0x18]; o += 0x18
@@ -91,6 +91,112 @@ def load_frame3(path: str) -> Dict:
                 p1_glob=p1_glob, p2_glob=p2_glob,
                 chan_a=chan_a, chan_b=chan_b,
                 chan_tbl_raw=chan_tbl_raw, dg=dg)
+
+
+def load_frame4(path: str) -> Dict:
+    """Parse an FRM4 oracle file into a dict with all blocks including FRM4 additions.
+
+    Extends load_frame3 with the present-path data captured by Plan 6c Task 2.
+    Returns a superset of the load_frame3 dict.  Falls back gracefully if the file
+    is an older FRM2/FRM3 (FRM4-specific keys will be empty stubs).
+
+    Additional keys beyond load_frame3:
+        fullscreen_buf_seg (int)  — seg from DGROUP:0x7928
+        fullscreen_buf_off (int)  — off from DGROUP:0x7926
+        fullscreen_buf (bytes)    — 32000 B, 4 planes * 8000 B each
+                                    (save-under captured at level start:
+                                     setup_fullscreen_view copies a000→fullscreen_buf)
+        present_calls (list)      — list of dicts, one per active bgi_set_mode_10 call:
+            desc_seg (int)         — view descriptor seg
+            desc_off (int)         — view descriptor off
+            w0 (int)               — view->word[0]: 0=src a200, 1=src a000
+            dest_seg (int)         — dest far ptr seg (view+0x12)
+            dest_off (int)         — dest far ptr off (view+0x10)
+            sh_idx (int)           — sub-handler index (view+0x1c)
+            n_all (int)            — total bgi_set_mode_10 calls so far at this point
+            call_ord (int)         — ordinal of this record in present_calls list
+        csd_obs (list)            — list of dicts, one per blit_sprite_vga call:
+            csd_seg (int)          — cur_sprite_data seg
+            csd_off (int)          — cur_sprite_data off
+            call_n (int)           — per-sprite call index
+    """
+    d = load_frame3(path)
+    # Stub values for non-FRM4 files
+    d["fullscreen_buf_seg"] = 0
+    d["fullscreen_buf_off"] = 0
+    d["fullscreen_buf"] = b""
+    d["present_calls"] = []
+    d["csd_obs"] = []
+
+    if d["tag"] != b"FRM4":
+        return d
+
+    # Re-open to read from where load_frame3 left off.  Rather than re-parsing the
+    # whole file, rebuild the offset: fixed prefix + variable atlas/map.
+    with open(path, "rb") as fh:
+        b = fh.read()
+
+    # Locate the FRM4 block start: skip tag(4)+planes_len(4)+planes+dac+atlas_hdr+atlas+map_hdr+map
+    # then the FRM3 new-block fields.
+    # Reconstruct `o` (offset after dg block) — same parse as load_frame3.
+    o = 4
+    plen = struct.unpack_from("<I", b, o)[0]; o += 4
+    o += plen             # planes
+    o += 256 * 3          # dac
+    alen = struct.unpack_from("<I", b, o)[0]; o += 4
+    o += alen             # atlas
+    mlen = struct.unpack_from("<I", b, o)[0]; o += 4
+    o += mlen             # map
+    # FRM3 new blocks
+    o += 2                # level u16
+    o += 0xc2             # bum
+    o += 0x18 + 0x18      # p1_obj + p2_obj
+    o += 6 + 6            # p1_glob + p2_glob
+    o += 3 * 0xc          # chan_a
+    o += 4 * 0xc          # chan_b
+    o += 8                # chan_tbl_raw
+    o += 0x10000          # dg
+
+    if o + 4 + 4 > len(b):
+        return d          # truncated / no FRM4 block
+
+    # FRM4 block
+    fb_seg, fb_off = struct.unpack_from("<HH", b, o); o += 4
+    fb_len = struct.unpack_from("<I", b, o)[0]; o += 4
+    fb_data = b[o:o + fb_len]; o += fb_len
+    d["fullscreen_buf_seg"] = fb_seg
+    d["fullscreen_buf_off"] = fb_off
+    d["fullscreen_buf"] = fb_data
+
+    if o + 2 > len(b):
+        return d
+    n_present = struct.unpack_from("<H", b, o)[0]; o += 2
+    present_calls = []
+    for _ in range(n_present):
+        if o + 18 > len(b):
+            break
+        desc_seg, desc_off, w0, dest_seg, dest_off, sh_idx, n_all, call_ord = \
+            struct.unpack_from("<HHHHHHHI", b, o)
+        o += 18
+        present_calls.append(dict(
+            desc_seg=desc_seg, desc_off=desc_off,
+            w0=w0, dest_seg=dest_seg, dest_off=dest_off,
+            sh_idx=sh_idx, n_all=n_all, call_ord=call_ord,
+        ))
+    d["present_calls"] = present_calls
+
+    if o + 2 > len(b):
+        return d
+    n_csd = struct.unpack_from("<H", b, o)[0]; o += 2
+    csd_obs = []
+    for _ in range(n_csd):
+        if o + 6 > len(b):
+            break
+        csd_seg, csd_off, call_n = struct.unpack_from("<HHH", b, o); o += 6
+        csd_obs.append(dict(csd_seg=csd_seg, csd_off=csd_off, call_n=call_n))
+    d["csd_obs"] = csd_obs
+
+    return d
 
 
 def idx_at(planes, x, y):

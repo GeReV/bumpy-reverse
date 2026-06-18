@@ -62,6 +62,22 @@ OBJ_H = 0x12
 # Ghidra 1000:off byte is 0x1100 + off (this is exactly dosemu.py's BLIT formula).
 BLIT_LIN = 0x1100 + 0x942a
 
+# bgi_set_mode_10 (1ab9:1028) and restore_bg_view (1ab9:0d77): overlay segment
+# 1ab9 maps as 0x1100 + (0x1ab9 - 0x1000)*16 + off = 0xbc90 + off (static).
+# These are used by the FRAME_ORACLE present-path hook (Plan 6c Task 2).
+_BGI_OV_BASE = 0x1100 + (0x1ab9 - 0x1000) * 16  # = 0xbc90
+BGI_SET_MODE_10_LIN = _BGI_OV_BASE + 0x1028      # bgi_set_mode_10 entry
+BGI_RESTORE_BG_LIN  = _BGI_OV_BASE + 0x0d77      # restore_bg_view dispatcher entry
+
+# cur_sprite_data far ptr: off @ DGROUP:0x56e2, seg @ DGROUP:0x56e4
+OFF_CSD_OFF = 0x56e2
+OFF_CSD_SEG = 0x56e4
+
+# fullscreen_buf far ptr: off @ DGROUP:0x7926, seg @ DGROUP:0x7928
+OFF_FSBUF_OFF = 0x7926
+OFF_FSBUF_SEG = 0x7928
+FSBUF_BYTES   = 32000  # 4 planes * 200 rows * 40 bytes/row
+
 
 def load_mz(path: str):
     x = open(path, "rb").read()
@@ -511,6 +527,71 @@ def main() -> None:
 
     uc.hook_add(UC_HOOK_CODE, hook_restore_bg, None, RBTR_LIN, RBTR_LIN)
 
+    # --- PRESENT ORACLE (6c Task 2): hook bgi_set_mode_10 + restore_bg_view entry ---
+    # Each call records the view descriptor far ptr, view->word[0] (selects src page),
+    # dest far ptr (view+0x10/+0x12), and sub-handler index (view+0x1c).
+    # Calls with word[0] ∈ {0,1} are "active" (trigger the plane-copy path); those
+    # with word[0] > 1 are NOPs (code-embedded descriptors, e.g. draw_anim views).
+    # Also logs cur_sprite_data (DGROUP:0x56e2/0x56e4) at each blit_sprite_vga call
+    # to confirm which VGA page each sprite goes to.
+    present_log: list = []   # list of dicts, one per bgi_set_mode_10 call (active path)
+    all_mode10: list = []    # all calls (active + NOP), for dynamics report
+    csd_log: list = []       # cur_sprite_data at each blit_sprite_vga call
+
+    def hook_bgi_mode10(uc, addr, size, _) -> None:
+        if not tr.get("watch"):
+            return
+        # bgi_set_mode_10 is called with DX:AX = view descriptor far ptr.
+        dx = uc.reg_read(UC_X86_REG_DX) & 0xFFFF
+        ax = uc.reg_read(UC_X86_REG_AX) & 0xFFFF
+        desc_lin = (dx * 16 + ax) & 0xFFFFF
+        try:
+            w0     = struct.unpack_from("<H", uc.mem_read(desc_lin, 2))[0]
+            dest_off, dest_seg = struct.unpack_from("<HH", uc.mem_read(desc_lin + 0x10, 4))
+            sh_idx = struct.unpack_from("<H", uc.mem_read(desc_lin + 0x1c, 2))[0]
+        except UcError:
+            return
+        entry = dict(desc_seg=dx, desc_off=ax, w0=w0,
+                     dest_seg=dest_seg, dest_off=dest_off,
+                     sh_idx=sh_idx)
+        all_mode10.append(entry)
+        if w0 <= 1:
+            present_log.append(entry)
+
+    def hook_bgi_restore(uc, addr, size, _) -> None:
+        if not tr.get("watch"):
+            return
+        # restore_bg_view (1ab9:0d77) uses DX:AX for view far ptr too (same calling
+        # convention as bgi_set_mode_10 — both are lcall targets from dispatch).
+        dx = uc.reg_read(UC_X86_REG_DX) & 0xFFFF
+        ax = uc.reg_read(UC_X86_REG_AX) & 0xFFFF
+        desc_lin = (dx * 16 + ax) & 0xFFFFF
+        try:
+            w_0e = struct.unpack_from("<H", uc.mem_read(desc_lin + 0x0e, 2))[0]
+            sh_idx = struct.unpack_from("<H", uc.mem_read(desc_lin + 0x1c, 2))[0]
+        except UcError:
+            return
+        if len(csd_log) <= 2:  # log only early calls to avoid flooding
+            entry = dict(caller="restore_bg", desc_seg=dx, desc_off=ax,
+                         w_0e=w_0e, sh_idx=sh_idx)
+            csd_log.append(entry)
+
+    def hook_bvga_csd(uc, addr, size, _) -> None:
+        if not tr.get("watch"):
+            return
+        try:
+            csd_off = struct.unpack_from("<H", uc.mem_read(DG_LIN + OFF_CSD_OFF, 2))[0]
+            csd_seg = struct.unpack_from("<H", uc.mem_read(DG_LIN + OFF_CSD_SEG, 2))[0]
+        except UcError:
+            return
+        n = len([e for e in csd_log if isinstance(e, dict) and "csd_seg" in e])
+        csd_log.append(dict(caller="blit_vga", call_n=n,
+                            csd_seg=csd_seg, csd_off=csd_off))
+
+    uc.hook_add(UC_HOOK_CODE, hook_bgi_mode10, None, BGI_SET_MODE_10_LIN, BGI_SET_MODE_10_LIN)
+    uc.hook_add(UC_HOOK_CODE, hook_bgi_restore, None, BGI_RESTORE_BG_LIN, BGI_RESTORE_BG_LIN)
+    uc.hook_add(UC_HOOK_CODE, hook_bvga_csd, None, BLITVGA_LIN, BLITVGA_LIN)
+
     uc.hook_add(UC_HOOK_INTR, hook_intr)
     uc.hook_add(UC_HOOK_MEM_UNMAPPED, hook_unmapped)
     uc.hook_add(UC_HOOK_MEM_WRITE, hook_vga_write, None, 0xA0000, 0xAFFFF)
@@ -671,6 +752,17 @@ def main() -> None:
                 # Full 64KB DGROUP snapshot — supersets all per-field captures above.
                 # Tasks 4-6 can read any static table by DGROUP offset without re-running.
                 frame_snap["dg"] = bytes(uc.mem_read(DG_LIN, 0x10000))
+                # --- FRM4 additional captures (Plan 6c Task 2) ----------------------
+                # fullscreen_buf: read the far ptr from DGROUP, then dump 32000 bytes.
+                fb_off = struct.unpack_from("<H", uc.mem_read(DG_LIN + OFF_FSBUF_OFF, 2))[0]
+                fb_seg = struct.unpack_from("<H", uc.mem_read(DG_LIN + OFF_FSBUF_SEG, 2))[0]
+                fb_lin = (fb_seg * 16 + fb_off) & 0xFFFFF
+                frame_snap["fullscreen_buf_off"] = fb_off
+                frame_snap["fullscreen_buf_seg"] = fb_seg
+                if fb_lin + FSBUF_BYTES <= RAM:
+                    frame_snap["fullscreen_buf"] = bytes(uc.mem_read(fb_lin, FSBUF_BYTES))
+                else:
+                    frame_snap["fullscreen_buf"] = bytes(FSBUF_BYTES)
             except UcError as _ent_err:
                 print("[sprite_oracle] WARNING: entity capture UcError (%s) — using zero sentinels" % _ent_err, flush=True)
                 frame_snap.setdefault("bum", bytes(0xC2))
@@ -682,6 +774,9 @@ def main() -> None:
                 frame_snap.setdefault("chan_b_raw", bytes(4 * 0xc))
                 frame_snap.setdefault("chan_tbl_raw", bytes(8))
                 frame_snap.setdefault("dg", bytes(0x10000))
+                frame_snap.setdefault("fullscreen_buf", bytes(FSBUF_BYTES))
+                frame_snap.setdefault("fullscreen_buf_off", 0)
+                frame_snap.setdefault("fullscreen_buf_seg", 0)
             print("[sprite_oracle] frame oracle: captured settled level frame (countdown=%d)" % countdown, flush=True)
             break
         if countdown is not None:
@@ -757,18 +852,22 @@ def main() -> None:
         print("   frame idx=%d ctrl=%#04x w=%d h=%d prep_len=%d  head=%s" % (
             idx, ctrl, w, h, len(data), data[:16].hex()), flush=True)
 
-    # --- FRAME ORACLE output (6b): the settled full level frame ------------------
+    # --- FRAME ORACLE output (6b / 6c): the settled full level frame -------------
     #
-    # FRM3 byte layout (all little-endian; offsets are from start of file):
-    #   +0x00  4 B  magic "FRM3"
+    # FRM4 byte layout (all little-endian; offsets are from start of file):
+    #   +0x00  4 B  magic "FRM4"   (FRM3 layout preserved byte-for-byte below)
     #   +0x04  4 B  u32 planes_len (= 4 * 0x10000 = 0x40000)
     #   +0x08  planes_len B  4 VGA planes (plane 0..3, 0x10000 B each)
+    #              plane 0 offset 0x0000 = a000:0000 (visible page, plane 0)
+    #              plane 0 offset 0x2000 = a200:0000 (sprite-scratch page, plane 0)
+    #              (each plane buffer is 0x10000 B; VGA page a000 at [0:0x1f40],
+    #               a200 at [0x2000:0x3f40] within each plane's 0x10000 slice)
     #   +0x48008  0x300 B  DAC palette (256 * 3 bytes, 0..63 per channel)
     #   next   4 B  u32 atlas_len (= 0x8000)
     #   next   atlas_len B  PAV atlas raster
     #   next   4 B  u32 map_len (= 0x1000)
     #   next   map_len B  level tile map
-    #   --- FRM3 new blocks (appended after atlas/map) ---
+    #   --- FRM3 new blocks (appended after atlas/map, same as FRM3) ---------------
     #   next   2 B  u16 level  (1-based level index)
     #   next   0xc2 B  BUM per-level header for this level
     #                  (from tilemap@ DGROUP:0xa0d8 → block base, no offset;
@@ -785,13 +884,39 @@ def main() -> None:
     #                (A_off@0x4c70, A_seg@0x4c72, B_off@0x4cbc, B_seg@0x4cbe)
     #   next   0x10000 B  full DGROUP snapshot (DG_LIN, 64KB)
     #                     supersets all per-field captures; Tasks 4-6 index by offset
+    #   --- FRM4 new blocks (appended after DGROUP, Plan 6c Task 2) ---------------
+    #   next   4 B  u16 fb_seg, u16 fb_off  (fullscreen_buf far ptr from DGROUP:0x7928/0x7926)
+    #   next   4 B  u32 fullscreen_buf_len  (= FSBUF_BYTES = 32000)
+    #   next   fullscreen_buf_len B  contents of fullscreen_buf at settle time
+    #              layout: 4 planes × 8000 B (plane 0 first, then 1, 2, 3)
+    #              (= the save-under captured by setup_fullscreen_view via the
+    #               a000→fullscreen_buf present copy at level start)
+    #   next   2 B  u16 n_present  (number of bgi_set_mode_10 calls with word[0]<=1
+    #                               observed during the settle period)
+    #   per present-call record (18 B each):
+    #     2 B u16 desc_seg   — view descriptor far ptr seg
+    #     2 B u16 desc_off   — view descriptor far ptr off
+    #     2 B u16 w0         — view->word[0]  (0=src a200, 1=src a000)
+    #     2 B u16 dest_seg   — dest far ptr seg (from view+0x12)
+    #     2 B u16 dest_off   — dest far ptr off (from view+0x10)
+    #     2 B u16 sh_idx     — sub-handler index (from view+0x1c)
+    #     2 B u16 n_all      — total bgi_set_mode_10 calls so far (incl. NOPs)
+    #     4 B u32 call_ord   — ordinal of this call within all_mode10 (0-based)
+    #   next   2 B  u16 n_csd  (number of cur_sprite_data observations)
+    #   per csd record (6 B each):
+    #     2 B u16 csd_seg
+    #     2 B u16 csd_off
+    #     2 B u16 call_n     (per-sprite call index)
     if FRAME_ORACLE and frame_snap:
         fr_path = os.path.join(OUT_DIR, "frame_oracle.bin")
         atlas = frame_snap.get("atlas", b"")
         bmap = frame_snap.get("map", b"")
+        # collect the present-log entries accumulated up to settle time
+        _plog = list(present_log)
+        _csd_log = [e for e in csd_log if isinstance(e, dict) and "csd_seg" in e]
         with open(fr_path, "wb") as f:
-            # --- existing FRM2-compatible blocks (offsets preserved) ---------------
-            f.write(b"FRM3")
+            # --- FRM3-compatible blocks (byte-identical to what FRM3 wrote) --------
+            f.write(b"FRM4")
             f.write(struct.pack("<I", len(frame_snap["planes"])))
             f.write(frame_snap["planes"])                            # 4 * 0x10000
             f.write(frame_snap["dac"])                               # 256 * 3 (0..63)
@@ -799,7 +924,7 @@ def main() -> None:
             f.write(atlas)                                           # PAV atlas (0x8000)
             f.write(struct.pack("<I", len(bmap)))
             f.write(bmap)                                            # level map (0x1000)
-            # --- FRM3 new blocks ---------------------------------------------------
+            # --- FRM3 new blocks (identical positions as FRM3) ---------------------
             f.write(struct.pack("<H", frame_snap["level"]))          # u16 level
             f.write(frame_snap["bum"])                               # 0xc2 B BUM header
             f.write(frame_snap["p1_obj"])                            # 0x18 B p1 obj
@@ -810,7 +935,37 @@ def main() -> None:
             f.write(frame_snap["chan_b_raw"])                        # 4*0xc B layer-B ch
             f.write(frame_snap["chan_tbl_raw"])                      # 8 B far-ptr words
             f.write(frame_snap["dg"])                                # 0x10000 B DGROUP
-        print("[sprite_oracle] wrote %s : full frame + palette + atlas/map + entity state" % fr_path, flush=True)
+            # --- FRM4 additions (Plan 6c Task 2) -----------------------------------
+            fb_data = frame_snap.get("fullscreen_buf", bytes(FSBUF_BYTES))
+            fb_seg  = frame_snap.get("fullscreen_buf_seg", 0)
+            fb_off  = frame_snap.get("fullscreen_buf_off", 0)
+            f.write(struct.pack("<HH", fb_seg, fb_off))              # 4 B far ptr
+            f.write(struct.pack("<I", len(fb_data)))                 # 4 B len
+            f.write(fb_data)                                         # 32000 B
+            f.write(struct.pack("<H", len(_plog)))                   # u16 n_present
+            for _i, pe in enumerate(_plog):
+                f.write(struct.pack("<HHHHHHHI",
+                    pe["desc_seg"], pe["desc_off"],
+                    pe["w0"],
+                    pe["dest_seg"], pe["dest_off"],
+                    pe["sh_idx"],
+                    len(all_mode10),
+                    _i,
+                ))
+            f.write(struct.pack("<H", len(_csd_log)))                # u16 n_csd
+            for ce in _csd_log:
+                f.write(struct.pack("<HHH",
+                    ce["csd_seg"], ce["csd_off"], ce.get("call_n", 0)))
+        print("[sprite_oracle] wrote %s : full frame + palette + atlas/map + entity state + FRM4 present-path" % fr_path, flush=True)
+        print("[sprite_oracle] FRM4: fullscreen_buf @%04x:%04x (%d B), %d present calls, %d csd observations" % (
+            fb_seg, fb_off, len(fb_data), len(_plog), len(_csd_log)), flush=True)
+        _src_map = {0: "a200:0000 (sprite-scratch)", 1: "a000:0000 (visible)"}
+        for _i, pe in enumerate(_plog[:32]):
+            print("  present[%d] w0=%d src=%s dest=%04x:%04x sh_idx=%d" % (
+                _i, pe["w0"], _src_map.get(pe["w0"], "?"),
+                pe["dest_seg"], pe["dest_off"], pe["sh_idx"]), flush=True)
+        print("[sprite_oracle] FRM4: %d total bgi_set_mode_10 calls (%d active, %d NOP)" % (
+            len(all_mode10), len(_plog), len(all_mode10) - len(_plog)), flush=True)
 
     # --- BG ORACLE output (6a): tile-blit snapshots + the PAV atlas --------------
     if BG_ORACLE:
