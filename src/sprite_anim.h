@@ -29,4 +29,15 @@
    * The ctrl&0x40 packed-pixel EXPANSION branch is omitted (dead for these sprites). */
 void sprite_prepare_frame(u8 __far *obj, u8 __huge *bank, u32 bank_base_lin);
 
+/* UNVALIDATED reconstruction of the ctrl&0x40 packed-pixel EXPANSION path of
+   prepare_sprite_frames (engine 1cec:2ea9).  DEAD for BUMSPJEU (every frame is
+   ctrl=0x03), present for completeness only — a near-literal transcription of the
+   raw disassembly, with no oracle to validate against.  `frame` points at the
+   control-byte stream (header at frame[-2..-0xc]); `scratch` is the decode-scratch
+   cursor (header copied to scratch[0..0xb], expanded frame at scratch+0xc); `bitrev`
+   is the 256-byte pixel_bitrev_lut; `path` = obj[0x0a] (bit 0x20 selects the path);
+   `mode` is the engine flag iRam00010ded.  Returns the advanced scratch cursor. */
+u8 __far *sprite_expand_frame(u8 __far *frame, u8 __far *scratch,
+                              const u8 __far *bitrev, u8 path, u16 mode);
+
 #endif /* SPRITE_ANIM_H */
