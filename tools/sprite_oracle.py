@@ -620,6 +620,46 @@ def main() -> None:
                 frame_snap["map"] = bytes(uc.mem_read((m_seg * 16 + m_off) & 0xFFFFF, 0x1000))
             except UcError:
                 frame_snap["atlas"] = b""; frame_snap["map"] = b""
+            # --- 6b: capture entity runtime state at this exact settled frame -----
+            # Level index (1-based)
+            frame_snap["level"] = LEVEL
+            # BUM per-level header block (lives outside DGROUP).
+            # tilemap far ptr @ DGROUP:0xa0d8 → per-level block base.
+            # Payload: buffer+2 + (LEVEL-1)*0xc2  →  0xc2 bytes of level header.
+            bum_off, bum_seg = struct.unpack("<HH", uc.mem_read(DG_LIN + 0xa0d8, 4))
+            bum_block_lin = (bum_seg * 16 + bum_off) & 0xFFFFF
+            hdr_lin = bum_block_lin + 2 + (LEVEL - 1) * 0xC2
+            frame_snap["bum"] = bytes(uc.mem_read(hdr_lin, 0xC2))
+            # Sprite object structs (each 0x18 bytes, fixed DGROUP addresses).
+            # P1 obj @ 0x792e, P2 obj @ 0x795a.
+            frame_snap["p1_obj"] = bytes(uc.mem_read(DG_LIN + 0x792e, 0x18))
+            frame_snap["p2_obj"] = bytes(uc.mem_read(DG_LIN + 0x795a, 0x18))
+            # Player globals — NOT contiguous; read each field separately.
+            # p1: pixel_x@0x9290(2B)  pixel_y@0x9292(2B)  move_anim@0x824a(2B)
+            frame_snap["p1_glob"] = (bytes(uc.mem_read(DG_LIN + 0x9290, 2))
+                                     + bytes(uc.mem_read(DG_LIN + 0x9292, 2))
+                                     + bytes(uc.mem_read(DG_LIN + 0x824a, 2)))
+            # p2: pixel_x@0x79ba(2B)  pixel_y@0x79bc(2B)  move_anim@0x8560(2B)
+            frame_snap["p2_glob"] = (bytes(uc.mem_read(DG_LIN + 0x79ba, 2))
+                                     + bytes(uc.mem_read(DG_LIN + 0x79bc, 2))
+                                     + bytes(uc.mem_read(DG_LIN + 0x8560, 2)))
+            # Anim channel records: read by fixed DGROUP offsets (stride 0xc).
+            # Layer-A: 3 records at 0x4c40 / 0x4c4c / 0x4c58
+            # Layer-B: 4 records at 0x4c80 / 0x4c8c / 0x4c98 / 0x4ca4
+            raw_a = bytes(uc.mem_read(DG_LIN + 0x4c40, 3 * 0xc))
+            raw_b = bytes(uc.mem_read(DG_LIN + 0x4c80, 4 * 0xc))
+            frame_snap["chan_a_raw"] = raw_a
+            frame_snap["chan_b_raw"] = raw_b
+            # Also capture the raw far-ptr table words so Tasks 4-6 can verify
+            # that the table pointers resolve into the captured records.
+            # A: off@0x4c70  seg@0x4c72  B: off@0x4cbc  seg@0x4cbe  (4 u16 = 8 bytes)
+            frame_snap["chan_tbl_raw"] = (bytes(uc.mem_read(DG_LIN + 0x4c70, 2))
+                                          + bytes(uc.mem_read(DG_LIN + 0x4c72, 2))
+                                          + bytes(uc.mem_read(DG_LIN + 0x4cbc, 2))
+                                          + bytes(uc.mem_read(DG_LIN + 0x4cbe, 2)))
+            # Full 64KB DGROUP snapshot — supersets all per-field captures above.
+            # Tasks 4-6 can read any static table by DGROUP offset without re-running.
+            frame_snap["dg"] = bytes(uc.mem_read(DG_LIN, 0x10000))
             print("[sprite_oracle] frame oracle: captured settled level frame (countdown=%d)" % countdown, flush=True)
             break
         if countdown is not None:
@@ -696,12 +736,39 @@ def main() -> None:
             idx, ctrl, w, h, len(data), data[:16].hex()), flush=True)
 
     # --- FRAME ORACLE output (6b): the settled full level frame ------------------
+    #
+    # FRM3 byte layout (all little-endian; offsets are from start of file):
+    #   +0x00  4 B  magic "FRM3"
+    #   +0x04  4 B  u32 planes_len (= 4 * 0x10000 = 0x40000)
+    #   +0x08  planes_len B  4 VGA planes (plane 0..3, 0x10000 B each)
+    #   +0x48008  0x300 B  DAC palette (256 * 3 bytes, 0..63 per channel)
+    #   next   4 B  u32 atlas_len (= 0x8000)
+    #   next   atlas_len B  PAV atlas raster
+    #   next   4 B  u32 map_len (= 0x1000)
+    #   next   map_len B  level tile map
+    #   --- FRM3 new blocks (appended after atlas/map) ---
+    #   next   2 B  u16 level  (1-based level index)
+    #   next   0xc2 B  BUM per-level header for this level
+    #                  (from tilemap@ DGROUP:0xa0d8 → block+2+(level-1)*0xc2)
+    #   next   0x18 B  p1_sprite obj struct  (DGROUP:0x792e)
+    #   next   0x18 B  p2_sprite obj struct  (DGROUP:0x795a)
+    #   next   6 B  p1_glob: pixel_x(u16) pixel_y(u16) move_anim(u16)
+    #                         (@0x9290  @0x9292  @0x824a)
+    #   next   6 B  p2_glob: pixel_x(u16) pixel_y(u16) move_anim(u16)
+    #                         (@0x79ba  @0x79bc  @0x8560)
+    #   next   3*0xc B  Layer-A channel records  (DGROUP:0x4c40, stride 0xc)
+    #   next   4*0xc B  Layer-B channel records  (DGROUP:0x4c80, stride 0xc)
+    #   next   8 B  chan_tbl_raw: 4 u16 far-ptr table words
+    #                (A_off@0x4c70, A_seg@0x4c72, B_off@0x4cbc, B_seg@0x4cbe)
+    #   next   0x10000 B  full DGROUP snapshot (DG_LIN, 64KB)
+    #                     supersets all per-field captures; Tasks 4-6 index by offset
     if FRAME_ORACLE and frame_snap:
         fr_path = os.path.join(OUT_DIR, "frame_oracle.bin")
         atlas = frame_snap.get("atlas", b"")
         bmap = frame_snap.get("map", b"")
         with open(fr_path, "wb") as f:
-            f.write(b"FRM2")
+            # --- existing FRM2-compatible blocks (offsets preserved) ---------------
+            f.write(b"FRM3")
             f.write(struct.pack("<I", len(frame_snap["planes"])))
             f.write(frame_snap["planes"])                            # 4 * 0x10000
             f.write(frame_snap["dac"])                               # 256 * 3 (0..63)
@@ -709,7 +776,18 @@ def main() -> None:
             f.write(atlas)                                           # PAV atlas (0x8000)
             f.write(struct.pack("<I", len(bmap)))
             f.write(bmap)                                            # level map (0x1000)
-        print("[sprite_oracle] wrote %s : full frame + palette + atlas/map" % fr_path, flush=True)
+            # --- FRM3 new blocks ---------------------------------------------------
+            f.write(struct.pack("<H", frame_snap["level"]))          # u16 level
+            f.write(frame_snap["bum"])                               # 0xc2 B BUM header
+            f.write(frame_snap["p1_obj"])                            # 0x18 B p1 obj
+            f.write(frame_snap["p2_obj"])                            # 0x18 B p2 obj
+            f.write(frame_snap["p1_glob"])                           # 6 B p1 globals
+            f.write(frame_snap["p2_glob"])                           # 6 B p2 globals
+            f.write(frame_snap["chan_a_raw"])                        # 3*0xc B layer-A ch
+            f.write(frame_snap["chan_b_raw"])                        # 4*0xc B layer-B ch
+            f.write(frame_snap["chan_tbl_raw"])                      # 8 B far-ptr words
+            f.write(frame_snap["dg"])                                # 0x10000 B DGROUP
+        print("[sprite_oracle] wrote %s : full frame + palette + atlas/map + entity state" % fr_path, flush=True)
 
     # --- BG ORACLE output (6a): tile-blit snapshots + the PAV atlas --------------
     if BG_ORACLE:
