@@ -199,18 +199,45 @@ def load_frame4(path: str) -> Dict:
     return d
 
 
-def idx_at(planes, x, y):
-    off = y * 40 + x // 8
+def idx_at(planes: bytes, x: int, y: int, page_off: int = 0) -> int:
+    """Return the 4-bit palette index at pixel (x, y) in a 4-plane buffer.
+
+    page_off — byte offset within each plane's 0x10000-byte region to use as
+    the start of the 320x200 scanlines.  0 = page0 (a000), 0x2000 = page1 (a200).
+    """
+    off = y * 40 + x // 8 + page_off
     m = 0x80 >> (x & 7)
     return (((planes[off] & m) and 1) | (((planes[PLANE + off] & m) and 1) << 1)
             | (((planes[2 * PLANE + off] & m) and 1) << 2)
             | (((planes[3 * PLANE + off] & m) and 1) << 3))
 
 
-def main():
+def _live_plane_off(dg: bytes) -> int:
+    """Derive the live VGA page plane-byte offset from the captured DGROUP.
+
+    Reads cur_sprite_data_seg at DGROUP:0x56e4.
+      0xa200 -> page1, offset 0x2000
+      0xa000 (or other) -> page0, offset 0x0000
+    """
+    seg = struct.unpack_from("<H", dg, 0x56e4)[0]
+    if seg == 0xa200:
+        return 0x2000
+    return 0
+
+
+def main() -> None:
     src = sys.argv[1] if len(sys.argv) > 1 else "local/build/render/frame_oracle.bin"
-    planes, dac, atlas, bmap = load(src)
+    d = load_frame3(src)
+    planes = d["planes"]
+    dac = d["dac"]
+    atlas = d["atlas"]
+    bmap = d["map"]
+    dg = d["dg"]
     raster = atlas[6:]
+
+    # Determine live page offset from DGROUP:0x56e4 (Plan 6c Task 3)
+    live_off = _live_plane_off(dg)
+
     # render the full bg grid into a fresh plane buffer
     bg = [bytearray(PLANE) for _ in range(4)]
     for cy in range(0, 25, 2):
@@ -219,12 +246,12 @@ def main():
             bgref.blit_cell(bg, raster, bmap, dict(cx=cx, cy=cy, run_code=rc))
     bgflat = b"".join(bytes(p) for p in bg)
 
-    # compare bg vs frame, per pixel (within the 320x200 playfield)
+    # compare bg vs frame at the live page, per pixel (320x200 playfield)
     W, H = 320, 200
     match = diff = 0
     for y in range(H):
         for x in range(W):
-            if idx_at(bgflat, x, y) == idx_at(planes, x, y):
+            if idx_at(bgflat, x, y) == idx_at(planes, x, y, page_off=live_off):
                 match += 1
             else:
                 diff += 1
@@ -232,18 +259,19 @@ def main():
     print(f"bg vs frame: {match}/{tot} pixels match ({100*match/tot:.1f}%), "
           f"{diff} differ (entities/overlays)")
 
-    # diff PNG: bg dimmed, entity pixels magenta
+    # diff PNG: bg dimmed, entity pixels magenta (uses live page)
     pal = [(min(255, dac[i*3]*255//63), min(255, dac[i*3+1]*255//63),
             min(255, dac[i*3+2]*255//63)) for i in range(256)]
     rgb = bytearray(W * H * 3)
     for y in range(H):
         for x in range(W):
-            fi = idx_at(planes, x, y)
+            fi = idx_at(planes, x, y, page_off=live_off)
             if idx_at(bgflat, x, y) == fi:
-                r, g, b = pal[fi]; r//=3; g//=3; b//=3
+                r, g, b = pal[fi]; r //= 3; g //= 3; b //= 3
             else:
                 r, g, b = 255, 0, 255
-            px = (y*W+x)*3; rgb[px]=r; rgb[px+1]=g; rgb[px+2]=b
+            px = (y * W + x) * 3
+            rgb[px] = r; rgb[px + 1] = g; rgb[px + 2] = b
     out = "local/build/render/composite_diff.png"
     frspec = importlib.util.spec_from_file_location("fr", "tools/frame_render.py")
     fr = importlib.util.module_from_spec(frspec); frspec.loader.exec_module(fr)

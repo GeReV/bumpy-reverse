@@ -116,6 +116,41 @@
      all layers (A, B, C, P1, P2) without code duplication.
    * PLAN 6b COMPLETE (Task 7): bg + layer C + P1 + layer A + layer B + P2 all
      exercise their positive draw paths.  Full residue documented above.
+
+   --- DOUBLE-BUFFER MODEL (Plan 6c Task 3) ---
+   * VGA dual-page layout: the engine double-buffers within the 64KB VGA plane.
+     page0 = a000:0000  — plane byte offset 0x0000 within each plane's 0x10000 B
+     page1 = a200:0000  — plane byte offset 0x2000 within each plane's 0x10000 B
+     Visible scanlines: 200 rows × 40 bytes = 8000 B starting from the page base.
+     Both pages live within each plane's 64KB buffer (the FRM4 oracle captures all
+     4 × 0x10000 B).
+   * Page-selection rule (decomp-grounded):
+     - set_sprite_table_ptr (1cec:2dd2) sets cur_sprite_data_ptr (DGROUP:0x56de)
+       to &sprite_table_base[index] where sprite_table_base (DGROUP:0x5415) holds:
+         [0] = a200:0000 (page1),  [1] = a000:0000 (page0).
+     - dispatch_palette_mode_with_src_ptr (1cec:2d6d) reads *cur_sprite_data_ptr
+       and splits it into cur_sprite_data_off (0x56e2) and cur_sprite_data_seg (0x56e4).
+       Xref (local/build/xrefs_csd.txt): 1cec:2d81 WRITE cur_sprite_data_off,
+       1cec:2d85 WRITE cur_sprite_data_seg — ONLY writer is dispatch_palette_mode.
+     - The engine alternates the index per-sprite blit (~50/50 across 888 calls at
+       level 8, confirmed by FRM4 csd_log in local/build/present_dynamics.md).
+     - No a200→a000 present copy occurs during settled gameplay; the two-page toggle
+       is per-entity, not per-frame. (present_dynamics.md §4: bgi_set_mode_10 never
+       observed with w0=0 (source=a200) during the 40-tick settle window.)
+   * Live page at FRAME_ORACLE capture: cur_sprite_data seg = dg[0x56e4].
+     For the level-8 oracle: seg = 0xa200 → live page = page1, plane offset 0x2000.
+     The composite validates against THIS page for the highest-fidelity pixel match
+     (54152/64000 at page1 vs 53858/64000 at page0 for the level-8 oracle).
+   * Limitation — other page: the non-live page (page0 when live=page1) contains
+     entity draws from the PREVIOUS animation tick.  Reproducing those draws would
+     require capturing the prior tick's entity state, which is out of scope for
+     Plan 6b/6c.  The non-live page is therefore not validated.
+   * Composite work buffer: entity functions (entity_draw_layer_a/b/c, entity_draw_p1,
+     entity_draw_p2) always target offset 0 within the host work_planes buffer, with
+     view.data_off=0 and view.data_seg=0xa000.  The live page offset is applied only
+     on the REFERENCE side (cap_planes + live_plane_off) in the pixel-diff loop.
+   * PLAN 6c Task 3 COMPLETE: composite harness is double-buffer-aware; validates
+     against the live VGA page derived from captured cur_sprite_data seg.
 */
 
 /* Draw all nonzero layer-A cells from `bum` into `planes`.

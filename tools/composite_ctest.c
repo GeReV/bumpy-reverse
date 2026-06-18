@@ -1,10 +1,50 @@
-/* Host composite driver — Task 3+4+5+6+7 of Plan 6b.
-   Parses frame_oracle.bin (FRM3), renders the full background into a fresh
-   4-plane buffer using src/bg_render.c bg_render_grid(), then draws layer-C
-   static sprites using src/entity.c entity_draw_layer_c(), then draws P1
-   using entity_draw_p1(), P2 using entity_draw_p2(), then layer A using
+/* Host composite driver — Task 3+4+5+6+7 of Plan 6b + Task 3 of Plan 6c.
+   Parses frame_oracle.bin (FRM3 or FRM4), renders the full background into a
+   fresh 4-plane buffer using src/bg_render.c bg_render_grid(), then draws
+   layer-C static sprites using src/entity.c entity_draw_layer_c(), then draws
+   P1 using entity_draw_p1(), P2 using entity_draw_p2(), then layer A using
    entity_draw_layer_a(), and layer B using entity_draw_layer_b().
    Diffs against the captured engine frame at each stage.
+
+   *** DOUBLE-BUFFER MODEL (Plan 6c Task 3) ***
+
+   The engine double-buffers across two VGA pages within the 64KB VGA plane:
+     page0 = a000:0000  — plane byte offset 0x0000 within each plane
+     page1 = a200:0000  — plane byte offset 0x2000 within each plane
+
+   Each plane's 64KB buffer holds BOTH pages; the visible scanlines
+   (200 rows × 40 bytes = 8000 B) start at the page's base offset.
+
+   Page selection: set_sprite_table_ptr (1cec:2dd2) indexes sprite_table_base
+   (DGROUP:0x5415) to set cur_sprite_data_ptr (DGROUP:0x56de).
+   dispatch_palette_mode_with_src_ptr (1cec:2d6d) then splits the far-ptr value
+   into cur_sprite_data_off (DGROUP:0x56e2) and cur_sprite_data_seg (0x56e4).
+   sprite_table_base[0] = a200:0000 (page1), sprite_table_base[1] = a000:0000
+   (page0); the engine alternates the index per-sprite blit (~50/50 split,
+   confirmed from 888 csd_log entries at level 8).
+
+   Xref evidence (local/build/xrefs_csd.txt):
+     1cec:2d81 WRITE cur_sprite_data_off  in dispatch_palette_mode_with_src_ptr
+     1cec:2d85 WRITE cur_sprite_data_seg  in dispatch_palette_mode_with_src_ptr
+   Only one writer: dispatch_palette_mode_with_src_ptr @ 1cec:2d6d.
+
+   LIVE PAGE AT CAPTURE: at the FRAME_ORACLE capture instant, the captured
+   DGROUP holds cur_sprite_data seg = dg[0x56e4], off = dg[0x56e2].
+   For the level-8 oracle: seg = 0xa200 → live page = page1, plane offset 0x2000.
+   (For any oracle where seg = 0xa000, live page = page0, plane offset 0x0000.)
+
+   VALIDATION TARGET: we compare the composite against the LIVE PAGE
+   (offset = 0x2000 when seg=0xa200, else 0x0000), because the last complete
+   entity draws happened to that page.  The composite match improves from
+   ~53858 (offset 0 / page0) to ~54152 (offset 0x2000 / page1) on the level-8
+   oracle (the two pages share all background pixels and differ only in ~328
+   entity-draw pixels that landed on the last-blitted page).
+
+   LIMITATION: The OTHER page (the non-live page) contains entity draws from
+   the PREVIOUS animation tick.  Reproducing it would require capturing that
+   prior tick's entity state — out of scope for Plan 6b/6c.  Residue vs the
+   live page = render_player_view second-pass artifacts + items + level-exit
+   sprite (documented in entity.h RECONSTRUCTION FIDELITY section).
 
    Far/huge qualifiers are #define'd away for the host build (gcc/cc), exactly
    as tools/bg_ctest.c does it.
@@ -39,7 +79,10 @@ typedef int32_t  s32;
 #include "../src/entity.c"
 
 /* -------------------------------------------------------------------------
-   FRM3 parse helpers
+   FRM3/FRM4 parse helpers.
+   FRM4 is a strict superset of FRM3 (identical byte layout up through DGROUP;
+   FRM4 appends fullscreen_buf + present-log + csd-log after DGROUP).
+   This driver reads only the FRM3-compatible portion and accepts both magics.
    ------------------------------------------------------------------------- */
 #define PLANE_SZ  0x10000UL           /* bytes per VGA plane */
 #define PLANES_SZ (4UL * PLANE_SZ)    /* total 4-plane buffer */
@@ -106,7 +149,7 @@ int main(int argc, char **argv)
     u32   plen, alen, mlen;
 
     /* Pointers into the oracle file */
-    const u8 *cap_planes;   /* captured engine frame planes */
+    const u8 *cap_planes;   /* captured engine frame planes (both pages) */
     const u8 *atlas_raster; /* PAV raster: atlas block + 6 (skip header) */
     const u8 *bmap;         /* level tile map */
     const u8 *bum;          /* BUM per-level header (0xc2 bytes) */
@@ -115,6 +158,14 @@ int main(int argc, char **argv)
     const u8 *p1_glob;      /* p1 globals: pixel_x(u16) pixel_y(u16) move_anim(u16) */
     const u8 *p2_glob;      /* p2 globals: pixel_x(u16) pixel_y(u16) move_anim(u16) */
     const u8 *dg;           /* full DGROUP snapshot (0x10000 bytes) */
+
+    /* Live page selection: determined from the captured cur_sprite_data seg
+       (DGROUP:0x56e4).  0xa000 -> page0, plane offset 0x0000.
+       0xa200 -> page1, plane offset 0x2000.
+       All pixel-diffs use cap_planes + live_plane_off as the reference. */
+    u16       live_csd_seg;    /* captured cur_sprite_data_seg */
+    u16       live_csd_off;    /* captured cur_sprite_data_off */
+    u32       live_plane_off;  /* plane byte offset for the live page */
 
     long  match = 0;
     long  match_bgC = 0;
@@ -173,18 +224,23 @@ int main(int argc, char **argv)
     }
     fclose(fh);
 
-    /* Verify magic */
-    if (memcmp(b, "FRM3", 4) != 0) {
-        fprintf(stderr, "expected FRM3 magic, got %.4s\n", b);
+    /* Verify magic: accept FRM3 and FRM4 (FRM4 is a strict superset of FRM3;
+       both have identical byte layout for all blocks this driver reads). */
+    if (memcmp(b, "FRM3", 4) != 0 && memcmp(b, "FRM4", 4) != 0) {
+        fprintf(stderr, "expected FRM3 or FRM4 magic, got %.4s\n", b);
         free(bank);
         free(b);
         return 2;
     }
 
-    /* --- Parse FRM3 blocks (all little-endian) ---
-       +0x00  4 B  "FRM3"
-       +0x04  4 B  u32 planes_len  (== 0x40000)
-       +0x08  0x40000 B  captured engine planes (plane0..3)
+    /* --- Parse FRM3/FRM4 blocks (all little-endian) ---
+       +0x00  4 B  "FRM3" or "FRM4"
+       +0x04  4 B  u32 planes_len  (== 0x40000 = 4 * 0x10000)
+       +0x08  0x40000 B  captured VGA planes (plane0..3, 0x10000 B each)
+                         Each plane holds BOTH VGA pages:
+                           page0 (a000:0000) at plane byte offset 0x0000
+                           page1 (a200:0000) at plane byte offset 0x2000
+                         Visible scanlines: 200 rows × 40 B = 8000 B from page base.
        next   0x300 B  DAC palette (256*3) — skip
        next   4 B  u32 atlas_len
        next   atlas_len B  PAV atlas raster (raw; first 6 B = raster header)
@@ -201,6 +257,10 @@ int main(int argc, char **argv)
        next   4*0xc B  layer-B channel records
        next   8 B  chan_tbl_raw
        next   0x10000 B  full DGROUP snapshot
+       --- FRM4 additions (Plan 6c Task 2) — not read here ---
+       next   fullscreen_buf far ptr + len + data
+       next   present-call log
+       next   csd observations
     */
     o = 4;
     plen = rd32(b + o); o += 4;
@@ -227,6 +287,28 @@ int main(int argc, char **argv)
     o += 8;                         /* skip chan_tbl_raw */
     dg = b + o;                     /* full DGROUP snapshot (0x10000 B) */
 
+    /* --- Determine live VGA page from captured cur_sprite_data (Plan 6c T3) ---
+       cur_sprite_data_off @ DGROUP:0x56e2, cur_sprite_data_seg @ DGROUP:0x56e4.
+       These are written ONLY by dispatch_palette_mode_with_src_ptr (1cec:2d6d)
+       from sprite_table_base[index] (DGROUP:0x5415):
+         index 0 -> a200:0000 (page1, plane byte offset 0x2000)
+         index 1 -> a000:0000 (page0, plane byte offset 0x0000)
+       The engine alternates index per-sprite blit; at the FRAME_ORACLE capture
+       instant, the value in dg[0x56e4] reveals which page received the last draw.
+       We validate against THAT page for the highest-fidelity match.
+    */
+    live_csd_off = rd16(dg + 0x56e2);
+    live_csd_seg = rd16(dg + 0x56e4);
+    if (live_csd_seg == 0xa200u) {
+        live_plane_off = 0x2000UL;   /* page1: a200:0000 */
+    } else {
+        live_plane_off = 0x0000UL;   /* page0: a000:0000 (or unknown seg → fallback) */
+    }
+    printf("live page: cur_sprite_data = %04x:%04x -> plane_off=0x%lx (%s)\n",
+           (unsigned)live_csd_seg, (unsigned)live_csd_off,
+           (unsigned long)live_plane_off,
+           (live_csd_seg == 0xa200u) ? "page1/a200" : "page0/a000");
+
     /* --- Extract P1/P2 globals --- */
     p1_pixel_x  = rd16(p1_glob + 0);
     p1_pixel_y  = rd16(p1_glob + 2);
@@ -242,8 +324,16 @@ int main(int argc, char **argv)
     /* p2_cell: dg[0x8571] (signed byte; -1 = P2 absent) */
     p2_cell = (s8)dg[0x8571];
 
-    /* --- Full-screen sprite view (matches chain_ctest.c / engine globals) ---
-       left=0 right=40 top=0 bottom=199 height=199 data_off=0 data_seg=0xa000 */
+    /* --- Full-screen sprite view (always targets work_planes at offset 0) ---
+       The work_planes buffer is indexed by idx_at() starting at offset 0,
+       so view.data_off/seg must anchor the blit to offset 0 within the buffer
+       (matching a000:0000).  Entity blits go into work_planes[plane*0x10000+row_off]
+       regardless of which live page the captured oracle was on.
+       The live page offset (live_plane_off) is applied only to the REFERENCE side
+       (cap_planes + live_plane_off) so that each pixel-diff compares our composite
+       pixel against the captured pixel from the same live page.
+       This is the correct model: composite renders to a fresh page-0-style buffer;
+       validates against whichever captured page was live at oracle time. */
     view.left     = 0;
     view.right    = 40;
     view.top      = 0;
@@ -260,7 +350,7 @@ int main(int argc, char **argv)
     match = 0;
     for (y = 0; y < 200; y++) {
         for (x = 0; x < 320; x++) {
-            if (idx_at(work_planes, x, y) == idx_at(cap_planes, x, y)) {
+            if (idx_at(work_planes, x, y) == idx_at(cap_planes + live_plane_off, x, y)) {
                 match++;
             }
         }
@@ -279,7 +369,7 @@ int main(int argc, char **argv)
     match_bgC = 0;
     for (y = 0; y < 200; y++) {
         for (x = 0; x < 320; x++) {
-            if (idx_at(work_planes, x, y) == idx_at(cap_planes, x, y)) {
+            if (idx_at(work_planes, x, y) == idx_at(cap_planes + live_plane_off, x, y)) {
                 match_bgC++;
             }
         }
@@ -351,7 +441,7 @@ int main(int argc, char **argv)
     match_bgCP1 = 0;
     for (y = 0; y < 200; y++) {
         for (x = 0; x < 320; x++) {
-            if (idx_at(work_planes, x, y) == idx_at(cap_planes, x, y)) {
+            if (idx_at(work_planes, x, y) == idx_at(cap_planes + live_plane_off, x, y)) {
                 match_bgCP1++;
             }
         }
@@ -389,7 +479,7 @@ int main(int argc, char **argv)
         match = 0;
         for (y = 0; y < 200; y++) {
             for (x = 0; x < 320; x++) {
-                if (idx_at(work_planes, x, y) == idx_at(cap_planes, x, y)) {
+                if (idx_at(work_planes, x, y) == idx_at(cap_planes + live_plane_off, x, y)) {
                     match++;
                 }
             }
@@ -429,7 +519,7 @@ int main(int argc, char **argv)
     match = 0;
     for (y = 0; y < 200; y++) {
         for (x = 0; x < 320; x++) {
-            if (idx_at(work_planes, x, y) == idx_at(cap_planes, x, y)) {
+            if (idx_at(work_planes, x, y) == idx_at(cap_planes + live_plane_off, x, y)) {
                 match++;
             }
         }
@@ -458,7 +548,7 @@ int main(int argc, char **argv)
         long match_b = 0;
         for (y = 0; y < 200; y++) {
             for (x = 0; x < 320; x++) {
-                if (idx_at(work_planes, x, y) == idx_at(cap_planes, x, y)) {
+                if (idx_at(work_planes, x, y) == idx_at(cap_planes + live_plane_off, x, y)) {
                     match_b++;
                 }
             }
