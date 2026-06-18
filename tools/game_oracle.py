@@ -8,27 +8,30 @@ level-1, then plays back a FIXED scripted key stream over ~100 int8 ticks.
 Per tick the harness captures:
   - 4 VGA planes (4 × 0x4000 bytes from the visible page in segment A000h)
   - Named-state values: p1_pixel_x, p1_pixel_y, p1_move_anim, p1_cell,
-    game_mode, input_state, move_locked  (from DGROUP 203b)
+    game_mode, input_state, move_locked, current_level, copyprotect_flag
+    (from DGROUP 203b)
 
 Output: local/build/render/slice_goldentrace.bin
 
 Trace format (little-endian):
   +0x00   8 B  magic "GTRACE01"
   +0x08   4 B  u32 n_ticks
-  +0x0C   4 B  u32 tick_size  (= PLANES_PER_TICK + NAMED_STATE_SIZE = 65536 + 10)
+  +0x0C   4 B  u32 tick_size  (= PLANES_PER_TICK + NAMED_STATE_SIZE = 65536 + 12)
   per tick (tick_size bytes each):
     4 × 0x4000 B  VGA planes (plane 0..3, 0x4000 bytes each = 320×200 planar)
       plane 0 bytes 0x0000..0x3FFF  = a000:0000..a000:3FFF
       ... (only the visible page region, not the full 0x10000 per plane)
-    10 B  named-state struct (all little-endian):
-      u16  p1_pixel_x   (@ DGROUP:0x9290)
-      u16  p1_pixel_y   (@ DGROUP:0x9292)
-      u8   p1_move_anim (@ DGROUP:0x824a)
-      u8   p1_cell      (@ DGROUP:0x856e)
-      u8   game_mode    (@ DGROUP:0x792c)
-      u8   input_state  (@ DGROUP:0x8244)
-      u8   move_locked  (@ DGROUP:0x8242)
-      u8   _pad         (alignment padding, always 0)
+    12 B  named-state struct (all little-endian):
+      u16  p1_pixel_x      (@ DGROUP:0x9290)
+      u16  p1_pixel_y      (@ DGROUP:0x9292)
+      u8   p1_move_anim    (@ DGROUP:0x824a)
+      u8   p1_cell         (@ DGROUP:0x856e)
+      u8   game_mode       (@ DGROUP:0x792c)
+      u8   input_state     (@ DGROUP:0x8244)
+      u8   move_locked     (@ DGROUP:0x8242)
+      u8   current_level   (@ DGROUP:0x79b2)
+      s8   copyprotect_flag(@ DGROUP:0x119a, -1/0/1)
+      u8   _pad            (alignment padding, always 0)
 
 Scripted input (TICK_SCRIPT constant, ticks 0-indexed):
   Ticks  0..9   idle      (input_state = 0x00)
@@ -115,7 +118,7 @@ HANDLE_INPUT_LIN: int = 0x11100 + 0x1d26  # = 0x12e26  (handle_gameplay_input)
 # ---------------------------------------------------------------------------
 TRACE_MAGIC: bytes = b"GTRACE01"
 PLANES_PER_TICK: int = 4 * 0x4000  # 4 planes × 16384 bytes = 65536 bytes
-NAMED_STATE_SIZE: int = 10          # 2+2+1+1+1+1+1+1 = 10 bytes (includes 1 pad)
+NAMED_STATE_SIZE: int = 12          # 2+2+1+1+1+1+1+1+1+1 = 12 bytes (includes 1 pad)
 TICK_SIZE: int = PLANES_PER_TICK + NAMED_STATE_SIZE
 
 # ---------------------------------------------------------------------------
@@ -509,7 +512,13 @@ def main() -> None:
         return b"".join(bytes(plane[p][:0x4000]) for p in range(4))
 
     def read_named_state() -> bytes:
-        """Read the 7 named-state fields from DGROUP and pack into 10 bytes."""
+        """Read the 9 named-state fields from DGROUP and pack into 12 bytes.
+
+        Pixel coordinates (p1x, p1y) are stored as unsigned u16 (<H); the game's
+        pixel coords are small positive values (0..~320/200) so unsigned is correct
+        and consistent with storage and comparison in replay_check.py.
+        copyprotect_flag is signed s8 (-1 = fail, 0 = unchecked, 1 = pass).
+        """
         p1x = struct.unpack("<H", bytes(uc.mem_read(DG_LIN + OFF_P1_PIXEL_X, 2)))[0]
         p1y = struct.unpack("<H", bytes(uc.mem_read(DG_LIN + OFF_P1_PIXEL_Y, 2)))[0]
         anim = uc.mem_read(DG_LIN + OFF_P1_MOVE_ANIM, 1)[0]
@@ -517,8 +526,13 @@ def main() -> None:
         gmode = uc.mem_read(DG_LIN + OFF_GAME_MODE, 1)[0]
         istate = uc.mem_read(DG_LIN + OFF_INPUT_STATE, 1)[0]
         mlocked = uc.mem_read(DG_LIN + OFF_MOVE_LOCKED, 1)[0]
-        # 2+2+1+1+1+1+1+1 = 10 bytes (last byte = padding 0)
-        return struct.pack("<HHBBBBBx", p1x, p1y, anim, cell, gmode, istate, mlocked)
+        cur_level = uc.mem_read(DG_LIN + OFF_CURRENT_LEVEL, 1)[0]
+        cp_raw = uc.mem_read(DG_LIN + OFF_COPYPROTECT, 1)[0]
+        # Interpret copyprotect_flag as signed byte
+        cp_flag = struct.unpack("b", bytes([cp_raw]))[0]
+        # 2+2+1+1+1+1+1+1+1+1 = 12 bytes (last byte = padding 0)
+        return struct.pack("<HHBBBBBBbx", p1x, p1y, anim, cell, gmode, istate, mlocked,
+                           cur_level, cp_flag)
 
     # ---------------------------------------------------------------------------
     # Phase 1: Boot to level — same approach as sprite_oracle.py
@@ -620,8 +634,8 @@ def main() -> None:
     for tick_idx, (is_val, scancode) in enumerate(tick_flat):
         if tick_idx % 10 == 0:
             try:
-                px = struct.unpack("<h", bytes(uc.mem_read(DG_LIN + OFF_P1_PIXEL_X, 2)))[0]
-                py = struct.unpack("<h", bytes(uc.mem_read(DG_LIN + OFF_P1_PIXEL_Y, 2)))[0]
+                px = struct.unpack("<H", bytes(uc.mem_read(DG_LIN + OFF_P1_PIXEL_X, 2)))[0]
+                py = struct.unpack("<H", bytes(uc.mem_read(DG_LIN + OFF_P1_PIXEL_Y, 2)))[0]
                 gm = uc.mem_read(DG_LIN + OFF_GAME_MODE, 1)[0]
                 cell = uc.mem_read(DG_LIN + OFF_P1_CELL, 1)[0]
             except UcError:
@@ -667,7 +681,8 @@ def main() -> None:
         if i % 5 == 0 or i < 5:
             # named-state starts at PLANES_PER_TICK offset
             ns = rec[PLANES_PER_TICK:]
-            px, py = struct.unpack_from("<hh", ns, 0)
+            # p1_pixel_x/y are unsigned u16 — pixel coords are always 0..~320/200
+            px, py = struct.unpack_from("<HH", ns, 0)
             anim = ns[4]; cell = ns[5]; gm = ns[6]; istate = ns[7]; mlocked = ns[8]
             print("  %4d  %10d  %10d  %#12x  %#10x" % (i, px, py, istate, gm),
                   flush=True)
@@ -676,8 +691,9 @@ def main() -> None:
     if actual_ticks >= 40:
         ns0 = tick_records[0][PLANES_PER_TICK:]
         ns39 = tick_records[39][PLANES_PER_TICK:]
-        x0, y0 = struct.unpack_from("<hh", ns0, 0)
-        x39, y39 = struct.unpack_from("<hh", ns39, 0)
+        # Unsigned u16 for pixel coords (consistent with storage format)
+        x0, y0 = struct.unpack_from("<HH", ns0, 0)
+        x39, y39 = struct.unpack_from("<HH", ns39, 0)
         if x0 != x39 or y0 != y39:
             print("[game_oracle] MOVEMENT CONFIRMED: p1 pos changed from (%d,%d) at tick 0 "
                   "to (%d,%d) at tick 39" % (x0, y0, x39, y39), flush=True)

@@ -3,10 +3,13 @@
 
 Loads a candidate trace and the golden trace, then compares them tick by tick:
   - VGA planes: plane-exact (4 × 0x4000 bytes per tick)
-  - Named-state values: field by field (7 fields)
+  - Named-state values: field by field (9 fields)
 
 Reports the first-divergence tick + which field/plane diverged.
 Exits with code 0 on all-match, 1 on any divergence.
+
+Note: Task 7 (reconstructed-exe replay) imports TICK_SCRIPT from game_oracle.py;
+keep that constant stable across changes to this file.
 
 Trace format (slice_goldentrace.bin — see game_oracle.py for full spec):
   +0x00   8 B  magic "GTRACE01"
@@ -14,14 +17,15 @@ Trace format (slice_goldentrace.bin — see game_oracle.py for full spec):
   +0x0C   4 B  u32 tick_size
   per tick (tick_size bytes):
     4 × 0x4000 B  VGA planes (plane 0..3)
-    10 B  named-state: p1_pixel_x(u16) p1_pixel_y(u16)
+    12 B  named-state: p1_pixel_x(u16) p1_pixel_y(u16)
                        p1_move_anim(u8) p1_cell(u8)
                        game_mode(u8) input_state(u8)
-                       move_locked(u8) _pad(u8)
+                       move_locked(u8) current_level(u8)
+                       copyprotect_flag(s8) _pad(u8)
 
 Named-state field names (in order, matching the struct layout):
   p1_pixel_x, p1_pixel_y, p1_move_anim, p1_cell,
-  game_mode, input_state, move_locked
+  game_mode, input_state, move_locked, current_level, copyprotect_flag
 
 Usage:
   timeout 120 uv run python tools/replay_check.py <candidate.bin> <golden.bin>
@@ -42,20 +46,23 @@ from typing import List, Tuple, Optional
 # ---------------------------------------------------------------------------
 TRACE_MAGIC: bytes = b"GTRACE01"
 PLANES_PER_TICK: int = 4 * 0x4000  # 65536 bytes
-NAMED_STATE_SIZE: int = 10
+NAMED_STATE_SIZE: int = 12
 TICK_SIZE: int = PLANES_PER_TICK + NAMED_STATE_SIZE
 N_PLANES: int = 4
 PLANE_BYTES: int = 0x4000
 
-# Named-state field descriptors: (name, offset_in_named_state, byte_width)
-NAMED_STATE_FIELDS: List[Tuple[str, int, int]] = [
-    ("p1_pixel_x",   0, 2),
-    ("p1_pixel_y",   2, 2),
-    ("p1_move_anim", 4, 1),
-    ("p1_cell",      5, 1),
-    ("game_mode",    6, 1),
-    ("input_state",  7, 1),
-    ("move_locked",  8, 1),
+# Named-state field descriptors: (name, offset_in_named_state, byte_width, signed)
+# signed=True only for copyprotect_flag (s8: -1 fail / 0 unchecked / 1 pass)
+NAMED_STATE_FIELDS: List[Tuple[str, int, int, bool]] = [
+    ("p1_pixel_x",        0, 2, False),
+    ("p1_pixel_y",        2, 2, False),
+    ("p1_move_anim",      4, 1, False),
+    ("p1_cell",           5, 1, False),
+    ("game_mode",         6, 1, False),
+    ("input_state",       7, 1, False),
+    ("move_locked",       8, 1, False),
+    ("current_level",     9, 1, False),
+    ("copyprotect_flag", 10, 1, True),
 ]
 
 
@@ -83,37 +90,53 @@ class Trace:
                 "Trace file %s truncated: expected %d B, got %d B" % (
                     path, expected_file_size, actual_size))
 
-    def read_tick(self, tick_idx: int) -> bytes:
-        """Return the raw tick_size bytes for tick tick_idx."""
+    def read_tick(self, tick_idx: int, fh: object = None) -> bytes:
+        """Return the raw tick_size bytes for tick tick_idx.
+
+        If fh is provided (an open file object, positioned anywhere), it is used
+        directly (seek + read) so the caller can keep the file open across ticks
+        and avoid repeated open/close overhead.  If fh is None a temporary open
+        is used (safe for single-tick access).
+        """
         if tick_idx >= self.n_ticks:
             raise IndexError("Tick %d out of range (n_ticks=%d)" % (
                 tick_idx, self.n_ticks))
         offset = 16 + tick_idx * self.tick_size
-        with open(self.path, "rb") as fh:
-            fh.seek(offset)
-            data = fh.read(self.tick_size)
+        if fh is not None:
+            fh.seek(offset)  # type: ignore[union-attr]
+            data = fh.read(self.tick_size)  # type: ignore[union-attr]
+        else:
+            with open(self.path, "rb") as _fh:
+                _fh.seek(offset)
+                data = _fh.read(self.tick_size)
         if len(data) < self.tick_size:
             raise IOError("Short read at tick %d in %s" % (tick_idx, self.path))
         return data
 
-    def planes_at(self, tick_idx: int) -> List[bytes]:
+    def planes_at(self, tick_idx: int, fh: object = None) -> List[bytes]:
         """Return list of 4 plane snapshots (each PLANE_BYTES bytes) for one tick."""
-        raw = self.read_tick(tick_idx)
+        raw = self.read_tick(tick_idx, fh)
         return [raw[p * PLANE_BYTES:(p + 1) * PLANE_BYTES] for p in range(N_PLANES)]
 
-    def named_state_at(self, tick_idx: int) -> bytes:
+    def named_state_at(self, tick_idx: int, fh: object = None) -> bytes:
         """Return the NAMED_STATE_SIZE bytes for tick tick_idx."""
-        raw = self.read_tick(tick_idx)
+        raw = self.read_tick(tick_idx, fh)
         return raw[PLANES_PER_TICK:PLANES_PER_TICK + NAMED_STATE_SIZE]
 
 
 def decode_named_state(ns: bytes) -> dict:
-    """Decode named-state bytes into a dict of field_name → value."""
+    """Decode named-state bytes into a dict of field_name → value.
+
+    u16 fields use unsigned <H; u8 fields use raw byte; s8 fields (signed=True)
+    are sign-extended via struct unpack 'b'.
+    """
     result = {}
-    for name, off, width in NAMED_STATE_FIELDS:
+    for name, off, width, signed in NAMED_STATE_FIELDS:
         chunk = ns[off:off + width]
         if width == 2:
             result[name] = struct.unpack_from("<H", chunk)[0]
+        elif signed:
+            result[name] = struct.unpack_from("b", chunk)[0]
         else:
             result[name] = chunk[0]
     return result
@@ -122,25 +145,27 @@ def decode_named_state(ns: bytes) -> dict:
 # ---------------------------------------------------------------------------
 # Comparison logic
 # ---------------------------------------------------------------------------
-def compare_planes(planes_a: List[bytes], planes_b: List[bytes],
+def compare_planes(planes_cand: List[bytes], planes_gold: List[bytes],
                    tick_idx: int) -> Optional[str]:
     """Compare planes from two traces at one tick.
 
+    planes_cand is the candidate (reconstructed); planes_gold is the golden reference.
     Returns None on match, or a description string on first divergence.
     """
     for p in range(N_PLANES):
-        if planes_a[p] != planes_b[p]:
+        if planes_cand[p] != planes_gold[p]:
             # Find first differing byte
             first_diff = next(
-                (i for i, (ba, bb) in enumerate(zip(planes_a[p], planes_b[p]))
-                 if ba != bb), None)
+                (i for i, (bc, bg) in enumerate(zip(planes_cand[p], planes_gold[p]))
+                 if bc != bg), None)
             if first_diff is None:
                 # Length differs
                 return "plane%d length mismatch: %d vs %d" % (
-                    p, len(planes_a[p]), len(planes_b[p]))
+                    p, len(planes_cand[p]), len(planes_gold[p]))
             return ("plane%d first diff at byte 0x%04X: "
                     "candidate=0x%02X golden=0x%02X" % (
-                        p, first_diff, planes_a[p][first_diff], planes_b[p][first_diff]))
+                        p, first_diff, planes_cand[p][first_diff],
+                        planes_gold[p][first_diff]))
     return None
 
 
@@ -152,7 +177,7 @@ def compare_named_state(ns_a: bytes, ns_b: bytes,
     """
     decoded_a = decode_named_state(ns_a)
     decoded_b = decode_named_state(ns_b)
-    for name, _, _ in NAMED_STATE_FIELDS:
+    for name, _, _, _ in NAMED_STATE_FIELDS:
         va = decoded_a.get(name, 0)
         vb = decoded_b.get(name, 0)
         if va != vb:
@@ -199,30 +224,32 @@ def compare(candidate_path: str, golden_path: str) -> bool:
     state_mismatches = 0
     total_mismatches = 0
 
-    for tick_idx in range(n_compare):
-        planes_g = golden.planes_at(tick_idx)
-        planes_c = candidate.planes_at(tick_idx)
-        ns_g = golden.named_state_at(tick_idx)
-        ns_c = candidate.named_state_at(tick_idx)
+    # Keep both files open for the compare loop to avoid repeated open/close per tick.
+    with open(golden_path, "rb") as fh_g, open(candidate_path, "rb") as fh_c:
+        for tick_idx in range(n_compare):
+            planes_g = golden.planes_at(tick_idx, fh_g)
+            planes_c = candidate.planes_at(tick_idx, fh_c)
+            ns_g = golden.named_state_at(tick_idx, fh_g)
+            ns_c = candidate.named_state_at(tick_idx, fh_c)
 
-        plane_err = compare_planes(planes_c, planes_g, tick_idx)
-        state_err = compare_named_state(ns_c, ns_g, tick_idx)
+            plane_err = compare_planes(planes_c, planes_g, tick_idx)
+            state_err = compare_named_state(ns_c, ns_g, tick_idx)
 
-        tick_ok = (plane_err is None and state_err is None)
-        if not tick_ok:
-            total_mismatches += 1
-            if plane_err is not None:
-                plane_mismatches += 1
-            if state_err is not None:
-                state_mismatches += 1
-            if first_diverge is None:
-                first_diverge = tick_idx
-                parts = []
+            tick_ok = (plane_err is None and state_err is None)
+            if not tick_ok:
+                total_mismatches += 1
                 if plane_err is not None:
-                    parts.append("planes: " + plane_err)
+                    plane_mismatches += 1
                 if state_err is not None:
-                    parts.append("state: " + state_err)
-                first_diverge_reason = "; ".join(parts)
+                    state_mismatches += 1
+                if first_diverge is None:
+                    first_diverge = tick_idx
+                    parts = []
+                    if plane_err is not None:
+                        parts.append("planes: " + plane_err)
+                    if state_err is not None:
+                        parts.append("state: " + state_err)
+                    first_diverge_reason = "; ".join(parts)
 
     # Summary
     print("", flush=True)
