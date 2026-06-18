@@ -30,6 +30,10 @@ echo "   bg_render.c + entity.c build clean (wcc -ml -wx)"
 
 echo "== host bg+C composite render + plane diff =="
 OUT="${TMPDIR:-/tmp}/composite_ctest"
+# -Wno-unused-function suppresses the warning for sprite_expand_frame in
+# src/sprite_anim.c — that function reconstructs the ctrl&0x40 packed-pixel
+# expansion path which is dead code for all BUMSPJEU frames (ctrl always 0x03).
+# It is intentionally kept UNVALIDATED; the suppression is intentional.
 cc -O2 -Wall -Wno-unused-function -o "$OUT" tools/composite_ctest.c
 C_OUTPUT=$(timeout 60 "$OUT" "$ORACLE" "$BANK")
 echo "   $C_OUTPUT"

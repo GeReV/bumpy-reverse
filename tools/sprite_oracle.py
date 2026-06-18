@@ -631,11 +631,15 @@ def main() -> None:
             # the FRM3 writer can proceed and the reader won't misparse layout.
             try:
                 # BUM per-level header block (lives outside DGROUP).
-                # tilemap far ptr @ DGROUP:0xa0d8 → per-level block base.
-                # Payload: buffer+2 + (LEVEL-1)*0xc2  →  0xc2 bytes of level header.
+                # tilemap far ptr @ DGROUP:0xa0d8 → already points at the
+                # current level's 0xc2-byte block base (re-pointed at level
+                # load: see diag_clean.c switchD_e093_caseD_bb which copies
+                # level_src_ptr data into the tilemap buffer byte-by-byte).
+                # Read 0xc2 bytes directly from that base — no +2 skip, no
+                # (LEVEL-1)*0xc2 term.
                 bum_off, bum_seg = struct.unpack("<HH", uc.mem_read(DG_LIN + 0xa0d8, 4))
                 bum_block_lin = (bum_seg * 16 + bum_off) & 0xFFFFF
-                hdr_lin = bum_block_lin + 2 + (LEVEL - 1) * 0xC2
+                hdr_lin = bum_block_lin
                 frame_snap["bum"] = bytes(uc.mem_read(hdr_lin, 0xC2))
                 # Sprite object structs (each 0x18 bytes, fixed DGROUP addresses).
                 # P1 obj @ 0x792e, P2 obj @ 0x795a.
@@ -767,7 +771,8 @@ def main() -> None:
     #   --- FRM3 new blocks (appended after atlas/map) ---
     #   next   2 B  u16 level  (1-based level index)
     #   next   0xc2 B  BUM per-level header for this level
-    #                  (from tilemap@ DGROUP:0xa0d8 → block+2+(level-1)*0xc2)
+    #                  (from tilemap@ DGROUP:0xa0d8 → block base, no offset;
+    #                   tilemap ptr is re-pointed per level at load time)
     #   next   0x18 B  p1_sprite obj struct  (DGROUP:0x792e)
     #   next   0x18 B  p2_sprite obj struct  (DGROUP:0x795a)
     #   next   6 B  p1_glob: pixel_x(u16) pixel_y(u16) move_anim(u16)

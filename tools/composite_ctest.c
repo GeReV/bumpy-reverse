@@ -217,11 +217,11 @@ int main(int argc, char **argv)
            match, (double)match / 64000.0 * 100.0);
 
     /* --- Draw layer-C static sprites into the same plane buffer ---
-       FRM3 `bum` block starts at tilemap+2 (see task-2-report.md: oracle reads
-       hdr_lin = bum_block_lin + 2).  entity_draw_layer_c uses bum[0x60+cell]
-       which mirrors the engine's tilemap[0x60+cell].  Pass bum-2 so the offsets
-       align: (bum-2)[0x60+cell] == bum[0x5e+cell] == tilemap[0x60+cell]. */
-    entity_draw_layer_c(work_planes, bum - 2, dg, bank, BANK_BASE_LIN, &view);
+       FRM3 `bum` block is captured directly from the tilemap base (the oracle
+       reads from deref(tilemap_far_ptr) with no offset — the tilemap ptr is
+       re-pointed per level at load time).  entity_draw_layer_c uses bum[0x60+cell]
+       which mirrors the engine's tilemap[0x60+cell] exactly. */
+    entity_draw_layer_c(work_planes, bum, dg, bank, BANK_BASE_LIN, &view);
 
     /* --- Pixel-diff after bg + layer C --- */
     match = 0;

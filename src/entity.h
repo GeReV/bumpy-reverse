@@ -24,10 +24,14 @@
      bg+layer-C composite against the captured engine frame (bg-only 79.0% ->
      bg+C should be substantially higher; see Task 4 report for results).
    * Object layout: the engine reuses the shared p1_sprite struct at DGROUP:0x792e
-     for all entity blits.  Here we build an equivalent 0x18-byte stack object per
-     cell; only the caller-set fields (+0, +2, +4, +0xa) differ between cells;
-     sprite_prepare_frame fills the rest (+6/8 frame-table ptr, +0b ctrl,
-     +0c/0e prepared ptr, +10 width, +12 height, +14/16 anchors).
+     (0x18 bytes: the fields used by blit_sprite).  Here we allocate a 0x40-byte
+     host stack buffer (OBJ_SIZE) because sprite_prepare_frame writes a sub-header
+     up to obj+0x2c (count byte + up to 3 entries × 6 bytes at obj+0x1a..+0x2b);
+     using only 0x18 bytes causes a stack smash on the host.  The first 0x18 bytes
+     mirror the engine's p1_sprite layout exactly; only the caller-set fields
+     (+0, +2, +4, +0xa) differ between cells; sprite_prepare_frame fills the rest
+     (+6/8 frame-table ptr, +0b ctrl, +0c/0e prepared ptr, +10 width, +12 height,
+     +14/16 anchors).
    * posC table: the engine reads this from DGROUP:0x274 (interleaved XY pairs,
      4 bytes/cell, X at 0x274+cell*4, Y at 0x276+cell*4).  The `dg` parameter
      carries the captured full DGROUP snapshot; reads are done from that to
@@ -43,10 +47,10 @@
 /* Draw all nonzero layer-C cells from `bum` into `planes`.
    Parameters:
      planes        — 4-plane VGA buffer (4 * 0x10000 B), plane p at p*0x10000
-     bum           — pointer to the level block at tilemap base; layer-C grid at
-                     bum[0x60+cell].  Note: the FRM3 oracle captures this block with
-                     a +2 byte offset (hdr_lin = block_lin + 2); callers using FRM3
-                     data must subtract 2 from the captured pointer before passing here.
+     bum           — pointer to the level block at tilemap base (offset 0);
+                     layer-C grid at bum[0x60+cell].  The FRM3 oracle captures
+                     this block directly from deref(tilemap_far_ptr) with no
+                     additional offset — pass the FRM3 bum pointer as-is.
      dg            — 0x10000-byte DGROUP snapshot; posC table at dg[0x274..0x393]
      bank          — sprite bank (bank_inmem.bin), flat huge buffer
      bank_base_lin — runtime linear address of bank[0] (0x4eae0 for bank_inmem.bin)

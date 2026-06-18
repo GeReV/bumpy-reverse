@@ -1,3 +1,4 @@
+#include <string.h>
 #include "entity.h"
 #include "sprite_anim.h"
 #include "sprite_chain.h"
@@ -77,23 +78,10 @@ void entity_draw_layer_c(u8 __huge *planes, const u8 __far *bum,
     u16 row;
     u16 col;
 
-    /* Seed obj[6..9] (frametable far ptr) from the captured p1_sprite in dg.
-       This is constant across all cells — the frametable ptr is set at level
-       init and doesn't change per-cell.  Mirrors what blit_sprite does: it
-       blits using the p1_sprite struct at 0x792e which already carries the
-       frametable ptr from level init.  The prepare step needs it to resolve
-       the frame index into a frame far ptr. */
-    {
-        u16 ftbl_off = dg_rd16(dg, (u16)(DG_P1_OBJ + OBJ_FTBL_OFF));
-        u16 ftbl_seg = dg_rd16(dg, (u16)(DG_P1_OBJ + OBJ_FTBL_SEG));
-        ent_wr16(obj, OBJ_FTBL_OFF, ftbl_off);
-        ent_wr16(obj, OBJ_FTBL_SEG, ftbl_seg);
-    }
-
     for (row = 0; row < 6u; row++) {
         for (col = 0; col < 8u; col++) {
             u16 cell = row * 8u + col;
-            u8  cv   = bum[0x60u + cell];
+            u8  cv;
             u16 voff;
             u16 dst_stride;
             u16 full_w;
@@ -101,6 +89,26 @@ void entity_draw_layer_c(u8 __huge *planes, const u8 __far *bum,
             u16 rows;
             u8  shift;
             u8  clip_flags;
+
+            /* Zero the work buffer each iteration (matches anim_ctest.c pattern:
+               memset(work,0,sizeof(work)) before populating). */
+            memset(obj, 0, sizeof(obj));
+
+            /* Seed obj[6..9] (frametable far ptr) from the captured p1_sprite in dg.
+               This is constant across all cells — the frametable ptr is set at level
+               init and doesn't change per-cell.  Mirrors what blit_sprite does: it
+               blits using the p1_sprite struct at 0x792e which already carries the
+               frametable ptr from level init.  The prepare step needs it to resolve
+               the frame index into a frame far ptr.  Must be re-seeded after each
+               memset since the zero wipes bytes 6..9. */
+            {
+                u16 ftbl_off = dg_rd16(dg, (u16)(DG_P1_OBJ + OBJ_FTBL_OFF));
+                u16 ftbl_seg = dg_rd16(dg, (u16)(DG_P1_OBJ + OBJ_FTBL_SEG));
+                ent_wr16(obj, OBJ_FTBL_OFF, ftbl_off);
+                ent_wr16(obj, OBJ_FTBL_SEG, ftbl_seg);
+            }
+
+            cv = bum[0x60u + cell];
 
             if (cv == 0) {
                 continue;
