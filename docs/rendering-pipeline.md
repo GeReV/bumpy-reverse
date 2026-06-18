@@ -142,6 +142,15 @@ level's 0xC2-byte header into) and scans the 6×8 grid across three layers:
 The animation **channels** (`step_anim_channels_a/_b`, tables `0x3d6a`/`0x40a6`) animate a
 small moving subset per frame; the bulk of A/B entities are placed statically at load.
 
+**Exit and items are game-state, not separate sprites.** `level_exit_cell` (`bum+0x91`) and
+`items_remaining` (`bum+0x92`) are read only by `p1_collect_item` (collision / scoring) and
+written by `spawn_and_draw_level_entities` (init) — **no draw routine reads them** (verified by
+xref). The visible exit door and collectible items are drawn as ordinary cells of the level
+layer grids (background / layer A/B/C), already covered above; the HUD item count is drawn
+separately by the HUD routines (`draw_hud_composite`/`draw_icon_row`). (An earlier
+reconstruction note claimed "un-ported exit/item sprites" as residue — that was a
+misattribution; there is no dedicated exit/item draw to port.)
+
 > **Note on `render_player_view` in the channel draw path:** `draw_anim_channels_a/_b`
 > call `restore_bg_view` (erase) and `render_player_view` (mode-10) around each
 > `blit_sprite`. Per §1–§2 these are erase/save-under/read-back operations on the

@@ -121,8 +121,12 @@
    * STATUS: bg + layer C + P1 + layer A + layer B + P2 all reconstruct their
      positive draw paths, byte-exact vs the engine's blit output for the page drawn
      (validated 6c-T3 against the live page).  This is NOT a full-frame byte-exact
-     claim: un-ported exit/items + the VGA double-buffer/erase save-under path
-     (see docs/rendering-pipeline.md, docs/reconstruction-fidelity.md) remain.
+     claim: the engine's VGA double-buffer + erase save-under path is not modelled
+     (see docs/rendering-pipeline.md, docs/reconstruction-fidelity.md).  NOTE: the
+     level-exit (bum+0x91) and items (bum+0x92) are game-state (collision/scoring),
+     NOT separate sprites — their visuals are ordinary level-grid cells (already
+     drawn) + the HUD; verified by xref that no draw routine reads them.  (An earlier
+     "un-ported exit/item sprites" residue claim was a misattribution.)
 
    --- DOUBLE-BUFFER MODEL (Plan 6c Task 3) ---
    * VGA dual-page layout: the engine double-buffers within the 64KB VGA plane.
