@@ -110,11 +110,12 @@
      verification via present_model.md §5.)
    * Residual footprint mismatch cause: was validating the single-page composite
      against the lagging visible page instead of the live draw page (fixed in 6c-T3:
-     validate vs the live page), plus the un-ported exit/items below.
-   * Items and level-exit OMITTED: bum[0x91] (level-exit cell) and items
-     (bum[0x92] count) drive additional sprite draws not ported in Plan 6b.
-     These are the primary sources of out-of-scope residue (~600px exit +
-     ~288px items on world 1 level 1).
+     validate vs the live page).
+   * Level-exit (bum[0x91]) and items (bum[0x92]) are GAME-STATE, not separate
+     sprites: read only by p1_collect_item (collision/scoring) + spawn_and_draw
+     init, never by a draw routine (verified by xref).  Their visuals are ordinary
+     level-grid cells (already drawn) + the HUD.  (An earlier "un-ported exit/item
+     sprites ~600px residue" claim was a misattribution, corrected.)
    * Per-frame animation step: step_anim_channels_a/b are OUT OF SCOPE.  Layers
      A/B are placed STATICALLY at level load by spawn_and_draw_level_entities;
      the anim channels are INACTIVE at the captured settle instant (confirmed on
