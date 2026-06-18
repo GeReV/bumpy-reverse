@@ -87,18 +87,22 @@
      static tables in entity.c).  FRM3 chan_a records confirm anim_tables values
      for cv=1 (yoff=5, frame=64).  posA from dg matches anim_tables.json for all
      48 cells.  This is the faithful reconstructible path.
-   * Erase omitted: draw_anim_channels_a/b call restore_bg_view (bg-tile erase)
-     before each blit.  Omitted in the composite: bg is built first; there is no
-     "old" cell to erase.  This is a valid composite-only deviation.
-   * render_player_view OMITTED: draw_anim_channels_a/b call render_player_view
-     (FUN_1000_93b8) after blit_sprite for a second draw through the player's
-     viewport, producing alternating 8-pixel-wide column patterns at all entity
-     positions.  This function is OUT OF SCOPE for Plan 6b: it is NOT called.
-     This produces the residual footprint mismatches (~100-600 px per entity)
-     visible in the footprint_check output.  The first-draw (entity_blit_object)
-     pixels ARE plane-exact — the mismatches are solely from render_player_view's
-     second pass.  Evidence: left 8px of each entity match exactly; right columns
-     show alternating bg/sprite pattern (render_player_view artifact).
+   * Erase / render_player_view OMITTED (corrected — see docs/rendering-pipeline.md):
+     draw_anim_channels_a/b call restore_bg_view (erase) and render_player_view
+     around each blit_sprite.  These are NOT a second visible draw of the entity:
+     restore_bg_view restores background from fullscreen_buf (erase), and
+     render_player_view (BGI mode-0x10, 1ab9:0db0) is a PLANAR REGION COPY used for
+     save-unders / read-backs on the a000/a200 double-buffer pages.  The visible
+     entity pixels come solely from blit_sprite writing the current page — which
+     entity_blit_object reproduces byte-exact vs the page the engine drew to
+     (verified e.g. the y=40 sprite is byte-identical to captured page a200).  The
+     composite omits the erase/save-under steps (it builds bg first into a single
+     page image) — a documented composite-only deviation, NOT a missing draw.
+     (An earlier note here called render_player_view a visible "second pass / out of
+     scope"; that was a misdiagnosis, corrected after dynamic verification.)
+   * Residual footprint mismatch cause: was validating the single-page composite
+     against the lagging visible page instead of the live draw page (fixed in 6c-T3:
+     validate vs the live page), plus the un-ported exit/items below.
    * Items and level-exit OMITTED: bum[0x91] (level-exit cell) and items
      (bum[0x92] count) drive additional sprite draws not ported in Plan 6b.
      These are the primary sources of out-of-scope residue (~600px exit +
@@ -114,8 +118,11 @@
      on world 8 (p2 obj assert x/frame MATCH; composite planes changed by P2).
    * entity_blit_object: shared static helper drives the three pipeline stages for
      all layers (A, B, C, P1, P2) without code duplication.
-   * PLAN 6b COMPLETE (Task 7): bg + layer C + P1 + layer A + layer B + P2 all
-     exercise their positive draw paths.  Full residue documented above.
+   * STATUS: bg + layer C + P1 + layer A + layer B + P2 all reconstruct their
+     positive draw paths, byte-exact vs the engine's blit output for the page drawn
+     (validated 6c-T3 against the live page).  This is NOT a full-frame byte-exact
+     claim: un-ported exit/items + the VGA double-buffer/erase save-under path
+     (see docs/rendering-pipeline.md, docs/reconstruction-fidelity.md) remain.
 
    --- DOUBLE-BUFFER MODEL (Plan 6c Task 3) ---
    * VGA dual-page layout: the engine double-buffers within the 64KB VGA plane.
