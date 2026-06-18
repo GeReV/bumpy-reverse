@@ -227,8 +227,10 @@ static const anim_desc_t anim_b_desc[64] = {
     /* [63] */ { 2, 256 }
 };
 
-/* Frameguard bias for layer B (draw_anim_channels_b: frame += 0xf1) */
-#define LAYER_B_FRAME_BIAS 0x00f1u
+/* Layer-B frame bias — 0: anim_b_desc[].frame already stores the FINAL frame
+   index (anim_tables.json was generated with raw_frame + 0xf1 baked in).
+   Applying the bias again here would double-count it. */
+#define LAYER_B_FRAME_BIAS 0x0000u
 
 /* -----------------------------------------------------------------------
    anim_desc_valid — guard helper mirroring the engine's remap==0 check.

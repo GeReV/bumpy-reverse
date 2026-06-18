@@ -1,4 +1,4 @@
-/* Host composite driver — Task 3+4+5+6 of Plan 6b.
+/* Host composite driver — Task 3+4+5+6+7 of Plan 6b.
    Parses frame_oracle.bin (FRM3), renders the full background into a fresh
    4-plane buffer using src/bg_render.c bg_render_grid(), then draws layer-C
    static sprites using src/entity.c entity_draw_layer_c(), then draws P1
@@ -11,6 +11,9 @@
 
    Build/run:
      cc -O2 -o /tmp/composite_ctest tools/composite_ctest.c && /tmp/composite_ctest
+
+   Optional --dump-planes <path>: write the final composite planes (4*0x10000 B)
+   to <path> for per-entity footprint analysis by tools/footprint_check.py.
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -91,6 +94,11 @@ int main(int argc, char **argv)
     const char *path = (argc > 1) ? argv[1]
                                   : "local/build/render/frame_oracle.bin";
     const char *bankpath = (argc > 2) ? argv[2] : BANK_PATH;
+    /* Optional 3rd argument: --dump-planes <outpath> */
+    const char *dump_planes_path = NULL;
+    if (argc > 3 && strcmp(argv[3], "--dump-planes") == 0 && argc > 4) {
+        dump_planes_path = argv[4];
+    }
     FILE *fh;
     long  sz, bsz;
     u8   *b, *bank;
@@ -468,6 +476,19 @@ int main(int argc, char **argv)
             printf("layer-B: 0 cells on level 1 — planes UNCHANGED (correct; UNVALIDATED positive path)\n");
         } else {
             printf("layer-B: planes CHANGED (layer-B cells present — validate positive path)\n");
+        }
+    }
+
+    /* Optionally dump the final composite planes (after bg+C+P1+A+B) for
+       per-entity footprint analysis by tools/footprint_check.py. */
+    if (dump_planes_path != NULL) {
+        FILE *dfh = fopen(dump_planes_path, "wb");
+        if (dfh) {
+            fwrite(work_planes, 1, sizeof(work_planes), dfh);
+            fclose(dfh);
+            printf("composite planes dumped -> %s\n", dump_planes_path);
+        } else {
+            fprintf(stderr, "WARNING: could not write dump-planes to %s\n", dump_planes_path);
         }
     }
 

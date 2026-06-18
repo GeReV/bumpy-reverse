@@ -25,8 +25,11 @@
    --- LAYER B (entity_draw_layer_b) ---
    Port of the layer-B static placement loop + draw_anim_channels_b (draw side).
    Same structure as layer A but: bum[0x30+cell]; col==7 skipped; posB at
-   dg[0x3f4+cell*4] / dg[0x3f6+cell*4]; yoff/frame from anim_b_desc[cv];
-   frame += 0xf1 (layer-B bias per draw_anim_channels_b).
+   dg[0x3f4+cell*4] / dg[0x3f6+cell*4]; yoff/frame from anim_b_desc[cv].
+   NOTE: anim_b_desc[cv].frame stores the FINAL frame index — the 0xf1 bias is
+   baked into anim_tables.json B[cv].frame by dump_anim_tables.py (raw + 0xf1).
+   LAYER_B_FRAME_BIAS in entity.c is therefore 0 (no additional bias applied).
+   Validated on world 8 level 1 (12 B cells, DOSEMU_LEVEL=8, Task 7 Phase 3).
 
    --- LAYER C (entity_draw_layer_c) ---
    Layer C is purely BUM-data-sourced: for each of the 48 grid cells
@@ -55,9 +58,14 @@
 
    --- RECONSTRUCTION FIDELITY ---
    * STRUCTURE-faithful: loop bounds (0..5 rows, 0..7 cols), cell index formula
-     (row*8+col), BUM offsets (A:0x00, B:0x30, C:0x60), frame biases (C:+0x179,
-     B:+0xf1), hidden sentinels (P1:100, P2:-1), col-7 guard (layer B), and the
-     three pipeline stages mirror the engine's inlined / standalone code exactly.
+     (row*8+col), BUM offsets (A:0x00, B:0x30, C:0x60), frame bias (C:+0x179),
+     hidden sentinels (P1:100, P2:-1), col-7 guard (layer B), and the three
+     pipeline stages mirror the engine's inlined / standalone code exactly.
+   * Layer-B frame bias: anim_b_desc[cv].frame stores the FINAL frame index
+     (dump_anim_tables.py bakes raw+0xf1 into the JSON; entity.c uses bias=0).
+     Earlier versions incorrectly applied +0xf1 again, causing crash on worlds
+     with high cv values (frames 551/573 exceed the 510-entry table).  Fixed in
+     Task 7.  Validated on world 8 (12 B cells, DOSEMU_LEVEL=8).
    * Object layout: the engine reuses the shared p1_sprite struct at
      DGROUP:0x792e (0x18 bytes) for layers A/B/C and P1; P2 uses p2_sprite at
      DGROUP:0x795a.  Here we allocate a 0x40-byte host stack buffer (OBJ_SIZE)
@@ -82,19 +90,32 @@
    * Erase omitted: draw_anim_channels_a/b call restore_bg_view (bg-tile erase)
      before each blit.  Omitted in the composite: bg is built first; there is no
      "old" cell to erase.  This is a valid composite-only deviation.
-   * render_player_view: draw_anim_channels_a/b call render_player_view after
-     blit_sprite for a second draw (BGI overlay / double-buffer / clip path).
-     P1 was validated with blit_sprite alone (bg+C+P1 matched without calling
-     render_player_view).  Layer A follows the same model: entity_blit_object
-     (the blit_sprite equivalent) is the draw that produces the visible planes.
-     render_player_view is NOT called.  This is validated empirically: bg+C+P1+A
-     rises substantially above bg+C+P1 without it.
+   * render_player_view OMITTED: draw_anim_channels_a/b call render_player_view
+     (FUN_1000_93b8) after blit_sprite for a second draw through the player's
+     viewport, producing alternating 8-pixel-wide column patterns at all entity
+     positions.  This function is OUT OF SCOPE for Plan 6b: it is NOT called.
+     This produces the residual footprint mismatches (~100-600 px per entity)
+     visible in the footprint_check output.  The first-draw (entity_blit_object)
+     pixels ARE plane-exact — the mismatches are solely from render_player_view's
+     second pass.  Evidence: left 8px of each entity match exactly; right columns
+     show alternating bg/sprite pattern (render_player_view artifact).
+   * Items and level-exit OMITTED: bum[0x91] (level-exit cell) and items
+     (bum[0x92] count) drive additional sprite draws not ported in Plan 6b.
+     These are the primary sources of out-of-scope residue (~600px exit +
+     ~288px items on world 1 level 1).
    * Per-frame animation step: step_anim_channels_a/b are OUT OF SCOPE.  Layers
      A/B are placed STATICALLY at level load by spawn_and_draw_level_entities;
-     the anim channels are INACTIVE at the captured settle instant (chan_a[0].active=0).
+     the anim channels are INACTIVE at the captured settle instant (confirmed on
+     world 1, world 3, world 8: chan_a[i].active=0 / chan_b[i].active=0).
      The static placement reproduces the captured frame exactly.
+   * P2 AI and physics: P2's AI step, movement state machine, and physics are
+     OUT OF SCOPE.  entity_draw_p2 takes the pre-captured draw-time P2 state
+     (pixel_x, pixel_y, move_anim, frame_base) from the FRM3 oracle.  Validated
+     on world 8 (p2 obj assert x/frame MATCH; composite planes changed by P2).
    * entity_blit_object: shared static helper drives the three pipeline stages for
      all layers (A, B, C, P1, P2) without code duplication.
+   * PLAN 6b COMPLETE (Task 7): bg + layer C + P1 + layer A + layer B + P2 all
+     exercise their positive draw paths.  Full residue documented above.
 */
 
 /* Draw all nonzero layer-A cells from `bum` into `planes`.
@@ -110,7 +131,7 @@
      view          — sprite viewport (full-screen: left=0,right=40,top=0,
                      bottom=199,height=199,data_off=0,data_seg=0xa000)
 
-   NOTE: layer-B positive-path is UNVALIDATED on level 1 (0 B cells). See entity.h.
+   NOTE: layer-B positive path validated on world 8 (Task 7 Phase 3).
 */
 void entity_draw_layer_a(u8 __huge *planes, const u8 __far *bum,
                          const u8 __far *dg, u8 __huge *bank,
@@ -127,12 +148,12 @@ void entity_draw_layer_a(u8 __huge *planes, const u8 __far *bum,
      bank_base_lin — runtime linear address of bank[0]
      view          — sprite viewport
 
-   GUARD: col==7 cells are skipped (engine guard in spawn_and_draw_level_entities).
-   FRAME BIAS: frame += 0xf1 at draw time (draw_anim_channels_b).
+   GUARD: col==7 cells are skipped (engine guard in draw_anim_channels_b).
+   FRAME INDEX: anim_b_desc[cv].frame is the FINAL frame (bias pre-baked in
+   anim_tables.json; LAYER_B_FRAME_BIAS = 0 in entity.c).
 
-   NOTE: UNVALIDATED on level 1 — 0 layer-B cells present; call is a structural
-   no-op that confirms the loop runs without modifying planes. Full positive-path
-   validation deferred to Task 7 (richer level with B-layer entities).
+   VALIDATED on world 8 (DOSEMU_LEVEL=8, 12 B cells, Task 7 Phase 3).
+   On level 1: 0 B cells, call is a structural no-op.
 */
 void entity_draw_layer_b(u8 __huge *planes, const u8 __far *bum,
                          const u8 __far *dg, u8 __huge *bank,
@@ -186,8 +207,8 @@ void entity_draw_p1(u8 __huge *planes, const u8 __far *dg,
      bank_base_lin — runtime linear address of bank[0]
      view          — sprite viewport
 
-   NOTE: P2 positive draw path is UNVALIDATED on level 1 (p2_cell==-1 always).
-   Validation deferred to Task 6 (P2-present level).
+   NOTE: P2 positive draw path validated on world 8 (DOSEMU_LEVEL=8, Task 7
+   Phase 3): p2 obj assert x/frame MATCH, composite planes changed by P2 draw.
 */
 void entity_draw_p2(u8 __huge *planes, const u8 __far *dg,
                     u16 pixel_x, u16 pixel_y, u16 move_anim,
