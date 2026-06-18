@@ -48,13 +48,13 @@ if [ -z "$C_BG_COUNT" ]; then
   exit 1
 fi
 
-C_BGC_COUNT=$(echo "$C_OUTPUT" | grep -oE '^bg\+C: [0-9]+' | grep -oE '[0-9]+')
+C_BGC_COUNT=$(echo "$C_OUTPUT" | grep -F 'bg+C: ' | grep -oE '[0-9]+/64000' | grep -oE '^[0-9]+')
 if [ -z "$C_BGC_COUNT" ]; then
   echo "ERROR: could not parse bg+C match count from C harness output" >&2
   exit 1
 fi
 
-C_BGCP1_COUNT=$(echo "$C_OUTPUT" | grep -oE '^bg\+C\+P1: [0-9]+' | sed 's/.*: //')
+C_BGCP1_COUNT=$(echo "$C_OUTPUT" | grep -F 'bg+C+P1: ' | grep -oE '[0-9]+/64000' | grep -oE '^[0-9]+')
 if [ -z "$C_BGCP1_COUNT" ]; then
   echo "ERROR: could not parse bg+C+P1 match count from C harness output" >&2
   exit 1

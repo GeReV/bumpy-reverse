@@ -104,7 +104,9 @@ static void entity_blit_object(u8 __huge *planes, u8 *obj,
     /* Stage 1: sprite_prepare_frame */
     sprite_prepare_frame(obj, bank, bank_base_lin);
 
-    /* Stage 2: sprite_blit_build_desc — returns 0 if culled */
+    /* Stage 2: sprite_blit_build_desc — returns 0 if culled.
+       On cull this helper returns early; the caller's loop continues as before
+       (mirrors the engine's original `continue` in the layer-C sprite loop). */
     if (!sprite_blit_build_desc(obj, view, desc)) {
         return;
     }

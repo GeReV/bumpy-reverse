@@ -319,12 +319,23 @@ int main(int argc, char **argv)
 
     /* =========================================================
        P1 DRAW: add P1 sprite into the composite
+       SOURCE: captured p1_obj fields (draw-time state), NOT the settle-instant
+       globals.  draw_p1_sprite copies the globals into the obj just before the
+       blit, so p1_obj_cap[+0/+2/+4] ARE the draw-time global values — feeding
+       entity_draw_p1 the captured-object fields reproduces the captured planes.
+       The p1_glob values are one physics tick AHEAD of p1_obj_cap[+2] (y-lag
+       documented above); using them would paint the player ~2px off.
        Snapshot planes before and after to confirm the draw added pixels.
        ========================================================= */
     memcpy(snap_planes, work_planes, sizeof(work_planes));
 
-    entity_draw_p1(work_planes, dg, p1_pixel_x, p1_pixel_y, p1_move_anim,
-                   bank, BANK_BASE_LIN, &view);
+    {
+        u16 draw_x     = rd16(p1_obj_cap + 0);
+        u16 draw_y     = rd16(p1_obj_cap + 2);
+        u16 draw_frame = rd16(p1_obj_cap + 4);
+        entity_draw_p1(work_planes, dg, draw_x, draw_y, draw_frame,
+                       bank, BANK_BASE_LIN, &view);
+    }
 
     /* --- Pixel-diff after bg + layer C + P1 --- */
     match = 0;
@@ -376,10 +387,27 @@ int main(int argc, char **argv)
                match, (double)match / 64000.0 * 100.0);
     }
 
+    /* =========================================================
+       P2 OBJECT CONSTRUCTION ASSERTION (skeleton for Task 6)
+       On level 1, p2_cell == -1 (P2 absent) so this block is skipped.
+       When P2 IS present (future level), verify captured-obj fields match
+       the draw-time globals, mirroring the P1 assert above.
+       ========================================================= */
+    if (p2_cell != (s8)(-1)) {
+        u16 cap_x     = rd16(p2_obj_cap + 0);
+        u16 cap_frame = rd16(p2_obj_cap + 4);
+        int x_ok     = (p2_pixel_x == cap_x);
+        int frame_ok = ((u16)(p2_frame_base + p2_move_anim) == cap_frame);
+        printf("p2 obj assert: x=%s frame=%s\n",
+               x_ok    ? "MATCH" : "MISMATCH",
+               frame_ok ? "MATCH" : "MISMATCH");
+        if (!x_ok || !frame_ok) {
+            fprintf(stderr, "ASSERT FAIL: p2 obj x or frame mismatch\n");
+            assert_fail = 1;
+        }
+    }
+
     free(bank);
     free(b);
     return assert_fail ? 1 : 0;
-
-    /* suppress unused-variable warnings for captured but unused obj pointers */
-    (void)p2_obj_cap;
 }
