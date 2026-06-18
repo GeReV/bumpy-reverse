@@ -27,8 +27,6 @@
    Same structure as layer A but: bum[0x30+cell]; col==7 skipped; posB at
    dg[0x3f4+cell*4] / dg[0x3f6+cell*4]; yoff/frame from anim_b_desc[cv];
    frame += 0xf1 (layer-B bias per draw_anim_channels_b).
-   UNVALIDATED on level 1 (0 layer-B cells → structural no-op on level 1).
-   Full positive-path validation deferred to Task 7 (richer level).
 
    --- LAYER C (entity_draw_layer_c) ---
    Layer C is purely BUM-data-sourced: for each of the 48 grid cells

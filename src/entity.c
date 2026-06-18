@@ -89,8 +89,8 @@ typedef struct {
     u16 frame;
 } anim_desc_t;
 
-/* Layer A: indexed by cv (0..63).  frame==0 && cv!=0 is not possible for valid
-   entries; zero-frame rows are "draw nothing" (remap==0) slots. */
+/* Layer A: indexed by cv (0..63).  frame==0 means remap==0 (null descriptor:
+   skip the draw); this covers both cv==0 and remap==0 cases. */
 static const anim_desc_t anim_a_desc[64] = {
     /* [ 0] */ { 0,   0 }, /* cv==0: always skip */
     /* [ 1] */ { 5,  64 },
