@@ -246,6 +246,9 @@ def main() -> None:
     for _i, _a in enumerate(ATTR_DEFAULT):
         attr[_i] = _a
     attr_i = [0]; attr_ff = [0]
+    # CRTC start-address tracking (page-flip detection): ports 0x3D4/0x3D5
+    crtc = bytearray(256); crtc_i = [0]
+    crtc_start_log: list = []   # list of distinct CRTC start word values seen (chronological)
     _ega = [(0, 0, 0), (0, 0, 42), (0, 42, 0), (0, 42, 42), (42, 0, 0), (42, 0, 42),
             (42, 21, 0), (42, 42, 42), (21, 21, 21), (21, 21, 63), (21, 63, 21),
             (21, 63, 63), (63, 21, 21), (63, 21, 63), (63, 63, 21), (63, 63, 63)]
@@ -280,6 +283,23 @@ def main() -> None:
             if dac_sub[0] == 3:
                 dac_written.add(dac_i[0] & 0xFF)
                 dac_sub[0] = 0; dac_i[0] = (dac_i[0] + 1) & 0xFF
+        elif port == 0x3D4:
+            # CRTC index register (color emulation)
+            crtc_i[0] = value & 0xFF
+            if size == 2:
+                crtc[value & 0xFF] = (value >> 8) & 0xFF
+                # check if this is a start-address write (index 0x0C or 0x0D)
+                if (value & 0xFF) in (0x0C, 0x0D):
+                    _start = (crtc[0x0C] << 8) | crtc[0x0D]
+                    if not crtc_start_log or crtc_start_log[-1] != _start:
+                        crtc_start_log.append(_start)
+        elif port == 0x3D5:
+            # CRTC data register
+            crtc[crtc_i[0]] = value & 0xFF
+            if crtc_i[0] in (0x0C, 0x0D):
+                _start = (crtc[0x0C] << 8) | crtc[0x0D]
+                if not crtc_start_log or crtc_start_log[-1] != _start:
+                    crtc_start_log.append(_start)
 
     def hook_vga_write(uc, access, addr, size, value, _) -> None:
         off = (addr - 0xA0000) & 0xFFFF
@@ -777,7 +797,21 @@ def main() -> None:
                 frame_snap.setdefault("fullscreen_buf", bytes(FSBUF_BYTES))
                 frame_snap.setdefault("fullscreen_buf_off", 0)
                 frame_snap.setdefault("fullscreen_buf_seg", 0)
+            # --- CRTC display-start capture (Plan 6c page-flip detection) ----------
+            _crtc_start = (crtc[0x0C] << 8) | crtc[0x0D]
+            frame_snap["crtc_start"] = _crtc_start
+            frame_snap["crtc_start_log"] = list(crtc_start_log)
+            _crtc_page = "a200:0000 (plane offset 0x2000)" if _crtc_start >= 0x1000 else "a000:0000 (plane offset 0x0000)"
             print("[sprite_oracle] frame oracle: captured settled level frame (countdown=%d)" % countdown, flush=True)
+            print("[crtc] display start = 0x%04X (%s)" % (_crtc_start, _crtc_page), flush=True)
+            _distinct_starts = list(dict.fromkeys(crtc_start_log))  # ordered unique
+            print("[crtc] distinct start-address values seen: %s" % [hex(v) for v in _distinct_starts], flush=True)
+            if len(_distinct_starts) >= 2:
+                print("[crtc] PAGE-FLIP CONFIRMED: engine alternates display start addresses", flush=True)
+            elif len(_distinct_starts) == 1:
+                print("[crtc] single start address observed — no flip detected during run", flush=True)
+            else:
+                print("[crtc] WARNING: no CRTC start-address writes observed via OUT (game may set it differently)", flush=True)
             break
         if countdown is not None:
             countdown -= 1
