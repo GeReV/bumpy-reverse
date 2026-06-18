@@ -1,39 +1,54 @@
 #!/usr/bin/env bash
 # Validate the composite host harness (tools/composite_ctest.c):
-#   1. Watcom 16-bit compile-check of src/bg_render.c (same as validate_bg.sh)
+#   1. Watcom 16-bit compile-check of src/bg_render.c and src/entity.c
 #   2. gcc compile + run tools/composite_ctest.c
 #   3. Assert the C bg-match count == the Python composite_check.py count
+#   4. Assert bg+C match count > bg match count (monotonic progress)
 #
 # Requires: local/build/render/frame_oracle.bin (run FRAME_ORACLE=1 uv run python tools/sprite_oracle.py)
+# Requires: local/build/render/bank_inmem.bin (run uv run python tools/sprite_oracle.py)
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 ORACLE="local/build/render/frame_oracle.bin"
+BANK="local/build/render/bank_inmem.bin"
 if [ ! -f "$ORACLE" ]; then
   echo "missing $ORACLE — run: FRAME_ORACLE=1 uv run python tools/sprite_oracle.py" >&2
+  exit 1
+fi
+if [ ! -f "$BANK" ]; then
+  echo "missing $BANK — run: uv run python tools/sprite_oracle.py" >&2
   exit 1
 fi
 
 echo "== Open Watcom 16-bit compile check =="
 ( cd src && source ../local/toolchain/open-watcom/ow-env.sh \
-    && wcc -ml -bt=dos -zq -wx bg_render.c -fo="${TMPDIR:-/tmp}/bg_render.obj" )
-echo "   bg_render.c builds clean (wcc -ml -wx)"
+    && wcc -ml -bt=dos -zq -wx bg_render.c -fo="${TMPDIR:-/tmp}/bg_render.obj" \
+    && wcc -ml -bt=dos -zq -wx entity.c  -fo="${TMPDIR:-/tmp}/entity.obj" )
+echo "   bg_render.c + entity.c build clean (wcc -ml -wx)"
 
-echo "== host bg composite render + plane diff =="
+echo "== host bg+C composite render + plane diff =="
 OUT="${TMPDIR:-/tmp}/composite_ctest"
-cc -O2 -Wall -o "$OUT" tools/composite_ctest.c
-C_OUTPUT=$(timeout 60 "$OUT" "$ORACLE")
+cc -O2 -Wall -Wno-unused-function -o "$OUT" tools/composite_ctest.c
+C_OUTPUT=$(timeout 60 "$OUT" "$ORACLE" "$BANK")
 echo "   $C_OUTPUT"
 
-# Extract the C match count (the integer before the first '/')
-C_COUNT=$(echo "$C_OUTPUT" | grep -oE '^bg: [0-9]+' | grep -oE '[0-9]+')
-if [ -z "$C_COUNT" ]; then
-  echo "ERROR: could not parse match count from C harness output: $C_OUTPUT" >&2
+# Extract bg-only match count
+C_BG_COUNT=$(echo "$C_OUTPUT" | grep -oE '^bg: [0-9]+' | grep -oE '[0-9]+')
+if [ -z "$C_BG_COUNT" ]; then
+  echo "ERROR: could not parse bg match count from C harness output" >&2
   exit 1
 fi
 
-echo "== Python composite_check.py reference =="
+# Extract bg+C match count
+C_BGC_COUNT=$(echo "$C_OUTPUT" | grep -oE '^bg\+C: [0-9]+' | grep -oE '[0-9]+')
+if [ -z "$C_BGC_COUNT" ]; then
+  echo "ERROR: could not parse bg+C match count from C harness output" >&2
+  exit 1
+fi
+
+echo "== Python composite_check.py reference (bg-only) =="
 PY_OUTPUT=$(timeout 120 uv run python tools/composite_check.py "$ORACLE" 2>/dev/null | head -1)
 echo "   $PY_OUTPUT"
 
@@ -44,9 +59,17 @@ if [ -z "$PY_COUNT" ]; then
   exit 1
 fi
 
-echo "== Assertion: C count == Python count =="
-if [ "$C_COUNT" != "$PY_COUNT" ]; then
-  echo "FAIL: C bg match ($C_COUNT) != Python bg match ($PY_COUNT)" >&2
+echo "== Assertion: C bg count == Python bg count =="
+if [ "$C_BG_COUNT" != "$PY_COUNT" ]; then
+  echo "FAIL: C bg match ($C_BG_COUNT) != Python bg match ($PY_COUNT)" >&2
   exit 1
 fi
-echo "   PASS: both report $C_COUNT/64000 matching pixels"
+echo "   PASS: bg both report $C_BG_COUNT/64000 matching pixels"
+
+echo "== Assertion: bg+C match > bg match (monotonic progress) =="
+if [ "$C_BGC_COUNT" -le "$C_BG_COUNT" ]; then
+  echo "FAIL: bg+C ($C_BGC_COUNT) <= bg ($C_BG_COUNT) — layer-C regressed!" >&2
+  exit 1
+fi
+echo "   PASS: bg+C ($C_BGC_COUNT) > bg ($C_BG_COUNT) — layer-C improved composite"
+echo "   bg: $C_BG_COUNT/64000 -> bg+C: $C_BGC_COUNT/64000"

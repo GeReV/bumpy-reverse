@@ -1,8 +1,8 @@
-/* Host composite driver — Task 3 of Plan 6b.
+/* Host composite driver — Task 3+4 of Plan 6b.
    Parses frame_oracle.bin (FRM3), renders the full background into a fresh
-   4-plane buffer using the real src/bg_render.c bg_render_grid(), then
-   pixel-diffs the result against the captured engine frame.  Reproduces the
-   ~79% bg-match that tools/composite_check.py reports.
+   4-plane buffer using src/bg_render.c bg_render_grid(), then draws layer-C
+   static sprites using src/entity.c entity_draw_layer_c().  Diffs against
+   the captured engine frame at both stages.
 
    Far/huge qualifiers are #define'd away for the host build (gcc/cc), exactly
    as tools/bg_ctest.c does it.
@@ -28,6 +28,10 @@ typedef int32_t  s32;
 #define __huge
 
 #include "../src/bg_render.c"
+#include "../src/sprite_blit.c"
+#include "../src/sprite_chain.c"
+#include "../src/sprite_anim.c"
+#include "../src/entity.c"
 
 /* -------------------------------------------------------------------------
    FRM3 parse helpers
@@ -65,21 +69,30 @@ static int idx_at(const u8 *planes, int x, int y)
    ------------------------------------------------------------------------- */
 static u8 work_planes[4 * PLANE_SZ];
 
+/* Bank path for entity layer-C: same as anim_ctest.c */
+#define BANK_BASE_LIN  0x4eae0UL
+#define BANK_PATH      "local/build/render/bank_inmem.bin"
+
 int main(int argc, char **argv)
 {
     const char *path = (argc > 1) ? argv[1]
                                   : "local/build/render/frame_oracle.bin";
+    const char *bankpath = (argc > 2) ? argv[2] : BANK_PATH;
     FILE *fh;
-    long  sz;
-    u8   *b;
+    long  sz, bsz;
+    u8   *b, *bank;
     u32   o;
     u32   plen, alen, mlen;
     const u8 *cap_planes;   /* captured engine frame planes (from file) */
     const u8 *atlas_raster; /* PAV raster: atlas block data + 6 (skip header) */
     const u8 *bmap;         /* level tile map */
+    const u8 *bum;          /* BUM per-level header (0xc2 bytes) */
+    const u8 *dg;           /* full DGROUP snapshot (0x10000 bytes) */
     long  match = 0;
     int   x, y;
+    sprite_view view;
 
+    /* --- Load oracle file --- */
     fh = fopen(path, "rb");
     if (!fh) {
         fprintf(stderr, "cannot open %s\n", path);
@@ -99,9 +112,35 @@ int main(int argc, char **argv)
     }
     fclose(fh);
 
+    /* --- Load sprite bank --- */
+    fh = fopen(bankpath, "rb");
+    if (!fh) {
+        fprintf(stderr, "cannot open bank %s\n", bankpath);
+        free(b);
+        return 2;
+    }
+    fseek(fh, 0, SEEK_END); bsz = ftell(fh); fseek(fh, 0, SEEK_SET);
+    bank = (u8 *)malloc((size_t)bsz);
+    if (!bank) {
+        fprintf(stderr, "bank malloc failed\n");
+        fclose(fh);
+        free(b);
+        return 2;
+    }
+    if (fread(bank, 1, (size_t)bsz, fh) != (size_t)bsz) {
+        fprintf(stderr, "short bank read\n");
+        fclose(fh);
+        free(bank);
+        free(b);
+        return 2;
+    }
+    fclose(fh);
+
     /* Verify magic */
     if (memcmp(b, "FRM3", 4) != 0) {
         fprintf(stderr, "expected FRM3 magic, got %.4s\n", b);
+        free(bank);
+        free(b);
         return 2;
     }
 
@@ -109,12 +148,22 @@ int main(int argc, char **argv)
        +0x00  4 B  "FRM3"
        +0x04  4 B  u32 planes_len  (== 0x40000)
        +0x08  0x40000 B  captured engine planes (plane0..3)
-       +0x40008  0x300 B  DAC palette (256*3) — skip
+       next   0x300 B  DAC palette (256*3) — skip
        next   4 B  u32 atlas_len
        next   atlas_len B  PAV atlas raster (raw; first 6 B = raster header)
        next   4 B  u32 map_len
        next   map_len B  level tile map
-       (FRM3 new blocks follow — not needed for Task 3)
+       --- FRM3 new blocks (Task 2) ---
+       next   2 B  u16 level
+       next   0xc2 B  BUM per-level header
+       next   0x18 B  p1_sprite obj struct
+       next   0x18 B  p2_sprite obj struct
+       next   6 B  p1_glob
+       next   6 B  p2_glob
+       next   3*0xc B  layer-A channel records
+       next   4*0xc B  layer-B channel records
+       next   8 B  chan_tbl_raw
+       next   0x10000 B  full DGROUP snapshot
     */
     o = 4;
     plen = rd32(b + o); o += 4;
@@ -127,16 +176,36 @@ int main(int argc, char **argv)
     atlas_raster = b + o + 6; o += alen;
 
     mlen = rd32(b + o); o += 4;
-    bmap = b + o; /* o += mlen; — unused after this */
-    (void)mlen;
+    bmap = b + o; o += mlen;
+
+    /* --- FRM3 new blocks (Task 2 additions) --- */
+    o += 2;                         /* skip u16 level */
+    bum = b + o; o += 0xc2;        /* BUM per-level header */
+    o += 0x18;                      /* skip p1_sprite obj */
+    o += 0x18;                      /* skip p2_sprite obj */
+    o += 6;                         /* skip p1_glob */
+    o += 6;                         /* skip p2_glob */
+    o += 3 * 0xc;                   /* skip layer-A channel records */
+    o += 4 * 0xc;                   /* skip layer-B channel records */
+    o += 8;                         /* skip chan_tbl_raw */
+    dg = b + o;                     /* full DGROUP snapshot (0x10000 B) */
+
+    /* --- Full-screen sprite view (matches chain_ctest.c / engine globals) ---
+       left=0 right=40 top=0 bottom=199 height=199 data_off=0 data_seg=0xa000 */
+    view.left     = 0;
+    view.right    = 40;
+    view.top      = 0;
+    view.bottom   = 199;
+    view.height   = 199;
+    view.data_off = 0x0000;
+    view.data_seg = 0xa000;
 
     /* --- Render background into fresh plane buffer --- */
     memset(work_planes, 0, sizeof(work_planes));
     bg_render_grid(work_planes, atlas_raster, bmap);
 
-    /* --- Pixel-diff: work_planes vs captured engine frame ---
-       Count matching pixels over the 320x200 playfield.
-       Uses the same 4-plane index extraction as composite_check.idx_at. */
+    /* --- Pixel-diff after bg only --- */
+    match = 0;
     for (y = 0; y < 200; y++) {
         for (x = 0; x < 320; x++) {
             if (idx_at(work_planes, x, y) == idx_at(cap_planes, x, y)) {
@@ -144,10 +213,29 @@ int main(int argc, char **argv)
             }
         }
     }
-
     printf("bg: %ld/64000 pixels match (%.1f%%)\n",
            match, (double)match / 64000.0 * 100.0);
 
+    /* --- Draw layer-C static sprites into the same plane buffer ---
+       FRM3 `bum` block starts at tilemap+2 (see task-2-report.md: oracle reads
+       hdr_lin = bum_block_lin + 2).  entity_draw_layer_c uses bum[0x60+cell]
+       which mirrors the engine's tilemap[0x60+cell].  Pass bum-2 so the offsets
+       align: (bum-2)[0x60+cell] == bum[0x5e+cell] == tilemap[0x60+cell]. */
+    entity_draw_layer_c(work_planes, bum - 2, dg, bank, BANK_BASE_LIN, &view);
+
+    /* --- Pixel-diff after bg + layer C --- */
+    match = 0;
+    for (y = 0; y < 200; y++) {
+        for (x = 0; x < 320; x++) {
+            if (idx_at(work_planes, x, y) == idx_at(cap_planes, x, y)) {
+                match++;
+            }
+        }
+    }
+    printf("bg+C: %ld/64000 pixels match (%.1f%%)\n",
+           match, (double)match / 64000.0 * 100.0);
+
+    free(bank);
     free(b);
     return 0;
 }
