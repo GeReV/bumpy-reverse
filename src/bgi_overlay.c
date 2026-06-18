@@ -46,6 +46,13 @@
    the chosen plane.  In the host memory model there is no VGA MMIO — each
    plane is an independent array slice, so we just copy the right slice.
    ----------------------------------------------------------------------- */
+/* NOTE on the plane-stride asymmetry below: the SOURCE is a VGA page (plane stride
+   BGI_OVL_PLANE_SIZE = 0x10000, the full 64KB plane window) while the DEST is the
+   PACKED fullscreen_buf (plane stride BGI_OVL_PAGE_SIZE = 0x1F40, 4 contiguous planes).
+   This matches the only call shape exercised (save-under to fullscreen_buf). If ever
+   invoked with a VGA-page DEST, the dest stride would need to be BGI_OVL_PLANE_SIZE.
+   UNVALIDATED: this path is unreachable in the harness (sub-handler 0 fires only when
+   the bgi_set_mode_10 NOP guard passes, which never happens for the layer-A/B views). */
 static void render_player_view_full_copy(u8 __huge *dest_buf,
                                          const u8 __huge *src_planes,
                                          u32 src_page_off,

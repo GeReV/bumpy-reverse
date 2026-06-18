@@ -43,8 +43,12 @@
    LIMITATION: The OTHER page (the non-live page) contains entity draws from
    the PREVIOUS animation tick.  Reproducing it would require capturing that
    prior tick's entity state — out of scope for Plan 6b/6c.  Residue vs the
-   live page = render_player_view second-pass artifacts + items + level-exit
-   sprite (documented in entity.h RECONSTRUCTION FIDELITY section).
+   live page = the non-live page's previous-tick entity draws + the engine's
+   VGA double-buffer save-under deltas (the double-buffer is not modelled here);
+   see docs/rendering-pipeline.md.  NOTE: render_player_view is a planar
+   save-under/read-back copy, NOT a visible "second pass"; and level-exit
+   (bum+0x91) / items (bum+0x92) are game-state, not separate sprites — earlier
+   notes calling those "residue" were misattributions, corrected.
 
    Far/huge qualifiers are #define'd away for the host build (gcc/cc), exactly
    as tools/bg_ctest.c does it.

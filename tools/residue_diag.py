@@ -123,17 +123,21 @@ def main() -> None:
         if col_counts[col] > 0:
             print(f"  bcol {col:2d} (x={col*8:3d}-{col*8+7:3d}): {col_counts[col]:5d} px")
 
-    # Composite analysis
+    # Composite analysis.
+    # NOTE: these are the HISTORICAL level-1 / page-0 development snapshot used during
+    # Plan-6b bring-up.  The settled figure is 54152/64000 (world-8 LIVE page, see
+    # validate_composite.sh + docs/reconstruction-fidelity.md); this diagnostic predates
+    # the live-page switch (6c-T3) and is kept only for the level-1 per-cell breakdown.
     bg_match = W * H - len(diff_pixels)
-    total = 54239  # known from validate_composite.sh
+    total = 54239  # historical level-1/page-0 snapshot (superseded by 54152 world-8 live page)
     residue = W * H - total
     print()
-    print("=== Composite match summary (from C harness) ===")
+    print("=== Composite match summary (historical level-1/page-0 dev snapshot) ===")
     print(f"  bg:        50587/64000 (79.0%)")
     print(f"  bg+C:      51397/64000 (+810,  80.3%)")
     print(f"  bg+C+P1:   51561/64000 (+164,  80.6%)")
     print(f"  bg+C+P1+A: 54239/64000 (+2678, 84.7%)")
-    print(f"  Residue:   {residue} px (15.3%)")
+    print(f"  Residue:   {residue} px (15.3%)  [settled figure: 54152 vs world-8 live page]")
     print()
     print(f"  Entity pixels total (bg diff):   {len(diff_pixels)}")
     print(f"  Entity pixels captured by ports: {len(diff_pixels) - residue}")
@@ -182,20 +186,19 @@ def main() -> None:
     print("  blue       = P1 spawn window")
     print("  magenta    = other entity diff")
 
-    # Item count — items_remaining tells us how many item sprites should be on screen
+    # Item count — items_remaining is the collectible counter (game-state).
     print()
     print(f"=== items_remaining = {items_remaining} ===")
-    print("Item sprites (collectibles) are NOT in the plan-6b scope (no port for item_draw).")
-    print("Level-exit sprite is NOT in the plan-6b scope (no port for draw_exit).")
+    print("CORRECTION (verified by xref): level-exit (bum+0x91) and items (bum+0x92) are")
+    print("GAME-STATE, read only by p1_collect_item (collision/scoring) + spawn_and_draw init;")
+    print("NO draw routine reads them.  Their visuals are ordinary level-grid cells (already")
+    print("reconstructed) + the HUD — there is no separate draw_exit/item_draw to port.")
     print()
-    print("=== PHASE 1 VERDICT ===")
-    print("Entities in plan scope: bg, layer C (6 cells), P1, layer A (27 cells), layer B (0), P2 (absent)")
-    print(f"Level-exit sprite at ({exit_x},{exit_y}): OUT-OF-SCOPE — not ported")
-    print(f"Item sprites (count={items_remaining}): OUT-OF-SCOPE — not ported")
-    print("P1 +164 anomaly: P1 is partially occluded by layer-A entities that draw over it.")
-    print("  (P1 draws first, then layer A overwrites some pixels → net gain on P1 step is small)")
-    print("Decision gate: residue is due to out-of-scope entities (level-exit + items).")
-    print("Do NOT implement them. Document and proceed with Phases 2–4.")
+    print("=== VERDICT (superseded; kept for the level-1 per-cell breakdown above) ===")
+    print("The original 'residue = out-of-scope exit/item sprites' verdict was a MISATTRIBUTION.")
+    print("Verified residue cause: validating the single-page composite against the lagging")
+    print("visible page instead of the live draw page — fixed in 6c-T3 (validate vs live page).")
+    print("See docs/rendering-pipeline.md and docs/reconstruction-fidelity.md.")
 
 
 if __name__ == "__main__":
