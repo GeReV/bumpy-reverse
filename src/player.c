@@ -347,7 +347,7 @@ void (*game_mode_handlers[64])(void) = {
  * TASK 6c — TABLE BOUND CORRECTED TO THE FULL 0x40 MODES.  Task 6a/6b reproduced
  * only modes 0x00..0x11 under the assumption "the rest are all-0x7111 filler / out
  * of slice scope".  A full dump of the unpacked image disproves that: rows
- * 0x12..0x3b are REAL populated step-handler rows (the very modes the 6c walk/move
+ * 0x12..0x3f are REAL populated step-handler rows (the very modes the 6c walk/move
  * resolvers — move_left/right_step_resolve, p1_resolve_walk_{left,right}_contact —
  * enter, e.g. 0x12/0x14/0x18/0x1a/0x34..0x3b, all of which then dispatch_move_step).
  * The bound is now 0x40 modes * 0x22 = 0x880 bytes, dumped byte-exact from

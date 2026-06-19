@@ -167,8 +167,8 @@ extern s16 sound_device_state;  /* DGROUP 0x689c (ram0x00026c4c): -0x8000 == no 
  * FX-table dependent) remain forward-declared below (→ Task 7).
  */
 
-/* tilemap: the level tilemap far pointer, OWNED by level.c/level data (cross-module).
-   Kept extern — T7 resolves its definition + the BUMPY.EXE link. */
+/* tilemap: the level tilemap far pointer (cross-module). DEFINED in game.c (T7 — no
+   module naturally DEFINES it; level.c renders via its own buffers). Kept extern here. */
 extern u8 __far *tilemap;                  /* level tilemap far pointer (cross-module) */
 
 /* The two raw tilemap reads (the actual "tile leaves"). */
