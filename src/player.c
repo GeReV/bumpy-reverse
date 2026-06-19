@@ -10,13 +10,19 @@
  * the C reads as documentation of what the binary does.  Each function cites its
  * engine address (segment 1000 code; DGROUP is segment 203b in the original).
  *
- * SCOPE (Task 6a) — ONLY these four:
+ * SCOPE (Task 6a) — the four spine functions:
  *   p1_step_scripted_move   1000:13df   (primary, validated by tools/player_ctest.c)
  *   enter_game_mode         1000:4263
  *   p1_movement_dispatch    1000:1e02
  *   dispatch_move_step      1000:238e
- * The gamemode_* handlers, the dispatch-table DATA, and tile collision are TASK 6b
- * (forward-declared extern in player.h; their bodies are NOT here).
+ *
+ * SCOPE (Task 6b — added below the spine, "═ TASK 6b ═" banner):
+ *   the minimal level-1 idle/walk/start/move game-mode HANDLER set (slice_model
+ *   §4.2), ported 1:1, plus the two dispatch-table DATA structures
+ *   (game_mode_handlers @ 0x7ca, move_step_dispatch_tbl @ 0x43c0) reconstructed
+ *   from the real static bytes dumped from the unpacked image.  The TILE-COLLISION
+ *   leaves the handlers call, and the out-of-scope handler-table targets, are
+ *   FORWARD-DECLARED (player.h) → Task 6c.
  *
  * Build (object compile check; player.c is NOT linked into BUMPY.EXE this task):
  *   wcc -ml -bt=dos -zq -wx src/player.c
@@ -111,6 +117,14 @@ char p1_step_scripted_move(void)
  * 0x2252 + mode*4 is (offset, segment); the loaded script far pointer is built
  * from (script+2 .. script+5).  mode_script_tbl is forward-declared (Task 6b);
  * the engine populates it at runtime, so its contents are not available here.
+ *
+ * RECONSTRUCTION FIDELITY (near-vs-far table access): the original reads the
+ * table-entry words mode_script_tbl[mode*4 + 0/2] as NEAR accesses into DGROUP
+ * (the table lives in DS=DGROUP), but reads the *pointed-to* script bytes
+ * (script[0], script[1], script+2..5) through the FAR pointer it just built.
+ * We mirror that split exactly: the two table words use a near `u16 *` read of
+ * the `mode_script_tbl` blob, while `script` is a `const u8 __far *`.  Behaviour
+ * is identical; the type split documents which access is near vs far.
  */
 void enter_game_mode(u8 mode)
 {
@@ -186,5 +200,696 @@ void dispatch_move_step(void)
     slot = (void (**)(void))(move_step_dispatch_tbl +
                              (u16)game_mode * 0x22 + (u16)p1_move_step_idx * 2);
     (*slot)();
+    return;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  TASK 6b — GAME-MODE HANDLER STATE MACHINE  +  the two dispatch-table data
+ *  structures.  All handlers ported 1:1 from the Ghidra decomp (verified live via
+ *  Ghidra MCP, 2026-06; bodies also in local/build/slice_decomp.txt).  Each cites
+ *  its engine address.  The tile-collision leaves they call are forward-declared
+ *  in player.h (→ Task 6c).
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── DGROUP game-state globals owned by this module (Task 6b) ────────────────── */
+
+u8  p1_contact_code;     /* contact/landing code resolved per move */
+u8  move_step_count;     /* jump_step_counter — steps in current move sequence */
+u8  p1_jump_move_ticks;  /* jump/jet tick flag consulted by the idle handler */
+u8  p1_pending_action;   /* pending tile/move action (from p1_read_tile_under) */
+u8  rng_frame;           /* per-frame RNG byte (move_down random-direction branch) */
+u8  p1_cell;             /* 203b:0x856e — P1 grid cell */
+u8  p1_cell_prev;        /* saved previous cell */
+u8  tile_below_player;   /* tile under player (move_settle sets 0xb) */
+u8  p1_current_tile;     /* tile probed by move_left/right teleport check */
+s16 sound_device_state;  /* DGROUP 0x689c (ram0x00026c4c): -0x8000 == no sound; 4 == OPL/charger */
+
+/*
+ * game_mode_handlers — DGROUP 0x7ca  (the jump table p1_movement_dispatch indexes)
+ * --------------------------------------------------------------------------
+ * REAL static data: the 64 near-pointer entries dumped verbatim from the unpacked
+ * image (BUMPY_unpacked.exe, DGROUP file base 0x11440 → table at file 0x11c0a).
+ * Confirmed ARRAY BOUND = 64 (0x40): indices 0x00..0x3f hold valid handler near
+ * offsets, [0x40] = 0x0000 (the end marker), so Task 6a's [64] guess is CORRECT.
+ *
+ * index→handler map (verbatim from the dump):
+ *   default fill (most indices) ........ gamemode_default_idle   (0x28f9)
+ *   0x03, 0x0f ......................... gamemode_03_move        (0x23b6)
+ *   0x21 ............................... gamemode_21_start       (0x1e5e)
+ *   0x22 ............................... gamemode_22             (0x1e90)
+ *   0x23 ............................... gamemode_23_walk        (0x1ec2)
+ *   0x24 ............................... gamemode_24_walk        (0x1f3e)
+ *   0x25 ............................... gamemode_25_contact     (0x2138)
+ *   0x26 ............................... gamemode_26_contact     (0x21e7)
+ *   OUT-OF-SCOPE targets (→ T6c, forward-declared in player.h):
+ *   0x05 move_walk_right_anim_step(0x2423) 0x0a enter_mode_0b_jump_start(0x2470)
+ *   0x0b move_anim_step_to_mode0c(0x248e)  0x0c move_step_check_walkable(0x24d7)
+ *   0x0d move_step_dispatch_input(0x250a)  0x0e teleport_to_next_exit_tile(0x25ad)
+ *   0x10,0x2c FUN_1000_22b0(0x22b0)        0x1c p1_input_dispatch_bit10(0x4344)
+ *   0x1d..0x20 FUN_1000_4437(0x4437)       0x2d FUN_1000_22c1(0x22c1)
+ *   0x2e advance_physics_freeze(0x22d2)    0x2f land_on_tile_below(0x2810)
+ *   0x30 FUN_1000_1e3d(0x1e3d)
+ *
+ * RECONSTRUCTION FIDELITY: the engine stores 2-byte NEAR code offsets (the table
+ * is in the same code segment as the handlers).  We reconstruct it as a C array
+ * of function pointers keyed exactly by the dumped index→offset map, so the
+ * structure and routing are 1:1.  This is structure-reconstructed, not a raw
+ * byte blob, because near offsets are not host-relocatable; the dump above is the
+ * ground truth.  The out-of-scope entries point at their real (forward-declared)
+ * T6c handlers so the table is structurally complete.
+ */
+void (*game_mode_handlers[64])(void) = {
+    /* 0x00 */ gamemode_default_idle,
+    /* 0x01 */ gamemode_default_idle,
+    /* 0x02 */ gamemode_default_idle,
+    /* 0x03 */ gamemode_03_move,
+    /* 0x04 */ gamemode_default_idle,
+    /* 0x05 */ move_walk_right_anim_step,      /* → T6c */
+    /* 0x06 */ gamemode_default_idle,
+    /* 0x07 */ gamemode_default_idle,
+    /* 0x08 */ gamemode_default_idle,
+    /* 0x09 */ gamemode_default_idle,
+    /* 0x0a */ enter_mode_0b_jump_start,       /* → T6c */
+    /* 0x0b */ move_anim_step_to_mode0c,       /* → T6c */
+    /* 0x0c */ move_step_check_walkable,       /* → T6c */
+    /* 0x0d */ move_step_dispatch_input,       /* → T6c */
+    /* 0x0e */ teleport_to_next_exit_tile,     /* → T6c */
+    /* 0x0f */ gamemode_03_move,
+    /* 0x10 */ FUN_1000_22b0,                  /* → T6c */
+    /* 0x11 */ gamemode_default_idle,
+    /* 0x12 */ gamemode_default_idle,
+    /* 0x13 */ gamemode_default_idle,
+    /* 0x14 */ gamemode_default_idle,
+    /* 0x15 */ gamemode_default_idle,
+    /* 0x16 */ gamemode_default_idle,
+    /* 0x17 */ gamemode_default_idle,
+    /* 0x18 */ gamemode_default_idle,
+    /* 0x19 */ gamemode_default_idle,
+    /* 0x1a */ gamemode_default_idle,
+    /* 0x1b */ gamemode_default_idle,
+    /* 0x1c */ p1_input_dispatch_bit10,        /* → T6c */
+    /* 0x1d */ FUN_1000_4437,                  /* → T6c */
+    /* 0x1e */ FUN_1000_4437,                  /* → T6c */
+    /* 0x1f */ FUN_1000_4437,                  /* → T6c */
+    /* 0x20 */ FUN_1000_4437,                  /* → T6c */
+    /* 0x21 */ gamemode_21_start,
+    /* 0x22 */ gamemode_22,
+    /* 0x23 */ gamemode_23_walk,
+    /* 0x24 */ gamemode_24_walk,
+    /* 0x25 */ gamemode_25_contact,
+    /* 0x26 */ gamemode_26_contact,
+    /* 0x27 */ gamemode_default_idle,
+    /* 0x28 */ gamemode_default_idle,
+    /* 0x29 */ gamemode_default_idle,
+    /* 0x2a */ gamemode_default_idle,
+    /* 0x2b */ gamemode_default_idle,
+    /* 0x2c */ FUN_1000_22b0,                  /* → T6c */
+    /* 0x2d */ FUN_1000_22c1,                  /* → T6c */
+    /* 0x2e */ advance_physics_freeze,         /* → T6c */
+    /* 0x2f */ land_on_tile_below,             /* → T6c */
+    /* 0x30 */ FUN_1000_1e3d,                  /* → T6c */
+    /* 0x31 */ gamemode_default_idle,
+    /* 0x32 */ gamemode_default_idle,
+    /* 0x33 */ gamemode_default_idle,
+    /* 0x34 */ gamemode_default_idle,
+    /* 0x35 */ gamemode_default_idle,
+    /* 0x36 */ gamemode_default_idle,
+    /* 0x37 */ gamemode_default_idle,
+    /* 0x38 */ gamemode_default_idle,
+    /* 0x39 */ gamemode_default_idle,
+    /* 0x3a */ gamemode_default_idle,
+    /* 0x3b */ gamemode_default_idle,
+    /* 0x3c */ gamemode_default_idle,
+    /* 0x3d */ gamemode_default_idle,
+    /* 0x3e */ gamemode_default_idle,
+    /* 0x3f */ gamemode_default_idle
+};
+
+/*
+ * move_step_dispatch_tbl — DGROUP 0x43c0  (the 2D table dispatch_move_step indexes)
+ * --------------------------------------------------------------------------
+ * REAL static data: the per-mode rows of 2-byte near step-function pointers,
+ * stride 0x22 bytes (0x11 word entries) per mode, dumped verbatim from the
+ * unpacked image (file base 0x11440 → table at file 0x15800).  dispatch_move_step
+ * (above) indexes it as move_step_dispatch_tbl[game_mode*0x22 + step_idx*2].
+ *
+ * Modeled as a BYTE BLOB holding the real dumped near offsets (little-endian), so
+ * the index arithmetic in dispatch_move_step lands on the exact original entry.
+ * Every entry points at a per-step micro-handler (anim/tile step leaf, e.g.
+ * 0x6648/0x6717/0x654e; common filler 0x7111) — ALL of which are deeper than this
+ * task's SCOPE → Task 6c.  We keep the real bytes here so the table is faithful;
+ * the targets they encode are ported in T6c.
+ *
+ * RECONSTRUCTION FIDELITY: a host build cannot turn these 16-bit near offsets into
+ * real function pointers (no relocation), so unlike game_mode_handlers this table
+ * is kept as its literal dumped bytes rather than a typed pointer array.  Only the
+ * rows for modes 0x00..0x11 are reproduced (the rest are the all-0x7111 filler /
+ * out of slice scope); the bound is 0x12 modes * 0x22 = 0x264 bytes, which is all
+ * the slice's reachable modes index into.  Dumped from BUMPY_unpacked.exe.
+ */
+#define MV(w)  (u8)((w) & 0xff), (u8)((w) >> 8)   /* little-endian near offset */
+u8 move_step_dispatch_tbl[0x12 * 0x22] = {
+    /* mode 0x00 */ MV(0x6648),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x6717),MV(0x654e),MV(0x6587),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x65fb),MV(0x0000),MV(0x0000),MV(0x0000),
+    /* mode 0x01 */ MV(0x6699),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x6326),MV(0x651c),MV(0x6717),MV(0x654e),MV(0x6587),MV(0x65e5),MV(0x6627),MV(0x7111),MV(0x65fb),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),
+    /* mode 0x02 */ MV(0x66d8),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x6372),MV(0x6535),MV(0x6717),MV(0x654e),MV(0x6587),MV(0x65e5),MV(0x6627),MV(0x7111),MV(0x65fb),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),
+    /* mode 0x03 */ MV(0x673a),MV(0x7111),MV(0x7111),MV(0x64e2),MV(0x6611),MV(0x7111),MV(0x6627),MV(0x7111),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),
+    /* mode 0x04 */ MV(0x64ff),MV(0x6717),MV(0x654e),MV(0x6587),MV(0x65e5),MV(0x7111),MV(0x6627),MV(0x65fb),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),
+    /* mode 0x05 */ MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),
+    /* mode 0x06 */ MV(0x673a),MV(0x6611),MV(0x7111),MV(0x6717),MV(0x647e),MV(0x6587),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x65fb),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),
+    /* mode 0x07 */ MV(0x673a),MV(0x6611),MV(0x7111),MV(0x7111),MV(0x6717),MV(0x647e),MV(0x6587),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x65fb),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),
+    /* mode 0x08 */ MV(0x6748),MV(0x7111),MV(0x6326),MV(0x651c),MV(0x6717),MV(0x654e),MV(0x6587),MV(0x7111),MV(0x6627),MV(0x7111),MV(0x65fb),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),
+    /* mode 0x09 */ MV(0x6789),MV(0x7111),MV(0x6372),MV(0x6535),MV(0x6717),MV(0x654e),MV(0x6587),MV(0x7111),MV(0x6627),MV(0x7111),MV(0x65fb),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),
+    /* mode 0x0a */ MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),
+    /* mode 0x0b */ MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),
+    /* mode 0x0c */ MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),
+    /* mode 0x0d */ MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),
+    /* mode 0x0e */ MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),
+    /* mode 0x0f */ MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x65fb),MV(0x6627),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),
+    /* mode 0x10 */ MV(0x6305),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),
+    /* mode 0x11 */ MV(0x6648),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x654e),MV(0x6587),MV(0x7111),MV(0x7111),MV(0x7111),MV(0x65fb),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000),MV(0x0000)
+};
+#undef MV
+
+/* ── SCOPE handlers — ported 1:1 from the decomp ──────────────────────────────
+ *
+ * Note on the FUN_1000_ab83() stack-check prologue: every original function opens
+ * with `if (stack_check_limit <= &stack0xfffe) FUN_1000_ab83();` — Turbo C's
+ * stack-overflow probe.  It is a compiler-emitted runtime guard, NOT game logic;
+ * it is intentionally OMITTED from the ports (documented once here) so the C reads
+ * as the actual behaviour.  This is the same convention the 6a spine used.
+ */
+
+/*
+ * gamemode_default_idle — 1000:28f9   (game_mode 0/default — idle)
+ * --------------------------------------------------------------------------
+ * The idle handler.  This is where Bumpy stays FROZEN-until-first-input at puzzle
+ * start: with no pending action and no jump ticks, it falls (cell<0x28) or settles
+ * (do_move_with_sound).  Once p1_read_tile_under latches a p1_pending_action from
+ * input, it routes to enter_mode_1c_walk / move_input_tick / handle_move_input.
+ */
+void gamemode_default_idle(void)
+{
+    u8 sound_id;
+
+    move_step_count = 8;                              /* jump_step_counter = 8 */
+    if (p1_jump_move_ticks == 0 && p1_pending_action != 0) {
+        if (p1_pending_action == 0x20) {
+            if (sound_device_state == 4) {
+                sound_id = 0x28;
+            } else {
+                sound_id = 3;
+            }
+            play_sound(sound_id);
+        }
+        if (p1_pending_action == 0x16) {
+            enter_mode_1c_walk();
+        } else if (p1_pending_action == 0x03) {
+            move_input_tick();
+        } else {
+            handle_move_input();
+        }
+    } else {
+        p1_jump_move_ticks = 0;
+        if (p1_cell < 0x28) {
+            enter_mode_04_fall();
+        } else {
+            do_move_with_sound();
+        }
+    }
+    return;
+}
+
+/*
+ * gamemode_21_start — 1000:1e5e   (game_mode 0x21 — start/launch, right)
+ * --------------------------------------------------------------------------
+ * On contact (p1_contact_code==8) play a sound and run gamemode_26_contact; else
+ * transition to game_mode 0x24 (idle/walk-left tick).
+ */
+void gamemode_21_start(void)
+{
+    u8 sound_id;
+
+    if (p1_contact_code == 8) {
+        if (sound_device_state == 4) {
+            sound_id = 0x2b;
+        } else {
+            sound_id = 0x0f;
+        }
+        play_sound(sound_id);
+        gamemode_26_contact();
+    } else {
+        game_mode = 0x24;
+    }
+    return;
+}
+
+/*
+ * gamemode_22 — 1000:1e90   (game_mode 0x22 — start/launch, left; sibling of 0x21)
+ * --------------------------------------------------------------------------
+ * On contact play a sound and run gamemode_25_contact; else transition to
+ * game_mode 0x23 (idle/walk-right tick).
+ */
+void gamemode_22(void)
+{
+    u8 sound_id;
+
+    if (p1_contact_code == 8) {
+        if (sound_device_state == 4) {
+            sound_id = 0x2b;
+        } else {
+            sound_id = 0x0f;
+        }
+        play_sound(sound_id);
+        gamemode_25_contact();
+    } else {
+        game_mode = 0x23;
+    }
+    return;
+}
+
+/*
+ * gamemode_23_walk — 1000:1ec2   (game_mode 0x23 — idle/walk-right tick)
+ * --------------------------------------------------------------------------
+ * Advance the walk animation (step_walk_anim, script 203b:1ca4); while right is
+ * held (input_state&2) begin a rightward walk.
+ */
+void gamemode_23_walk(void)
+{
+    step_walk_anim(0x0b, 5, 0x1ca4, 0x203b);
+    if ((input_state & 2) != 0) {
+        p1_begin_walk_right();
+    }
+    return;
+}
+
+/*
+ * gamemode_24_walk — 1000:1f3e   (game_mode 0x24 — idle/walk-left tick)
+ * --------------------------------------------------------------------------
+ * Advance the walk animation (step_walk_anim, script 203b:1cba); while left is
+ * held (input_state&2) begin a leftward walk.
+ */
+void gamemode_24_walk(void)
+{
+    step_walk_anim(0x0b, 5, 0x1cba, 0x203b);
+    if ((input_state & 2) != 0) {
+        p1_begin_walk_left();
+    }
+    return;
+}
+
+/*
+ * gamemode_03_move — 1000:23b6   (game_mode 0x03 / 0x0f — mid-move tick)
+ * --------------------------------------------------------------------------
+ * Branch on input: left(4)→move_left; right(8)→move_right; else if down(2) is held
+ * AND the tile one row up isn't 0x0e, move_down (+sound); else move_settle.
+ *
+ * The `*(char*)(tilemap + p1_cell - 8) != 0x0e` probe READS the level tilemap — a
+ * tile leaf — but it is part of this handler's own control-flow condition, so the
+ * skeleton is ported here with the `tilemap` far pointer forward-declared (→ T6c).
+ */
+void gamemode_03_move(void)
+{
+    if ((input_state & 4) == 0) {
+        if ((input_state & 8) == 0) {
+            if ((p1_cell < 8 || tilemap[(u16)p1_cell - 8] != 0x0e) &&
+                (input_state & 2) != 0) {
+                move_down();
+                if (sound_device_state == 4) {
+                    play_sound(0x2a);
+                } else {
+                    play_sound(0x14);
+                }
+            } else {
+                move_settle();
+            }
+        } else {
+            move_right();
+        }
+    } else {
+        move_left();
+    }
+    return;
+}
+
+/*
+ * gamemode_25_contact — 1000:2138   (game_mode 0x25 — P1 left-walk contact)
+ * --------------------------------------------------------------------------
+ * Clears contact.  With up/fire held (input_state&0x12), play sound + enter mode
+ * 0x32.  Else at step 0 force contact 0x1f and mode 0x27; otherwise probe cell-1
+ * terrain (read_tile_layer_contact, a tile leaf → T6c) and route via
+ * contact_transition_tbl_b[p1_contact_code] (0x25 → p1_enter_walk_left_mode).
+ * Always ends with dispatch_move_step.
+ */
+void gamemode_25_contact(void)
+{
+    u8 sound_id;
+    u8 next_mode;
+
+    p1_contact_code = 0;
+    if ((input_state & 0x12) == 0) {
+        if (move_step_count == 0) {
+            p1_contact_code = 0x1f;
+            enter_game_mode(0x27);
+        } else {
+            p1_cell_prev = (u8)(p1_cell + 0xff);             /* cell - 1 */
+            read_tile_layer_contact(p1_cell_prev);
+            next_mode = contact_transition_tbl_b[p1_contact_code];
+            if (next_mode == 0x25) {
+                p1_enter_walk_left_mode();
+            } else {
+                enter_game_mode(next_mode);
+            }
+        }
+    } else {
+        if (sound_device_state == 4) {
+            sound_id = 0x2a;
+        } else {
+            sound_id = 0x15;
+        }
+        play_sound(sound_id);
+        enter_game_mode(0x32);
+    }
+    dispatch_move_step();
+    return;
+}
+
+/*
+ * gamemode_26_contact — 1000:21e7   (game_mode 0x26 — P1 right-walk contact)
+ * --------------------------------------------------------------------------
+ * With up/fire held (input_state&0x12), play sound + enter mode 0x33.  Else if the
+ * step counter==7 force contact 0x1f and enter mode 0x28; otherwise save cell,
+ * probe terrain (read_tile_layer_contact → T6c) and route via
+ * contact_transition_tbl[p1_contact_code] (0x42f6) — 0x26 → p1_enter_walk_right_mode.
+ * Always ends with dispatch_move_step.
+ */
+void gamemode_26_contact(void)
+{
+    u8 sound_id;
+    u8 next_mode;
+
+    if ((input_state & 0x12) == 0) {
+        if (move_step_count == 7) {
+            p1_contact_code = 0x1f;
+            enter_game_mode(0x28);
+        } else {
+            p1_cell_prev = p1_cell;
+            read_tile_layer_contact(p1_cell);
+            next_mode = contact_transition_tbl[p1_contact_code];
+            if (next_mode == 0x26) {
+                p1_enter_walk_right_mode();
+            } else {
+                enter_game_mode(next_mode);
+            }
+        }
+    } else {
+        if (sound_device_state == 4) {
+            sound_id = 0x2a;
+        } else {
+            sound_id = 0x15;
+        }
+        play_sound(sound_id);
+        enter_game_mode(0x33);
+    }
+    dispatch_move_step();
+    return;
+}
+
+/*
+ * p1_begin_walk_right — 1000:1f03
+ * --------------------------------------------------------------------------
+ * Begin rightward walk: game_mode=1, load move script 203b:140c (4 steps),
+ * facing_left=9, step_idx=9, save cell, apply contact action 0x16, dispatch step.
+ *
+ * RECONSTRUCTION FIDELITY: the decomp writes the far script pointer field-by-field
+ * (p1_move_script._0_2_ = 0x140c; ._2_2_ = 0x203b).  6a models p1_move_script as a
+ * `u16 __far *`, so we rebuild it with MK_FP(seg, off) — same stored value.
+ * Note facing_left/step_idx are set to 9 (the engine's literal), not 0/1.
+ */
+void p1_begin_walk_right(void)
+{
+    game_mode = 1;
+    p1_move_script = (u16 __far *)MK_FP(0x203b, 0x140c);
+    p1_move_steps_left = 4;
+    p1_facing_left = 9;
+    p1_move_step_idx = 9;
+    p1_cell_prev = p1_cell;
+    apply_contact_action(0x16);
+    dispatch_move_step();
+    return;
+}
+
+/*
+ * p1_begin_walk_left — 1000:1f7f
+ * --------------------------------------------------------------------------
+ * Begin leftward walk: game_mode=2, load move script 203b:1460 (4 steps),
+ * facing_left=0, step_idx=9, prev cell = cell-1, apply contact action 0x16,
+ * dispatch step.  (Same far-ptr fidelity note as p1_begin_walk_right.)
+ */
+void p1_begin_walk_left(void)
+{
+    game_mode = 2;
+    p1_move_script = (u16 __far *)MK_FP(0x203b, 0x1460);
+    p1_move_steps_left = 4;
+    p1_move_step_idx = 9;
+    p1_facing_left = 0;
+    p1_cell_prev = (u8)(p1_cell - 1);
+    apply_contact_action(0x16);
+    dispatch_move_step();
+    return;
+}
+
+/*
+ * move_left — 1000:2634
+ * --------------------------------------------------------------------------
+ * Resolve a one-cell left move.  Clears contact, plays the action sound; at step 0
+ * forces contact 0x1f / mode 0x12, else decrements the cell, resolves the
+ * collision via contact_action_tbl_left[contact_code]; for blocked code 1 probes
+ * teleport tile 0x0b (mode 0x16 vs 1).  Enters the resolved mode + dispatches.
+ *
+ * read_tile_layer_contact / read_tile_at_cell are tile leaves (→ T6c).
+ */
+void move_left(void)
+{
+    u8 mode;
+    u8 resolved_mode;
+
+    p1_contact_code = 0;
+    play_action_sound();
+    if (move_step_count == 0) {
+        p1_contact_code = 0x1f;
+        mode = 0x12;
+    } else {
+        p1_cell_prev = (u8)(p1_cell + 0xff);                 /* cell - 1 */
+        read_tile_layer_contact(p1_cell_prev);
+        resolved_mode = contact_action_tbl_left[p1_contact_code];
+        mode = resolved_mode;
+        if (resolved_mode == 1) {
+            read_tile_at_cell(p1_cell_prev);
+            if (p1_current_tile == 0x0b) {
+                mode = 0x16;
+            } else {
+                mode = 1;
+            }
+        }
+    }
+    enter_game_mode(mode);
+    dispatch_move_step();
+    return;
+}
+
+/*
+ * move_right — 1000:26a1
+ * --------------------------------------------------------------------------
+ * Resolve a one-cell right move.  At step 7 forces contact 0x1f / mode 0x13, else
+ * advances the cell, resolves via collision_mode_table_right[contact_code]; for
+ * blocked code 2 probes teleport tile 0x0b at cell+1 (mode 0x17 vs 2).  Enters the
+ * resolved mode + dispatches.  Tile leaves → T6c.
+ */
+void move_right(void)
+{
+    u8 mode;
+    u8 resolved_mode;
+
+    p1_contact_code = 0;
+    play_action_sound();
+    if (move_step_count == 7) {
+        p1_contact_code = 0x1f;
+        mode = 0x13;
+    } else {
+        p1_cell_prev = p1_cell;
+        read_tile_layer_contact(p1_cell);
+        resolved_mode = collision_mode_table_right[p1_contact_code];
+        mode = resolved_mode;
+        if (resolved_mode == 2) {
+            read_tile_at_cell((u8)(p1_cell + 1));
+            if (p1_current_tile == 0x0b) {
+                mode = 0x17;
+            } else {
+                mode = 2;
+            }
+        }
+    }
+    enter_game_mode(mode);
+    dispatch_move_step();
+    return;
+}
+
+/*
+ * move_settle — 1000:27de   (also dispatched by p1_movement_dispatch on override)
+ * --------------------------------------------------------------------------
+ * Clears the queued action + override, sets tile_below_player=0xb, then on pending
+ * action 0x11 enters mode 0x2f else lands (land_on_tile_below → T6c); dispatches.
+ */
+void move_settle(void)
+{
+    p1_queued_action_code = 0;
+    move_override = 0;
+    tile_below_player = 0x0b;
+    if (p1_pending_action == 0x11) {
+        enter_game_mode(0x2f);
+    } else {
+        land_on_tile_below();
+    }
+    dispatch_move_step();
+    return;
+}
+
+/*
+ * enter_mode_04_fall — 1000:28e0
+ * --------------------------------------------------------------------------
+ * Enter game mode 4 (fall) and dispatch the first move step.
+ */
+void enter_mode_04_fall(void)
+{
+    enter_game_mode(4);
+    dispatch_move_step();
+    return;
+}
+
+/*
+ * enter_mode_1c_walk — 1000:4305
+ * --------------------------------------------------------------------------
+ * Set game_mode=0x1c and play the default walk animation (play_walk_anim_default
+ * @ 1000:4361 → T6c).
+ */
+void enter_mode_1c_walk(void)
+{
+    game_mode = 0x1c;
+    play_walk_anim_default();
+    return;
+}
+
+/*
+ * move_input_tick — 1000:463d
+ * --------------------------------------------------------------------------
+ * Per-frame throttle: every 3rd call clears move_locked and runs handle_move_input
+ * (movement is processed once per 3 frames).
+ *
+ * RECONSTRUCTION FIDELITY: move_locked here doubles as the 0..2 frame counter (the
+ * engine reuses the move_locked byte); that is the original's behaviour, ported
+ * verbatim.
+ */
+void move_input_tick(void)
+{
+    move_locked = (u8)(move_locked + 1);
+    if (move_locked == 3) {
+        move_locked = 0;
+        handle_move_input();
+    }
+    return;
+}
+
+/*
+ * do_move_with_sound — 1000:42d9   (game_mode 0x2d move — seen latched in trace)
+ * --------------------------------------------------------------------------
+ * Play the move sound (0xd if sound_device_state==4 else 3), enter mode 0x2d,
+ * dispatch the move step.
+ */
+void do_move_with_sound(void)
+{
+    u8 sound_id;
+
+    if (sound_device_state == 4) {
+        sound_id = 0x0d;
+    } else {
+        sound_id = 3;
+    }
+    play_sound(sound_id);
+    enter_game_mode(0x2d);
+    dispatch_move_step();
+    return;
+}
+
+/*
+ * move_down — 1000:4747
+ * --------------------------------------------------------------------------
+ * Pick a move action from the tile below the player (tilemap[cell-8] indexed into
+ * the action table at 0x374e); if none, fall back to a randomized down-direction
+ * action keyed off rng_frame; then p1_begin_move(action).
+ *
+ * RECONSTRUCTION FIDELITY: the engine reads the tile-below action through two raw
+ * near tables — `tilemap[cell-8]` (the level tilemap, a tile leaf → T6c) and the
+ * fixed action LUT at DGROUP 0x374e.  The tilemap read is kept via the
+ * forward-declared `tilemap` far pointer; the 0x374e LUT is a constant table not
+ * yet reconstructed, so it is read through a forward-declared extern blob
+ * (`down_action_lut` → T6c).  Control flow + the rng_frame thresholds are 1:1.
+ */
+void move_down(void)
+{
+    u8 move_action;
+    u8 tile_below;
+
+    if (p1_cell < 8) {
+        move_action = 0;
+    } else {
+        tile_below = tilemap[(u16)p1_cell - 8];
+        move_action = down_action_lut[tile_below];
+    }
+    if (move_action == 0) {
+        if (rng_frame < 0xec) {
+            if (rng_frame < 0xd8) {
+                if (rng_frame < 0xc4) {
+                    if (0xaf < rng_frame) {
+                        move_action = 0x3f;
+                    }
+                } else {
+                    move_action = 0x3e;
+                }
+            } else {
+                move_action = 0x3d;
+            }
+        } else {
+            move_action = 0x3c;
+        }
+    }
+    p1_begin_move(move_action);
+    return;
+}
+
+/*
+ * handle_move_input — 1000:2965   (the input→player move entry deferred from T5)
+ * --------------------------------------------------------------------------
+ * Final left/right/down dispatch from idle: left(4)→p1_move_left; right(8)→
+ * p1_move_right; else branch on the pending tile action — 0x0a→p1_handle_move_input,
+ * 0x0f→FUN_1000_4802, else check_tile_below_ladder_or_land.  All of the called
+ * leaves READ the tilemap to resolve the move → Task 6c.
+ */
+void handle_move_input(void)
+{
+    if ((input_state & 4) == 0) {
+        if ((input_state & 8) == 0) {
+            if (p1_pending_action == 0x0a) {
+                p1_handle_move_input();
+            } else if (p1_pending_action == 0x0f) {
+                FUN_1000_4802();
+            } else {
+                check_tile_below_ladder_or_land();
+            }
+        } else {
+            p1_move_right();
+        }
+    } else {
+        p1_move_left();
+    }
     return;
 }

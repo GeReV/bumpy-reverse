@@ -87,27 +87,121 @@ extern u8 input_state;
  *  - gamemode_* handlers                   : the per-mode movement behaviours
  */
 
-/* Jump table: 64 near function pointers indexed by game_mode (DGROUP 0x7ca). */
+/* Jump table: 64 near function pointers indexed by game_mode (DGROUP 0x7ca).
+   DEFINED in player.c (Task 6b) — its 64 real static entries dumped from the
+   unpacked image; see player.c for the index->handler map. */
 extern void (*game_mode_handlers[64])(void);
 
 /* 2D move-step sub-dispatch table (DGROUP 0x43c0).  Per-mode stride is 0x22
    BYTES (0x11 word entries).  Modeled as a byte blob; dispatch_move_step computes
-   the [mode][step_idx] near-pointer with the engine's exact stride arithmetic. */
+   the [mode][step_idx] near-pointer with the engine's exact stride arithmetic.
+   DEFINED in player.c (Task 6b) — real static bytes dumped from the image. */
 extern u8 move_step_dispatch_tbl[];
 
 /* mode_script_tbl (DGROUP 0x2252): far-ptr (off+seg) per game_mode to its
    [anim,dx,dy] move script.  4 bytes per entry.  Modeled as a byte blob; the
-   pointer is reconstructed in enter_game_mode exactly as the engine does. */
+   pointer is reconstructed in enter_game_mode exactly as the engine does.
+   Still forward-declared (its real contents are populated elsewhere; not Task 6b). */
 extern u8 mode_script_tbl[];
 
-/* Settle/override handler dispatched by p1_movement_dispatch (1000:27de). */
-extern void move_settle(void);
-
-/* ── The four ported spine functions ──────────────────────────────────────── */
+/* ── The four ported spine functions (Task 6a) ────────────────────────────── */
 
 char p1_step_scripted_move(void);   /* 1000:13df */
 void enter_game_mode(u8 mode);      /* 1000:4263 */
 void p1_movement_dispatch(void);    /* 1000:1e02 */
 void dispatch_move_step(void);      /* 1000:238e */
+
+/* ══ TASK 6b — game-mode handler state machine ════════════════════════════════
+ *
+ * The minimal level-1 idle/walk/start/move handler set (slice_model.md §4.2)
+ * that game_mode_handlers dispatches to, ported 1:1 from the Ghidra decomp.
+ * Each cites its engine address.  See player.c for bodies.
+ */
+
+void gamemode_default_idle(void);   /* 1000:28f9  mode 0/default (idle) */
+void gamemode_21_start(void);       /* 1000:1e5e  mode 0x21 (start/launch right) */
+void gamemode_22(void);             /* 1000:1e90  mode 0x22 (start/launch left)  */
+void gamemode_23_walk(void);        /* 1000:1ec2  mode 0x23 (idle/walk-right tick) */
+void gamemode_24_walk(void);        /* 1000:1f3e  mode 0x24 (idle/walk-left tick)  */
+void gamemode_03_move(void);        /* 1000:23b6  mode 0x03/0x0f (mid-move tick) */
+void gamemode_25_contact(void);     /* 1000:2138  mode 0x25 (left-walk contact)  */
+void gamemode_26_contact(void);     /* 1000:21e7  mode 0x26 (right-walk contact) */
+void p1_begin_walk_right(void);     /* 1000:1f03  begin rightward walk */
+void p1_begin_walk_left(void);      /* 1000:1f7f  begin leftward walk  */
+void move_left(void);               /* 1000:2634  resolve left-cell move  */
+void move_right(void);              /* 1000:26a1  resolve right-cell move */
+void move_settle(void);             /* 1000:27de  settle/land (also p1_movement_dispatch override) */
+void enter_mode_04_fall(void);      /* 1000:28e0  enter mode 4 (fall) + dispatch */
+void enter_mode_1c_walk(void);      /* 1000:4305  enter mode 0x1c + walk anim */
+void move_input_tick(void);         /* 1000:463d  3-frame move throttle */
+void do_move_with_sound(void);      /* 1000:42d9  mode 0x2d move + sound */
+void move_down(void);               /* 1000:4747  move down (tile-below action) */
+void handle_move_input(void);       /* 1000:2965  final left/right/down dispatch */
+
+/* ── DGROUP globals owned by this module (Task 6b state machine) ─────────────
+ * These are the game-state bytes the handlers read/write.  Addresses are the
+ * Ghidra symbol addresses; several are DAT_/unnamed in the decomp and named
+ * here for the port.  player.c is an unlinked TU this task, so these are plain
+ * module-local externs (no linkage dependency on the rest of src/). */
+
+extern u8  p1_contact_code;     /* contact/landing code resolved per move */
+extern u8  move_step_count;     /* jump_step_counter — steps in current move seq */
+extern u8  p1_jump_move_ticks;  /* jump/jet tick flag consulted by the idle handler */
+extern u8  p1_pending_action;   /* pending tile/move action (from p1_read_tile_under) */
+extern u8  rng_frame;           /* per-frame RNG byte (move_down random-dir branch) */
+extern u8  p1_cell;             /* 203b:0x856e — P1 grid cell (read by handlers) */
+extern u8  p1_cell_prev;        /* saved previous cell */
+extern u8  tile_below_player;   /* tile under player (set by move_settle = 0xb) */
+extern u8  p1_current_tile;     /* tile probed by move_left/right teleport check */
+extern s16 sound_device_state;  /* DGROUP 0x689c (ram0x00026c4c): -0x8000 == no sound; 4 == OPL/charger */
+
+/* ══ BOUNDARY — TILE-COLLISION LEAVES + OUT-OF-SCOPE HANDLERS (→ Task 6c) ══════
+ *
+ * Forward-declared only.  These are the tile-collision / deeper-mode leaves the
+ * Task-6b handlers call; Task 6c ports them (the tilemap-collision layer).
+ * player.c is NOT linked into BUMPY.EXE this task, so unresolved externs are fine.
+ */
+
+/* Tile-collision LEAVES that READ the level tilemap to resolve a cell (→ T6c). */
+extern u8 __far *tilemap;                  /* level tilemap far pointer */
+extern void read_tile_layer_contact(u8 cell);   /* 1000:6bd4 — resolve cell -> p1_contact_code */
+extern void read_tile_at_cell(u8 cell);          /* probe tile at cell -> p1_current_tile */
+extern u8   contact_transition_tbl[];      /* 203b:0x42f6 — [p1_contact_code] -> next mode (gamemode_26 right) */
+extern u8   contact_transition_tbl_b[];    /* 203b:0x42d6 — [p1_contact_code] -> next mode (gamemode_25 left) */
+extern u8   contact_action_tbl_left[];     /* 203b:0x4256 — [p1_contact_code] -> resolved mode (move_left) */
+extern u8   collision_mode_table_right[];  /* 203b:0x4276 — [p1_contact_code] -> resolved mode (move_right) */
+extern void p1_enter_walk_right_mode(void);
+extern void p1_enter_walk_left_mode(void);
+extern void p1_handle_move_input(void);          /* 1000: handle_move_input pending==0x0a leaf */
+extern void p1_move_right(void);                 /* tilemap move-right leaf */
+extern void p1_move_left(void);                  /* tilemap move-left leaf  */
+extern void check_tile_below_ladder_or_land(void);   /* tilemap ladder/land probe */
+extern void p1_begin_move(u8 action);            /* 1000: begins move from action code */
+extern void land_on_tile_below(void);            /* 1000:2810 — landing resolution leaf */
+extern u8   down_action_lut[];                   /* 203b:0x374e — tile->down-action LUT (move_down) */
+
+/* Other leaves the handlers call (sound/anim helpers; not tile-collision). */
+extern void play_sound(u8 sound_id);             /* 1000:6e11 */
+extern void play_action_sound(void);             /* move_left/right action sound */
+extern void apply_contact_action(u8 code);       /* p1_begin_walk_* contact-action+sound */
+extern void play_walk_anim_default(void);        /* 1000:4361 — enter_mode_1c_walk anim */
+extern void step_walk_anim(u8 anim_base, u8 period, u16 frame_off, u16 frame_seg); /* 1000:495c */
+extern void FUN_1000_4802(void);                 /* handle_move_input pending==0x0f leaf */
+
+/* OUT-OF-SCOPE handler-table targets (modes outside the §4.2 slice set).  These
+   are referenced by game_mode_handlers[] but their bodies are deferred to T6c
+   (bounce / jump / teleport / fall-step / physics-freeze / die / pvp modes). */
+extern void move_walk_right_anim_step(void);     /* 1000:2423  idx 0x05 */
+extern void enter_mode_0b_jump_start(void);      /* 1000:2470  idx 0x0a */
+extern void move_anim_step_to_mode0c(void);      /* 1000:248e  idx 0x0b */
+extern void move_step_check_walkable(void);      /* 1000:24d7  idx 0x0c */
+extern void move_step_dispatch_input(void);      /* 1000:250a  idx 0x0d */
+extern void teleport_to_next_exit_tile(void);    /* 1000:25ad  idx 0x0e */
+extern void FUN_1000_22b0(void);                 /* 1000:22b0  idx 0x10, 0x2c (-> run_physics_settle) */
+extern void p1_input_dispatch_bit10(void);       /* 1000:4344  idx 0x1c */
+extern void FUN_1000_4437(void);                 /* 1000:4437  idx 0x1d..0x20 */
+extern void FUN_1000_22c1(void);                 /* 1000:22c1  idx 0x2d (-> run_physics_settle) */
+extern void advance_physics_freeze(void);        /* 1000:22d2  idx 0x2e */
+extern void FUN_1000_1e3d(void);                 /* 1000:1e3d  idx 0x30 */
 
 #endif /* PLAYER_H */
