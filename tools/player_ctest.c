@@ -75,13 +75,14 @@ void apply_contact_action(u8 c) { (void)c; n_apply_contact_action++; }
 void play_walk_anim_default(void) { n_play_walk_anim_default++; }
 void step_walk_anim(u8 a, u8 p, u16 fo, u16 fs) { (void)a;(void)p;(void)fo;(void)fs; n_step_walk_anim++; }
 void FUN_1000_4802(void) { n_fun_4802++; }
-/* Phase-2 T3: land_on_tile_below / check_tile_below_ladder_or_land are now DEFINED
- * in player.c — no longer stubbed here.  The callees they reach that remain
- * UNPORTED (the FX allocator + the two move-step substate delegates → T4) are
- * stubbed instead, so player.c links. */
+/* Phase-2 T3: land_on_tile_below / check_tile_below_ladder_or_land are DEFINED in
+ * player.c.  Phase-2 T4: the move-step substates + their two delegates
+ * (p1_exec_pending_action / move_down_step) and the settle wrappers
+ * (run_physics_settle_wrap / FUN_1000_22b0) are now DEFINED in player.c too — no
+ * longer stubbed here.  Only the FX allocator remains a stub. */
 void apply_cell_animation(u8 fx) { (void)fx; }
-void p1_exec_pending_action(void) { }
-void move_down_step(void) { }
+/* run_physics_settle (player.c) reads these cross-module DGROUP bytes (game.c). */
+u8 session_continue_flag, frame_abort_flag, settle_countdown;
 /* NOTE: move_down, p1_move_left/right, p1_handle_move_input, read_tile_*,
  * p1_enter_walk_*_mode, p1_begin_move, exec_move_action and the *_step_resolve /
  * *_walk_contact leaves are now SCOPE functions DEFINED in player.c (6c) — NOT
@@ -94,10 +95,8 @@ void move_anim_step_to_mode0c(void) { }
 void move_step_check_walkable(void) { }
 void move_step_dispatch_input(void) { }
 void teleport_to_next_exit_tile(void) { }
-void FUN_1000_22b0(void) { }
 void p1_input_dispatch_bit10(void) { }
 void FUN_1000_4437(void) { }
-void FUN_1000_22c1(void) { }
 void advance_physics_freeze(void) { }
 void FUN_1000_1e3d(void) { }
 

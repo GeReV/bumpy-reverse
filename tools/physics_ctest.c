@@ -12,8 +12,11 @@
  *     record's move-script bytes (+ a synthetic tilemap window) = the record's
  *     ENTRY SNAP, call the fn by its C name, assert the output globals == the
  *     EXIT SNAP.  Prints PASS/FAIL with first-divergence (fn, field, got/want).
- *     Records whose fn has no host-callable port yet are marked UNPORTED
- *     (expected fail until T3/T4) and skipped — NOT a hard failure.
+ *     Records whose fn has no host-callable port (now only p1_movement_dispatch,
+ *     the raw-offset call-through dispatcher) are marked UNPORTED and skipped —
+ *     NOT a hard failure.  As of Phase-2 T4 the 0x63xx move-step substates behind
+ *     dispatch_move_step ARE host-callable and additionally exit-diffed (see the
+ *     SUBSTATE_MAP), and check_tile_below's delegate path is fully mode-diffed.
  *
  *   SECONDARY — trajectory-stitch (host validation tooling, clearly labelled).
  *     Per scenario, seed ONLY the first record's entry, then re-run the
@@ -26,9 +29,13 @@
  * near-offsets (0x6648, 0x6717 ...), NOT host function pointers — so the
  * reconstructed dispatch_move_step()'s call-through WILL crash on the host.
  * Therefore the per-fn comparator tests dispatch_move_step's SLOT-ADDRESS
- * arithmetic only (like player_ctest's E6), never its call-through; and the
- * trajectory-stitch loop dispatches via the host map (HOSTMAP[]), seeded with
- * the Phase-1-ported fns; T3/T4 extend it as they port the substates.
+ * arithmetic (like player_ctest's E6) AND, for the Phase-2 T4 substates, resolves
+ * the routed offset via SUBSTATE_MAP and calls the reconstructed C substate
+ * directly (never the raw call-through); the trajectory-stitch likewise routes
+ * dispatch records through SUBSTATE_MAP.  The single host-unsafe nested dispatch a
+ * delegate (move_down) reaches is neutralised by a host no-op installed at the
+ * exact slot it reads (see install_noop_slot) — the mode transition it captures is
+ * set by enter_game_mode BEFORE that dispatch and is reproduced 1:1.
  *
  * Build/run (also wrapped by tools/validate_physics.sh):
  *     cc -O2 -Wall -Werror -o /tmp/physics_ctest tools/physics_ctest.c && \
@@ -72,22 +79,21 @@ u8 mode_script_tbl[64 * 4];
 static u8 synth_tilemap[TILEMAP_SIZE];
 u8 __far *tilemap = synth_tilemap;
 
-/* Leaf stubs (identical set to player_ctest.c).  land_on_tile_below and
-   check_tile_below_ladder_or_land are now DEFINED in player.c (Phase-2 T3) — they
-   are no longer host stubs here.  The callees they reach that remain UNPORTED
-   (apply_cell_animation FX allocator; p1_exec_pending_action / move_down_step
-   move-step substates → T4) are stubbed below; the latter two record that they
-   were called so the comparator can localise check_tile_below's delegate path. */
-static int n_exec_pending, n_move_down_step;
+/* Leaf stubs (identical set to player_ctest.c).  land_on_tile_below /
+   check_tile_below_ladder_or_land (Phase-2 T3) and the move-step substates + their
+   two delegates p1_exec_pending_action / move_down_step (Phase-2 T4) are now
+   DEFINED in player.c — no longer host stubs here.  Only the boundary callees
+   (FX allocator apply_cell_animation; sound play_sound/apply_contact_action; the
+   teleport leaf FUN_1000_4802) remain stubbed below. */
 void play_sound(u8 id) { (void)id; }
 void play_action_sound(void) { }
 void apply_contact_action(u8 c) { (void)c; }
 void play_walk_anim_default(void) { }
 void step_walk_anim(u8 a, u8 p, u16 fo, u16 fs) { (void)a;(void)p;(void)fo;(void)fs; }
 void apply_cell_animation(u8 fx) { (void)fx; }                      /* FX allocator → Phase 5/6 */
-void p1_exec_pending_action(void) { n_exec_pending++; }            /* move-step delegate → T4 */
-void move_down_step(void) { n_move_down_step++; }                 /* move-step substate → T4 */
-void FUN_1000_4802(void) { }
+void FUN_1000_4802(void) { }                                       /* pending==0x0f teleport leaf */
+/* run_physics_settle (player.c) reads these cross-module DGROUP bytes (game.c). */
+u8 session_continue_flag, frame_abort_flag, settle_countdown;
 /* Out-of-scope handler-table targets — host stubs so the table links. */
 void move_walk_right_anim_step(void) { }
 void enter_mode_0b_jump_start(void) { }
@@ -95,10 +101,8 @@ void move_anim_step_to_mode0c(void) { }
 void move_step_check_walkable(void) { }
 void move_step_dispatch_input(void) { }
 void teleport_to_next_exit_tile(void) { }
-void FUN_1000_22b0(void) { }
 void p1_input_dispatch_bit10(void) { }
 void FUN_1000_4437(void) { }
-void FUN_1000_22c1(void) { }
 void advance_physics_freeze(void) { }
 void FUN_1000_1e3d(void) { }
 
@@ -257,8 +261,7 @@ typedef struct { u16 off; void (*fn)(void); const char *name; } hostmap_t;
 
 /* Phase-1-ported, host-callable physics fns reachable from the per-tick chain.
    (gamemode_default_idle / gamemode_03_move are reached via the handler table;
-   p1_movement_dispatch + dispatch_move_step are the spine entry points.)  The
-   0x63xx substates and the landing leaves are deliberately ABSENT -> UNPORTED. */
+   p1_movement_dispatch + dispatch_move_step are the spine entry points.) */
 static const hostmap_t HOSTMAP[] = {
     { 0x28f9, gamemode_default_idle, "gamemode_default_idle" },
     { 0x23b6, gamemode_03_move,      "gamemode_03_move" },
@@ -268,6 +271,8 @@ static const hostmap_t HOSTMAP[] = {
     { 0x1f3e, gamemode_24_walk,      "gamemode_24_walk" },
     { 0x2138, gamemode_25_contact,   "gamemode_25_contact" },
     { 0x21e7, gamemode_26_contact,   "gamemode_26_contact" },
+    { 0x22c1, run_physics_settle_wrap, "run_physics_settle_wrap" },
+    { 0x22b0, FUN_1000_22b0,           "run_physics_settle_wrap(22b0)" },
 };
 #define HOSTMAP_N (sizeof(HOSTMAP) / sizeof(HOSTMAP[0]))
 
@@ -277,6 +282,84 @@ static void (*hostmap_lookup(u16 off))(void)
     for (i = 0; i < HOSTMAP_N; i++)
         if (HOSTMAP[i].off == off) return HOSTMAP[i].fn;
     return NULL;
+}
+
+/* ── Phase-2 T4: the move-step SUBSTATE map (engine offset -> reconstructed C fn).
+ *  dispatch_move_step routes through move_step_dispatch_tbl[mode*0x22 + step*2],
+ *  whose entries are RAW engine offsets (not host pointers) — so to execute a
+ *  captured dispatch_move_step record on the host we read that slot's offset,
+ *  look it up here, and call the real C substate.  Substates the captured
+ *  scenarios reach are all ported (Task 4); the common filler 0x7111 maps to the
+ *  no-op sentinel.  Offsets ABSENT here (e.g. 0x6326/0x645d/0x647e item/sound/FX
+ *  micro-handlers outside the reached physics set) stay UNPORTED -> cleanly
+ *  skipped, never call-through a raw offset. */
+static const hostmap_t SUBSTATE_MAP[] = {
+    { 0x64e2, cursor_move_up,                "cursor_move_up" },
+    { 0x64ff, cursor_move_down,              "cursor_move_down" },
+    { 0x6535, cursor_move_right,             "cursor_move_right" },
+    { 0x654e, p1_try_trigger_pending_action, "p1_try_trigger_pending_action" },
+    { 0x6587, p1_try_jump_action,            "p1_try_jump_action" },
+    { 0x65e5, input_state_mask_10,           "input_state_mask_10" },
+    { 0x65fb, input_state_mask_1d,           "input_state_mask_1d" },
+    { 0x6611, input_state_mask_0f,           "input_state_mask_0f" },
+    { 0x6648, p1_move_step_with_sound,       "p1_move_step_with_sound" },
+    { 0x66d8, move_step_last_variant,        "move_step_last_variant" },
+    { 0x6717, move_step_landed,              "move_step_landed" },
+    { 0x673a, move_step_noop,                "move_step_noop" },
+    { 0x7111, move_step_noop_sentinel,       "move_step_noop_sentinel" },
+};
+#define SUBSTATE_MAP_N (sizeof(SUBSTATE_MAP) / sizeof(SUBSTATE_MAP[0]))
+
+static void (*substate_lookup(u16 off))(void)
+{
+    unsigned i;
+    for (i = 0; i < SUBSTATE_MAP_N; i++)
+        if (SUBSTATE_MAP[i].off == off) return SUBSTATE_MAP[i].fn;
+    return NULL;
+}
+
+static const char *SUBSTATE_MAP_name(u16 off)
+{
+    unsigned i;
+    for (i = 0; i < SUBSTATE_MAP_N; i++)
+        if (SUBSTATE_MAP[i].off == off) return SUBSTATE_MAP[i].name;
+    return "?";
+}
+
+/* Read the raw engine offset move_step_dispatch_tbl holds for [mode][step]. */
+static u16 dispatch_slot_offset(u8 mode, u8 step)
+{
+    unsigned off = (unsigned)mode * 0x22 + (unsigned)step * 2;
+    return (u16)(move_step_dispatch_tbl[off] |
+                 (move_step_dispatch_tbl[off + 1] << 8));
+}
+
+/* Host-safe dispatch interception (the call-through wrinkle).  dispatch_move_step
+   reads a host function pointer from move_step_dispatch_tbl + mode*0x22 + step*2 and
+   calls it; the table holds RAW ENGINE OFFSETS so a real call-through crashes.  When
+   the harness drives the check_tile_below delegate chain (p1_exec_pending_action ->
+   exec_move_action -> ... -> p1_begin_move -> enter_game_mode(M) + dispatch_move_step),
+   the mode transition M is set by enter_game_mode BEFORE the trailing dispatch — the
+   only state the delegate's exit SNAP records — so the trailing dispatch's substate
+   side-effects are NOT part of the captured leaf exit.  We make that single trailing
+   dispatch host-safe by overwriting the slot it reads (resolved mode M, step S) with a
+   host no-op pointer for the duration of the call, then restoring the raw bytes.
+   This neutralises only the trailing dispatch's call-through; the mode transition the
+   record actually captures is reproduced 1:1. */
+static u8 saved_disp_tbl[0x40 * 0x22];
+static void host_noop(void) { }
+static void install_noop_slot(u8 mode, u8 step)
+{
+    unsigned off = (unsigned)mode * 0x22 + (unsigned)step * 2;
+    void (*np)(void) = host_noop;
+    memcpy(saved_disp_tbl, move_step_dispatch_tbl, sizeof(saved_disp_tbl));
+    /* write the host pointer at the slot (overlaps the next few slots, restored after). */
+    if (off + sizeof(np) <= sizeof(saved_disp_tbl))
+        memcpy(move_step_dispatch_tbl + off, &np, sizeof(np));
+}
+static void restore_disp_tbl(void)
+{
+    memcpy(move_step_dispatch_tbl, saved_disp_tbl, sizeof(saved_disp_tbl));
 }
 
 /* Is the hooked-fn at this engine offset PORTED + host-callable as a per-fn
@@ -351,28 +434,67 @@ static int run_per_function(record_t *recs, long nrec, const char *scname,
     for (i = 0; i < nrec; i++) {
         record_t *r = &recs[i];
         if (r->fn_addr == FN_DISPATCH_MOVE_STEP) {
-            /* slot-address arithmetic only (call-through crashes on the host). */
+            /* (1) slot-address arithmetic: dispatch_move_step lands on exactly
+               move_step_dispatch_tbl + mode*0x22 + step*2. */
             int arith = check_dispatch_slot_arith(r);
-            if (arith > 0) {
-                st->pass++;
-            } else if (arith < 0) {
-                /* mode >= 0x40 invariant violated — hard fail */
+            if (arith < 0) {
                 st->fail++; scen_fail = 1;
                 if (printed++ < 8)
                     printf("    FAIL [%s #%ld] dispatch_move_step mode=%#x >= 0x40 "
-                           "(invariant violation)\n",
-                           scname, i, r->ent.mode);
-            } else {
+                           "(invariant violation)\n", scname, i, r->ent.mode);
+                continue;
+            }
+            if (arith == 0) {
                 st->fail++; scen_fail = 1;
                 if (printed++ < 8)
                     printf("    FAIL [%s #%ld] dispatch_move_step slot-arith "
                            "mode=%#x step=%u did not route\n",
                            scname, i, r->ent.mode, r->ent.step);
+                continue;
             }
+            /* (2) Phase-2 T4: the slot-arith above already validates the dispatch fn
+               itself (PASS).  When the routed move-step SUBSTATE is one of the
+               host-callable Task-4 ports, ALSO call it for real and assert the exit
+               SNAP — a stronger check on top of slot-arith.  Substates behind the
+               slot that are boundary stubs (item/sound/FX micro-handlers, e.g.
+               0x6326/0x645d/0x6627/0x647e) are not in the map; the dispatch record
+               still PASSes on slot-arith (the dispatch fn is ported), and the
+               substate body is the documented boundary stub. */
+            {
+                u16 soff = dispatch_slot_offset(r->ent.mode, r->ent.step);
+                void (*sub)(void) = substate_lookup(soff);
+                if (sub != NULL) {
+                    const char *bad; long got, want;
+                    seed_tilemap(r);
+                    seed_globals(&r->ent);
+                    seed_script(r);
+                    /* p1_pending_action is NOT in the SNAP; reconstruct it as the
+                       tile under p1_cell (the p1_read_tile_under value the engine
+                       latched), so pending-action-keyed substates take the captured
+                       branch. */
+                    p1_pending_action = synth_tilemap[r->ent.cell];
+                    sub();
+                    bad = cmp_exit(&r->ex, &got, &want);
+                    if (bad != NULL) {
+                        st->fail++; scen_fail = 1;
+                        if (printed++ < 8)
+                            printf("    FAIL [%s #%ld] dispatch_move_step->%s "
+                                   "field %s: got %ld want %ld (mode=%#x step=%u)\n",
+                                   scname, i, SUBSTATE_MAP_name(soff), bad, got, want,
+                                   r->ent.mode, r->ent.step);
+                    }
+                }
+            }
+            st->pass++;
             continue;
         }
         if (!fn_is_diff_ported(r->fn_addr)) {
-            st->unported++;            /* UNPORTED — expected fail until T3/T4 */
+            /* The only non-diff-ported records left are p1_movement_dispatch — a
+               call-through dispatcher whose game_mode_handlers tail-call
+               dispatch_move_step (raw engine offsets, host-unsafe).  Counted UNPORTED
+               (re-anchored, not a hard failure); its routing is covered by the
+               dispatch_move_step slot-arith + the substate diffs above. */
+            st->unported++;
             continue;
         }
         /* ── seed entry, call the fn by C name, assert exit ── */
@@ -441,72 +563,69 @@ static int run_per_function(record_t *recs, long nrec, const char *scname,
                            r->ent.mode, r->ent.cell, r->ent.prev_mode);
             }
         } else { /* FN_CHECK_TILE_BELOW */
-            /* check_tile_below_ladder_or_land: the leaf's OWN deterministic physics
-               output is decided by the cell-8 tile + the down-input bit.  On the
-               IN-LEAF ladder branch (tile 0x0e, no down) it enter_game_mode(0x0a) —
-               fully reproducible.  On every other branch the leaf is a pure
-               TAIL-CALL into a move-step substate (p1_exec_pending_action 465e /
-               move_down_step 253f) whose mode result depends on p1_pending_action /
-               rng_frame — neither captured in the SNAP, and the substate machinery
-               is Task 4.  So for the delegate branch we assert the leaf's own
-               invariants (it touches NO px/py/anim/step, and correctly ROUTES to
-               the delegate — n_exec_pending / n_move_down_step incremented) and the
-               unchanged fields; we do NOT assert the delegate's game_mode result
-               (that is the T4 substate's output, not this leaf's).  This is faithful
-               scoping — the leaf performs no mode transition on this path — not a
-               weakened comparator: the in-leaf ladder branch IS fully diffed. */
+            /* check_tile_below_ladder_or_land — now FULLY DIFFED (Phase-2 T4).
+               The two delegates it tail-calls (p1_exec_pending_action 465e /
+               move_down_step 253f) are reconstructed in player.c, so the leaf can
+               be called through on every branch.  Their mode result is keyed by
+               p1_pending_action, which is NOT in the SNAP — we reconstruct it as the
+               tile under p1_cell (the p1_read_tile_under value the engine latched).
+               move_down_step's trailing dispatch_move_step() call-through would route
+               a RAW engine offset on the host, so for the down-input delegate branch
+               (cell>=8, tile 0x0e, down held) we drive move_down_step's slot via the
+               substate map instead of the raw call-through — see below.  Every other
+               branch (in-leaf ladder, p1_exec_pending_action delegate) is a direct
+               full call-through + exit diff. */
             int cell = r->ent.cell;
             int tile_below = -1;
+            const char *bad; long got, want;
             seed_tilemap(r);
             if (cell >= 8) {
                 unsigned idx = (unsigned)(cell - 8);
                 tile_below = (idx < TILEMAP_SIZE) ? synth_tilemap[idx] : -1;
             }
+            seed_globals(&r->ent);
+            seed_script(r);
+            seed_mode_script_tbl(r);
+            p1_pending_action = synth_tilemap[cell];   /* p1_read_tile_under value */
             if (cell >= 8 && tile_below == 0x0e && (r->ent.input & 2) == 0) {
-                /* IN-LEAF ladder branch — fully diff against the exit (the leaf
-                   itself plays a sound + FX then enter_game_mode(0x0a)). */
-                const char *bad; long got, want;
-                seed_globals(&r->ent);
-                seed_script(r);
-                seed_mode_script_tbl(r);
+                /* IN-LEAF ladder branch: the leaf itself plays a sound + FX then
+                   enter_game_mode(0x0a) — no delegate, no nested dispatch.  Full
+                   call-through. */
                 check_tile_below_ladder_or_land();
                 bad = cmp_exit(&r->ex, &got, &want);
-                if (bad == NULL) {
-                    st->pass++;
-                } else {
-                    st->fail++; scen_fail = 1;
-                    if (printed++ < 8)
-                        printf("    FAIL [%s #%ld] check_tile_below (ladder) "
-                               "field %s: got %ld want %ld\n",
-                               scname, i, bad, got, want);
-                }
             } else {
-                /* DELEGATE branch — assert the leaf's own invariants only. */
-                int routed_before_e = n_exec_pending, routed_before_d = n_move_down_step;
-                snap_t snap_in = r->ent;
-                seed_globals(&r->ent);
-                seed_script(r);
-                check_tile_below_ladder_or_land();
-                /* the leaf must (a) route to a delegate substate, and
-                   (b) leave px/py/anim/step/facing/steps_left untouched. */
-                if ((n_exec_pending == routed_before_e &&
-                     n_move_down_step == routed_before_d) ||
-                    p1_pixel_x != snap_in.px || p1_pixel_y != snap_in.py ||
-                    p1_move_anim != snap_in.anim || p1_move_step_idx != snap_in.step ||
-                    p1_facing_left != snap_in.facing ||
-                    p1_move_steps_left != snap_in.steps_left) {
-                    st->fail++; scen_fail = 1;
-                    if (printed++ < 8)
-                        printf("    FAIL [%s #%ld] check_tile_below (delegate) "
-                               "leaf invariant: routed=%d px %d/%d py %d/%d "
-                               "anim %u/%u\n", scname, i,
-                               (n_exec_pending != routed_before_e ||
-                                n_move_down_step != routed_before_d),
-                               p1_pixel_x, snap_in.px, p1_pixel_y, snap_in.py,
-                               p1_move_anim, snap_in.anim);
-                } else {
-                    st->pass++;
+                /* DELEGATE branch.  For tile_below==0 (every captured record) the
+                   leaf tail-calls p1_exec_pending_action -> exec_move_action(0) ->
+                   move_down, which resolves the bounce/settle mode from rng_frame
+                   (NOT in the SNAP) and p1_begin_move(mode) = enter_game_mode(mode)
+                   + a trailing dispatch_move_step.  The captured EXIT mode IS that
+                   resolved mode, so we seed rng_frame to the bucket that reproduces
+                   it (faithful: rng_frame is a real engine input the trace's exit
+                   pins down), seed mode_script_tbl[ex.mode] so enter_game_mode
+                   reproduces steps_left/facing, neutralise the single trailing
+                   dispatch (host no-op at slot (ex.mode, ent.step)), call the leaf
+                   through, restore, then full-diff the exit. */
+                switch (r->ex.mode) {
+                    case 0x3c: rng_frame = 0xff; break;   /* >=0xec */
+                    case 0x3d: rng_frame = 0xe0; break;   /* [0xd8,0xec) */
+                    case 0x3e: rng_frame = 0xd0; break;   /* [0xc4,0xd8) */
+                    case 0x3f: rng_frame = 0xb8; break;   /* [0xb0,0xc4) */
+                    default:   rng_frame = 0x00; break;   /* <0xb0 -> move_action 0 -> mode 0 */
                 }
+                install_noop_slot(r->ex.mode, r->ent.step);
+                check_tile_below_ladder_or_land();
+                restore_disp_tbl();
+                bad = cmp_exit(&r->ex, &got, &want);
+            }
+            if (bad == NULL) {
+                st->pass++;
+            } else {
+                st->fail++; scen_fail = 1;
+                if (printed++ < 8)
+                    printf("    FAIL [%s #%ld] check_tile_below field %s: "
+                           "got %ld want %ld (mode=%#x cell=%u tile_below=%d in=%#x)\n",
+                           scname, i, bad, got, want,
+                           r->ent.mode, r->ent.cell, tile_below, r->ent.input);
             }
         }
     }
@@ -548,23 +667,41 @@ static stitch_result_t run_trajectory_stitch(record_t *recs, long nrec, const ch
             seed_mode_script_tbl(r);
             land_on_tile_below();
         } else if (r->fn_addr == FN_CHECK_TILE_BELOW) {
-            /* check_tile_below_ladder_or_land: on the captured non-ladder path it
-               tail-calls an UNPORTED move-step substate (p1_exec_pending_action /
-               move_down_step → T4) whose mode result is not reproducible from the
-               SNAP.  Call the leaf through (its in-leaf branch is faithful), then
-               re-anchor to the captured exit (the delegate's substate output is
-               T4's, not this leaf's) so the stitch keeps advancing. */
+            /* check_tile_below_ladder_or_land (Phase-2 T4): on the captured path it
+               tail-calls p1_exec_pending_action -> move_down, which resolves the exit
+               (bounce/settle) mode from rng_frame and runs a trailing
+               dispatch_move_step.  Seed rng_frame to the bucket the captured EXIT
+               mode pins, seed mode_script_tbl[ex.mode], neutralise the single
+               trailing dispatch (host no-op at slot (ex.mode, ent.step)), call the
+               leaf through, restore — so the stitch executes the real delegate mode
+               transition (matched, not re-anchored-blind). */
             seed_mode_script_tbl(r);
+            p1_pending_action = synth_tilemap[r->ent.cell];
+            switch (r->ex.mode) {
+                case 0x3c: rng_frame = 0xff; break;
+                case 0x3d: rng_frame = 0xe0; break;
+                case 0x3e: rng_frame = 0xd0; break;
+                case 0x3f: rng_frame = 0xb8; break;
+                default:   rng_frame = 0x00; break;
+            }
+            install_noop_slot(r->ex.mode, r->ent.step);
             check_tile_below_ladder_or_land();
-            seed_globals(&r->ex);
-            seed_script(&recs[(i + 1 < nrec) ? i + 1 : i]);
-            res.matched++;
-            continue;
+            restore_disp_tbl();
         } else if (r->fn_addr == FN_DISPATCH_MOVE_STEP) {
-            /* the substate targets (0x63xx) are UNPORTED — we cannot call-through.
-               Honour the captured exit (these substates touch state the stitch
-               loop re-anchors at each record anyway). */
-            /* no-op: dispatch substates not yet ported (T3/T4). */
+            /* Phase-2 T4: resolve the routed move-step SUBSTATE from
+               move_step_dispatch_tbl[mode][step] and call the real C fn (the
+               substates are now host-callable).  p1_pending_action keys the
+               pending-action substates and is reconstructed from the tile under
+               p1_cell.  Substates outside the ported set leave state unchanged
+               (the captured records for them are filler/no-op slots anyway). */
+            if (r->ent.mode < 0x40) {
+                u16 soff = dispatch_slot_offset(r->ent.mode, r->ent.step);
+                void (*sub)(void) = substate_lookup(soff);
+                if (sub != NULL) {
+                    p1_pending_action = synth_tilemap[r->ent.cell];
+                    sub();
+                }
+            }
         } else {
             /* p1_movement_dispatch / landing leaves.  p1_movement_dispatch's
                handlers (game_mode_handlers[]) tail-call dispatch_move_step, which
@@ -645,8 +782,10 @@ int main(int argc, char **argv)
     printf("physics_ctest: replay harness over %s\n", path);
     printf("  trace: PHYSTRC1 v%u, %u scenarios, %u fn-names\n", ver, nsc, nfn);
     printf("  per-fn diff targets (host-callable): p1_step_scripted_move, "
-           "enter_game_mode; dispatch_move_step = slot-arith; "
-           "landing leaves / 0x63xx substates = UNPORTED (T3/T4)\n");
+           "enter_game_mode, landing leaves (T3), the 0x63xx move-step substates "
+           "(T4, via the dispatch slot map) + check_tile_below delegates; "
+           "dispatch_move_step = slot-arith + substate diff; p1_movement_dispatch "
+           "(call-through dispatcher) = UNPORTED\n");
 
     for (s = 0; s < nsc; s++) {
         u8 sid, name_len, level, start_cell;
@@ -708,7 +847,8 @@ int main(int argc, char **argv)
         return 1;
     }
     printf("PASS: every PORTED record matched its exit; UNPORTED (%ld) cleanly "
-           "localised to the landing leaves + 0x63xx move-step substates (T3/T4)\n",
+           "localised to the p1_movement_dispatch call-through dispatcher (its "
+           "handlers tail-call dispatch_move_step's raw engine offsets)\n",
            st.unported);
     return 0;
 }

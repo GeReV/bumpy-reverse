@@ -227,11 +227,11 @@ extern u8 land_mode_fx_tbl[0x60]; /* DGROUP 0x76a — [mode,fx] per tile (land_o
 extern u8 land_sound_tbl_opl[0x30]; /* DGROUP 0x266e — landing sound (OPL/charger device) */
 extern u8 land_sound_tbl_std[0x30]; /* DGROUP 0x269e — landing sound (other devices)      */
 
-/* FX/anim-channel allocator + the two move-step delegates the landing leaves reach
- * — OUT OF SCOPE for Task 3 (→ Phase 4/5/6), kept as extern stubs (game_stubs.c). */
+/* FX/anim-channel allocator — OUT OF SCOPE (→ Phase 5/6), kept an extern stub.
+ * The two move-step delegates the landing leaves reach (p1_exec_pending_action /
+ * move_down_step) are now PORTED in player.c (Phase-2 Task 4) — declared in the
+ * Task-4 block below. */
 extern void apply_cell_animation(u8 fx_code);    /* 1000:69aa — anim-channel/FX allocator (→ Phase 5/6) */
-extern void p1_exec_pending_action(void);        /* 1000:465e — pending-action move-step delegate (→ T4) */
-extern void move_down_step(void);                /* 1000:253f — downward move-step substate (→ T4) */
 
 /* Other leaves the handlers call (sound/anim helpers; not tile-collision). */
 extern void play_sound(u8 sound_id);             /* 1000:6e11 */
@@ -250,11 +250,71 @@ extern void move_anim_step_to_mode0c(void);      /* 1000:248e  idx 0x0b */
 extern void move_step_check_walkable(void);      /* 1000:24d7  idx 0x0c */
 extern void move_step_dispatch_input(void);      /* 1000:250a  idx 0x0d */
 extern void teleport_to_next_exit_tile(void);    /* 1000:25ad  idx 0x0e */
-extern void FUN_1000_22b0(void);                 /* 1000:22b0  idx 0x10, 0x2c (-> run_physics_settle) */
 extern void p1_input_dispatch_bit10(void);       /* 1000:4344  idx 0x1c */
 extern void FUN_1000_4437(void);                 /* 1000:4437  idx 0x1d..0x20 */
-extern void FUN_1000_22c1(void);                 /* 1000:22c1  idx 0x2d (-> run_physics_settle) */
 extern void advance_physics_freeze(void);        /* 1000:22d2  idx 0x2e */
 extern void FUN_1000_1e3d(void);                 /* 1000:1e3d  idx 0x30 */
+
+/* ══ PHASE 2, TASK 4 — JUMP / FALL / BOUNCE MOVE-STEP SUBSTATES ════════════════
+ *
+ * The per-step micro-handlers the T1 capture's jump/fall/bounce scenarios reach
+ * (dispatched via move_step_dispatch_tbl), the run_physics_settle handler, and the
+ * two delegates check_tile_below_ladder_or_land tail-calls.  Ported 1:1 in
+ * player.c; each cites its engine address there.  The boundary callees
+ * (apply_cell_animation, play_sound, apply_contact_action, FUN_1000_4802) stay
+ * stubbed with RECONSTRUCTION FIDELITY notes.
+ */
+
+/* DGROUP move-step substate globals (DEFINED in player.c). */
+extern u8 p1_grid_row;            /* 0x855c — cursor row counter */
+extern u8 p1_step_col_count;      /* 0x855e — cursor column counter (move_step_last_variant ==7) */
+extern u8 g_anim_channel_idx;     /* 0x856c — anim-channel index probed by move_step_landed */
+extern u8 level_complete_flag;    /* 0xa1b1 — cleared by move_step_landed on the '[' tile */
+
+/* Pending/contact/sound LUTs (DEFINED dumped-real in player.c). */
+extern u8 tile_followup_action_lut[0x30]; /* 0x4396 */
+extern u8 pending_anim_lut_3cda[0x30];    /* 0x3cda */
+extern u8 pending_anim_lut_3caa[0x30];    /* 0x3caa */
+extern u8 pending_anim_lut_3d0a[0x30];    /* 0x3d0a */
+extern u8 pending_action_lut_36be[0x30];  /* 0x36be */
+extern u8 contact_sound_lut_35de[0x30];   /* 0x35de */
+extern u8 move_sound_lut_opl_25ae[0x30];  /* 0x25ae */
+extern u8 move_sound_lut_std_25de[0x30];  /* 0x25de */
+
+/* settle handler + tile leaf (run_physics_settle's cross-module DGROUP bytes
+   session_continue_flag / frame_abort_flag / settle_countdown live in game.c). */
+extern u8   session_continue_flag;        /* game.c — DGROUP 0x856d */
+extern u8   frame_abort_flag;             /* game.c — DGROUP 0x928d */
+extern u8   settle_countdown;             /* game.c — per-round settle counter */
+char run_physics_settle(void);            /* 1000:22fc */
+void run_physics_settle_wrap(void);       /* 1000:22c1  (game_mode_handlers[0x2d]) */
+void FUN_1000_22b0(void);                 /* 1000:22b0  (game_mode_handlers[0x10]/[0x2c]) */
+void p1_read_tile_under(void);            /* 1000:236f  (tile leaf: p1_pending_action = tilemap[p1_cell]) */
+
+/* anim-channel / cell-animation setters (thin FX-allocator wrappers). */
+void p1_set_cell_animation(char action_code);             /* 1000:695e */
+void p1_set_cell_animation_no_override(char action_code); /* 1000:6987 */
+void p1_trigger_cell_animation(u8 action);                /* 1000:6d94 */
+void p1_dispatch_pending_action(u8 *action_table);        /* 1000:6d6a */
+void p1_step_landed(void);                                /* 1000:6d26 */
+
+/* input-mask + cursor-step + pending/move micro-handlers (the dispatch substates). */
+void input_state_mask_10(void);           /* 1000:65e5 */
+void input_state_mask_1d(void);           /* 1000:65fb */
+void input_state_mask_0f(void);           /* 1000:6611 */
+void cursor_move_up(void);                /* 1000:64e2 */
+void cursor_move_down(void);              /* 1000:64ff */
+void cursor_move_right(void);             /* 1000:6535 */
+void p1_try_trigger_pending_action(void); /* 1000:654e */
+void p1_try_jump_action(void);            /* 1000:6587 */
+void p1_move_step_with_sound(void);       /* 1000:6648 */
+void move_step_last_variant(void);        /* 1000:66d8 */
+void move_step_landed(void);              /* 1000:6717 */
+void move_step_noop(void);                /* 1000:673a */
+void move_step_noop_sentinel(void);       /* 1000:7111 (sentinel filler slot) */
+
+/* the two move-step delegates check_tile_below_ladder_or_land tail-calls. */
+void p1_exec_pending_action(void);        /* 1000:465e */
+void move_down_step(void);                /* 1000:253f */
 
 #endif /* PLAYER_H */

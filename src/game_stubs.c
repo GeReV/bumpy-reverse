@@ -40,15 +40,12 @@
  * NONE of these run on the level-1 boot path that this slice exercises; they are
  * reached only by the not-yet-reconstructed per-tick handler dispatch.
  *
- * (1) The 2 landing leaves past cell-resolution are now RECONSTRUCTED in player.c
- *     (Phase 2, Task 3).  The callees they reach that remain out of scope stay
- *     stubbed here: the anim-channel/FX allocator apply_cell_animation (69aa), and
- *     the two move-step substate delegates p1_exec_pending_action (465e) /
- *     move_down_step (253f) — these land with the move-step substates (Task 4) and
- *     the animation/FX subsystem (Phase 5/6). */
+ * (1) The 2 landing leaves past cell-resolution are RECONSTRUCTED in player.c
+ *     (Phase 2, Task 3); the move-step substates + their two delegates
+ *     p1_exec_pending_action (465e) / move_down_step (253f) are RECONSTRUCTED in
+ *     player.c (Phase 2, Task 4).  Only the anim-channel/FX allocator
+ *     apply_cell_animation (69aa) remains a stub here (→ Phase 5/6). */
 void apply_cell_animation(u8 fx_code)       { (void)fx_code; }  /* 1000:69aa */
-void p1_exec_pending_action(void)           {}  /* 1000:465e */
-void move_down_step(void)                   {}  /* 1000:253f */
 
 /* (2) Sound / anim helper leaves the move handlers call. */
 void play_sound(u8 sound_id)                { (void)sound_id; }  /* 1000:6e11 */
@@ -68,10 +65,10 @@ void move_anim_step_to_mode0c(void)         {}  /* 1000:248e  idx 0x0b */
 void move_step_check_walkable(void)         {}  /* 1000:24d7  idx 0x0c */
 void move_step_dispatch_input(void)         {}  /* 1000:250a  idx 0x0d */
 void teleport_to_next_exit_tile(void)       {}  /* 1000:25ad  idx 0x0e */
-void FUN_1000_22b0(void)                     {}  /* 1000:22b0  idx 0x10, 0x2c */
+/* FUN_1000_22b0 (idx 0x10/0x2c) + run_physics_settle_wrap (1000:22c1, idx 0x2d)
+   are now RECONSTRUCTED in player.c (Phase 2, Task 4). */
 void p1_input_dispatch_bit10(void)          {}  /* 1000:4344  idx 0x1c */
 void FUN_1000_4437(void)                     {}  /* 1000:4437  idx 0x1d..0x20 */
-void FUN_1000_22c1(void)                     {}  /* 1000:22c1  idx 0x2d */
 void advance_physics_freeze(void)           {}  /* 1000:22d2  idx 0x2e */
 void FUN_1000_1e3d(void)                     {}  /* 1000:1e3d  idx 0x30 */
 

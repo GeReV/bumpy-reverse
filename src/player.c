@@ -251,8 +251,8 @@ u8  p1_latched_action;   /* DGROUP — latched action index into the land-sound 
  *   0x05 move_walk_right_anim_step(0x2423) 0x0a enter_mode_0b_jump_start(0x2470)
  *   0x0b move_anim_step_to_mode0c(0x248e)  0x0c move_step_check_walkable(0x24d7)
  *   0x0d move_step_dispatch_input(0x250a)  0x0e teleport_to_next_exit_tile(0x25ad)
- *   0x10,0x2c FUN_1000_22b0(0x22b0)        0x1c p1_input_dispatch_bit10(0x4344)
- *   0x1d..0x20 FUN_1000_4437(0x4437)       0x2d FUN_1000_22c1(0x22c1)
+ *   0x10,0x2c FUN_1000_22b0(0x22b0, T4)    0x1c p1_input_dispatch_bit10(0x4344)
+ *   0x1d..0x20 FUN_1000_4437(0x4437)       0x2d run_physics_settle_wrap(0x22c1, T4)
  *   0x2e advance_physics_freeze(0x22d2)    0x2f land_on_tile_below(0x2810)
  *   0x30 FUN_1000_1e3d(0x1e3d)
  *
@@ -310,7 +310,7 @@ void (*game_mode_handlers[64])(void) = {
     /* 0x2a */ gamemode_default_idle,
     /* 0x2b */ gamemode_default_idle,
     /* 0x2c */ FUN_1000_22b0,                  /* → T6c */
-    /* 0x2d */ FUN_1000_22c1,                  /* → T6c */
+    /* 0x2d */ run_physics_settle_wrap,        /* 1000:22c1 (Phase-2 T4) */
     /* 0x2e */ advance_physics_freeze,         /* → T6c */
     /* 0x2f */ land_on_tile_below,             /* → T6c */
     /* 0x30 */ FUN_1000_1e3d,                  /* → T6c */
@@ -342,9 +342,11 @@ void (*game_mode_handlers[64])(void) = {
  * Modeled as a BYTE BLOB holding the real dumped near offsets (little-endian), so
  * the index arithmetic in dispatch_move_step lands on the exact original entry.
  * Every entry points at a per-step micro-handler (anim/tile step leaf, e.g.
- * 0x6648/0x6717/0x654e; common filler 0x7111) — deeper than the SCOPE of the
- * spine/handler/cell-resolution layers.  We keep the real bytes here so the table
- * is faithful; the micro-handler targets they encode are a later task.
+ * 0x6648/0x6717/0x654e; common filler 0x7111).  The reached physics micro-handlers
+ * are now reconstructed in player.c (Phase-2 Task 4, "═ PHASE 2, TASK 4 ═" banner);
+ * we keep the real bytes here so the table is faithful, and the host harness maps
+ * each offset to its reconstructed C fn (item/sound/FX micro-handlers outside the
+ * reached physics set remain boundary stubs).
  *
  * RECONSTRUCTION FIDELITY: a host build cannot turn these 16-bit near offsets into
  * real function pointers (no relocation), so unlike game_mode_handlers this table
@@ -1626,5 +1628,436 @@ void check_tile_below_ladder_or_land(void)
             p1_exec_pending_action();
         }
     }
+    return;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  PHASE 2, TASK 4 — JUMP / FALL / BOUNCE MOVE-STEP SUBSTATES
+ *  --------------------------------------------------------------------------
+ *  The per-step micro-handlers dispatched through move_step_dispatch_tbl (raw
+ *  near offsets, blob above), the run_physics_settle handler, and the two
+ *  move-step delegates check_tile_below_ladder_or_land tail-calls.  Ported 1:1
+ *  from the Ghidra decomp (verified live via MCP + disassembly, 2026-06).  Each
+ *  cites its engine address.  These un-stub the bodies the T1 capture's jump/
+ *  fall/bounce scenarios reach so the physics harness's trajectory-stitch can run
+ *  the full chain and check_tile_below's delegate path gets a full exit-diff.
+ *
+ *  RECONSTRUCTION FIDELITY (boundary callees kept stubbed, per the Task brief):
+ *    - apply_cell_animation (1000:69aa)      — anim-channel / FX allocator  (→ Phase 5)
+ *    - play_sound (1000:6e11)                — sound playback                (→ Phase 6)
+ *    - apply_contact_action                  — contact sound + anim-slot     (→ Phase 5/6)
+ *    - FUN_1000_4802 / FUN_1000_22b0         — teleport / settle-wrap leaves (extern)
+ *    - read_tile_at_cell / read_tile_layer_contact — tile leaves (already in T6c)
+ *  Each remains an extern declared in player.h; the physics globals each substate
+ *  writes (px/py/anim/mode/cell/input/steps) are reconstructed 1:1, which is what
+ *  the per-fn comparator gates on.
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── DGROUP move-step substate globals (Task 4) ───────────────────────────────
+ * jump_step_counter (DGROUP 0x824c) IS the existing `move_step_count` global —
+ * gamemode_default_idle stores 8 to it and move_down_step increments/tests it;
+ * the same byte, so it is REUSED here (not redefined).  The bytes below are new. */
+u8  p1_grid_row;          /* DGROUP 0x855c — cursor row counter (cursor_move_up/down) */
+u8  p1_step_col_count;    /* DGROUP 0x855e — cursor column counter (cursor_move_right;
+                             move_step_last_variant tests ==7).  Distinct from
+                             move_step_count(0x824c); the decomp mislabels both. */
+u8  g_anim_channel_idx;   /* DGROUP 0x856c — anim-channel index probed by move_step_landed */
+u8  level_complete_flag;  /* DGROUP 0xa1b1 — cleared by move_step_landed on the '[' tile */
+
+/* tile_followup_action_lut @ DGROUP 0x4396 (file 0x157d6) — p1_step_landed indexes
+ * it by p1_current_tile to find a follow-up action tile to queue.  Dumped byte-exact
+ * from BUMPY_unpacked.exe.
+ * RECONSTRUCTION FIDELITY: this table is only 0x2a bytes before move_step_dispatch_tbl
+ * begins at DGROUP 0x43c0; the engine reads it as a raw near byte table, so tile
+ * indices 0x2a..0x2f read into the dispatch table's first bytes (0x48,0x66,0x11,0x71,
+ * 0x11,0x71 — the low/high bytes of dispatch offsets).  We reproduce those exact
+ * tail bytes so the index arithmetic lands identically. */
+u8  tile_followup_action_lut[0x30] = {
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x2c,0x2d,0x2e,0x00,0x00,
+    0x00,0x3f,0x00,0x00,0x00,0x00,0x00,0x56,0x5b,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x48,0x66,0x11,0x71,0x11,0x71,0x00
+};
+
+/* Pending-action / contact LUTs the substates index (raw near byte tables in the
+ * engine; modeled as dumped C arrays so the index arithmetic lands identically).
+ *   p1_try_trigger_pending_action: table[p1_pending_action + 0x3cda]
+ *   p1_move_step_with_sound:       table[p1_pending_action + 0x3d0a] (action),
+ *                                  table[p1_pending_action + 0x25ae/0x25de] (sound)
+ *   move_step_last_variant:        apply_contact_action(table[p1_contact_code+0x35de])
+ *   p1_dispatch_pending_action:    table[p1_pending_action + 0x3caa]
+ *   p1_exec_pending_action:        exec_move_action(table[p1_pending_action+0x36be])
+ * These are reconstructed below from the unpacked image. */
+/* DGROUP 0x3cda (file 0x1511a) — p1_try_trigger_pending_action anim LUT. */
+u8  pending_anim_lut_3cda[0x30] = {
+    0x00,0x03,0x3d,0x07,0x00,0x00,0x00,0x0a,0x0d,0x10,0x16,0x00,
+    0x1c,0x20,0x22,0x00,0x39,0x2a,0x00,0x2c,0x2d,0x2e,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x5e,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
+/* DGROUP 0x3caa (file 0x150ea) — p1_dispatch_pending_action anim LUT. */
+u8  pending_anim_lut_3caa[0x30] = {
+    0x00,0x02,0x3c,0x06,0x00,0x31,0x32,0x09,0x0c,0x0f,0x15,0x00,
+    0x1b,0x1f,0x36,0x26,0x38,0x29,0x00,0x2c,0x2d,0x2e,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x55,0x00,0x00,0x5d,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
+/* DGROUP 0x3d0a (file 0x1514a) — p1_move_step_with_sound anim LUT. */
+u8  pending_anim_lut_3d0a[0x30] = {
+    0x00,0x04,0x3e,0x00,0x00,0x00,0x00,0x11,0x12,0x13,0x17,0x00,
+    0x1d,0x21,0x23,0x27,0x3a,0x2b,0x00,0x2c,0x2d,0x2e,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x55,0x00,0x00,0x5f,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
+/* DGROUP 0x36be (file 0x14afe) — p1_exec_pending_action action LUT. */
+u8  pending_action_lut_36be[0x30] = {
+    0x00,0x00,0x00,0x05,0x00,0x01,0x02,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x0e,0x00,0x11,0x10,0x03,0x1a,0x1b,0x00,0x01,
+    0x02,0x03,0x00,0x00,0x00,0x00,0x00,0x10,0x30,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
+/* DGROUP 0x35de (file 0x14a1e) — move_step_last_variant contact-action LUT. */
+u8  contact_sound_lut_35de[0x30] = {
+    0x00,0x01,0x02,0x03,0x04,0x17,0x00,0x06,0x07,0x08,0x09,0x0a,
+    0x00,0x00,0x0b,0x0c,0x0d,0x0e,0x0f,0x10,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x02,0x03,
+    0x04,0x17,0x05,0x00,0x00,0x08,0x09,0x0a,0x00,0x00,0x0b,0x0c
+};
+/* DGROUP 0x25ae (file 0x139ee) — p1_move_step_with_sound OPL/charger sound LUT. */
+u8  move_sound_lut_opl_25ae[0x30] = {
+    0x00,0x01,0x02,0x00,0x03,0x04,0x04,0x05,0x06,0x07,0x08,0x00,
+    0x09,0x0a,0x0b,0x00,0x0c,0x0d,0x00,0x00,0x00,0x00,0x00,0x0e,
+    0x0e,0x00,0x0f,0x0f,0x0f,0x0f,0x10,0x11,0x00,0x12,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
+/* DGROUP 0x25de (file 0x13a1e) — p1_move_step_with_sound std-device sound LUT. */
+u8  move_sound_lut_std_25de[0x30] = {
+    0x00,0x01,0x01,0x00,0x0b,0x09,0x09,0x05,0x06,0x07,0x09,0x00,
+    0x09,0x09,0x01,0x00,0x01,0x0a,0x00,0x00,0x00,0x00,0x00,0x01,
+    0x01,0x00,0x0b,0x0b,0x0b,0x0b,0x0b,0x00,0x00,0x01,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
+
+/*
+ * run_physics_settle — 1000:22fc
+ * --------------------------------------------------------------------------
+ * Unfreezes physics, runs 1000 tile-read iterations to settle, then decrements
+ * the per-round settle countdown and returns it (-1 once expired, also raising
+ * frame_abort_flag DGROUP 0x928d).
+ *
+ * RECONSTRUCTION FIDELITY: session_continue_flag / frame_abort_flag /
+ * settle_countdown are DEFINED in game.c (cross-module DGROUP bytes 0x856d /
+ * 0x928d / settle counter); declared extern in player.h for this port.  The 1000
+ * iterations of p1_read_tile_under re-latch p1_pending_action from tilemap[p1_cell]
+ * each pass (the engine's busy-settle); the loop is reproduced verbatim.
+ */
+char run_physics_settle(void)
+{
+    char ret;
+    int i;
+
+    physics_frozen = 0;
+    for (i = 1000; i != 0; i = i - 1) {
+        p1_read_tile_under();
+    }
+    session_continue_flag = 1;
+    if (settle_countdown == 0) {
+        frame_abort_flag = 0xff;
+        ret = -1;
+    } else {
+        settle_countdown = settle_countdown - 1;
+        ret = (char)settle_countdown;
+    }
+    return ret;
+}
+
+/* run_physics_settle_wrap — 1000:22c1   (game_mode_handlers[0x2d]) — a thin wrapper
+ * that calls run_physics_settle and discards the return. */
+void run_physics_settle_wrap(void)
+{
+    run_physics_settle();
+    return;
+}
+
+/* FUN_1000_22b0 — 1000:22b0   (game_mode_handlers[0x10]/[0x2c]; also called by
+ * move_down_step for pending-action 0x12/0x1f).  Byte-identical to
+ * run_physics_settle_wrap: calls run_physics_settle, discards the return. */
+void FUN_1000_22b0(void)
+{
+    run_physics_settle();
+    return;
+}
+
+/* p1_read_tile_under — 1000:236f
+ * Reads the tilemap byte at p1_cell into p1_pending_action (the move-step tile
+ * leaf the settle loop and idle dispatch use). */
+void p1_read_tile_under(void)
+{
+    p1_pending_action = tilemap[(u16)p1_cell];
+    return;
+}
+
+/* ── anim-channel / cell-animation setters (thin FX-allocator wrappers) ────────
+ * Each sets anim_target_cell = p1_cell, then tail-calls the stubbed FX allocator
+ * apply_cell_animation (→ Phase 5).  The override variant also latches move_override. */
+
+/* p1_set_cell_animation — 1000:695e */
+void p1_set_cell_animation(char action_code)
+{
+    anim_target_cell = p1_cell;
+    if (action_code != 0) {
+        move_override = (u8)action_code;
+        apply_cell_animation((u8)action_code);
+    }
+    return;
+}
+
+/* p1_set_cell_animation_no_override — 1000:6987 (does NOT touch move_override) */
+void p1_set_cell_animation_no_override(char action_code)
+{
+    anim_target_cell = p1_cell;
+    if (action_code != 0) {
+        apply_cell_animation((u8)action_code);
+    }
+    return;
+}
+
+/* p1_trigger_cell_animation — 1000:6d94 (unconditional FX on the current cell) */
+void p1_trigger_cell_animation(u8 action)
+{
+    anim_target_cell = p1_cell;
+    apply_cell_animation(action);
+    return;
+}
+
+/* p1_dispatch_pending_action — 1000:6d6a
+ * If movement is not locked, run the pending-action anim for the table entry
+ * selected by p1_pending_action (action_table near base passed by the caller). */
+void p1_dispatch_pending_action(u8 *action_table)
+{
+    if (move_locked == 0) {
+        p1_set_cell_animation_no_override((char)action_table[p1_pending_action]);
+    }
+    return;
+}
+
+/* p1_step_landed — 1000:6d26
+ * After a cell step: read the tile under p1_cell; if it carries a follow-up action
+ * tile (tile_followup_action_lut[p1_current_tile]), latch it (p1_latched_action,
+ * p1_queued_action_code) and trigger its cell animation. */
+void p1_step_landed(void)
+{
+    u8 action_tile;
+
+    read_tile_at_cell(p1_cell);
+    action_tile = tile_followup_action_lut[p1_current_tile];
+    if (action_tile != 0) {
+        p1_latched_action = p1_pending_action;
+        p1_queued_action_code = action_tile;
+        p1_trigger_cell_animation(action_tile);
+    }
+    return;
+}
+
+/* ── The input-mask micro-handlers (trivial bit masks on input_state) ──────────── */
+
+/* input_state_mask_10 — 1000:65e5  (keep only bit 0x10) */
+void input_state_mask_10(void)
+{
+    input_state = input_state & 0x10;
+    return;
+}
+
+/* input_state_mask_1d — 1000:65fb  (mask &= 0x1d — clears bit 1) */
+void input_state_mask_1d(void)
+{
+    input_state = input_state & 0x1d;
+    return;
+}
+
+/* input_state_mask_0f — 1000:6611  (mask &= 0x0f — clears bit 0x10) */
+void input_state_mask_0f(void)
+{
+    input_state = input_state & 0x0f;
+    return;
+}
+
+/* ── The cursor-step micro-handlers (redraw via input_state_mask_0f, move cell) ── */
+
+/* cursor_move_up — 1000:64e2  (p1_cell -= 8 = one row up; row counter--) */
+void cursor_move_up(void)
+{
+    input_state_mask_0f();
+    p1_cell = (u8)(p1_cell - 8);
+    p1_grid_row = (u8)(p1_grid_row - 1);
+    return;
+}
+
+/* cursor_move_down — 1000:64ff  (p1_cell += 8 = one row down; row counter++) */
+void cursor_move_down(void)
+{
+    input_state_mask_0f();
+    p1_cell = (u8)(p1_cell + 8);
+    p1_grid_row = (u8)(p1_grid_row + 1);
+    return;
+}
+
+/* cursor_move_right — 1000:6535  (p1_cell += 1; column counter++) */
+void cursor_move_right(void)
+{
+    input_state_mask_0f();
+    p1_cell = (u8)(p1_cell + 1);
+    p1_step_col_count = (u8)(p1_step_col_count + 1);
+    return;
+}
+
+/* ── The pending-action / jump trigger micro-handlers ──────────────────────────── */
+
+/* p1_try_trigger_pending_action — 1000:654e
+ * If not suppressed (p1_queued_action_code==0) and input bit 0x10 or 0x01 set,
+ * latch p1_pending_action and fire its anim via pending_anim_lut_3cda. */
+void p1_try_trigger_pending_action(void)
+{
+    if (p1_queued_action_code == 0 &&
+        (((input_state & 0x10) != 0) || ((input_state & 1) != 0))) {
+        p1_latched_action = p1_pending_action;
+        p1_set_cell_animation((char)pending_anim_lut_3cda[p1_pending_action]);
+    }
+    return;
+}
+
+/* p1_try_jump_action — 1000:6587
+ * If not overridden, p1_pending_action==2 and the jump input bit (2) is set: play
+ * the jump sound, record the cell, arm a 0x34-tick move and run the jump FX 0x34. */
+void p1_try_jump_action(void)
+{
+    u8 sound_id;
+
+    if (move_override == 0 && p1_pending_action == 0x02 && (input_state & 2) != 0) {
+        if (sound_device_state == 4) {
+            sound_id = 9;
+        } else {
+            sound_id = 4;
+        }
+        play_sound(sound_id);
+        anim_target_cell = p1_cell;
+        p1_jump_move_ticks = 0x34;
+        apply_cell_animation(0x34);
+    }
+    return;
+}
+
+/* ── The move-action micro-handlers (sound + step) ─────────────────────────────── */
+
+/* p1_move_step_with_sound — 1000:6648
+ * Play the per-action move sound (device-selected table) if nonzero, then step the
+ * move animation via p1_set_cell_animation_no_override(pending_anim_lut_3d0a[...]). */
+void p1_move_step_with_sound(void)
+{
+    u8 sound_id;
+
+    if (sound_device_state == 4) {
+        sound_id = move_sound_lut_opl_25ae[p1_pending_action];
+    } else {
+        sound_id = move_sound_lut_std_25de[p1_pending_action];
+    }
+    if (sound_id != 0) {
+        play_sound(sound_id);
+    }
+    p1_set_cell_animation_no_override((char)pending_anim_lut_3d0a[p1_pending_action]);
+    return;
+}
+
+/* move_step_last_variant — 1000:66d8
+ * Unless the prev mode was 0x03/0x0f, refresh the pending-action view via
+ * p1_dispatch_pending_action(pending_anim_lut_3caa); then, if the column counter
+ * != 7, apply the contact action contact_sound_lut_35de[p1_contact_code]. */
+void move_step_last_variant(void)
+{
+    if (prev_game_mode != 0x03 && prev_game_mode != 0x0f) {
+        p1_dispatch_pending_action(pending_anim_lut_3caa);
+    }
+    if (p1_step_col_count != 7) {
+        apply_contact_action(contact_sound_lut_35de[p1_contact_code]);
+    }
+    return;
+}
+
+/* move_step_landed — 1000:6717
+ * Record p1_cell as the anim target, run p1_step_landed; if the landed
+ * anim-channel index is '[' (0x5b), clear level_complete_flag. */
+void move_step_landed(void)
+{
+    anim_target_cell = p1_cell;
+    p1_step_landed();
+    if (g_anim_channel_idx == 0x5b) {
+        level_complete_flag = 0;
+    }
+    return;
+}
+
+/* move_step_noop — 1000:673a  (empty move action; body was only the stack check) */
+void move_step_noop(void)
+{
+    return;
+}
+
+/* move_step_noop_sentinel — 1000:7111
+ * The common dispatch-table filler offset.  No function is defined at 1000:7111 in
+ * the decomp (it is a bare `RET`/sentinel slot the dispatch table points at for
+ * "no per-step action"); reconstructed here as an empty handler so the host map
+ * can route the (very common) filler slot.
+ * RECONSTRUCTION FIDELITY: no Ghidra function exists at 0x7111 — modeled as a no-op
+ * matching the slot's "do nothing" semantics. */
+void move_step_noop_sentinel(void)
+{
+    return;
+}
+
+/* ── The two move-step delegates check_tile_below_ladder_or_land tail-calls ────── */
+
+/* p1_exec_pending_action — 1000:465e
+ * Look up p1_pending_action in pending_action_lut_36be and run exec_move_action
+ * with the mapped action code. */
+void p1_exec_pending_action(void)
+{
+    exec_move_action(pending_action_lut_36be[p1_pending_action]);
+    return;
+}
+
+/* move_down_step — 1000:253f
+ * Downward move step: handle pending-action tiles (0x0f teleport leaf,
+ * 0x12/0x1f settle-wrap), mask input bit 1, play the step sound, advance the
+ * jump_step_counter (== move_step_count, DGROUP 0x824c); on the 9th step relocate
+ * the view cell-8 and trigger FX 0x24, then enter mode 0x0d and dispatch.
+ *
+ * RECONSTRUCTION FIDELITY: FUN_1000_4802 (pending==0x0f teleport leaf) and
+ * FUN_1000_22b0 (settle-wrap) stay extern stubs; the trailing dispatch_move_step()
+ * call-through routes a RAW engine offset on the host, so the harness drives this
+ * substate via its delegate-route accounting, not a host call-through of dispatch. */
+void move_down_step(void)
+{
+    u8 sound_id;
+
+    if (p1_pending_action == 0x0f) {
+        FUN_1000_4802();
+    } else if (p1_pending_action == 0x12 || p1_pending_action == 0x1f) {
+        FUN_1000_22b0();
+    }
+    input_state_mask_1d();
+    if (sound_device_state == 4) {
+        sound_id = 9;
+    } else {
+        sound_id = 0x14;
+    }
+    play_sound(sound_id);
+    move_step_count = (u8)(move_step_count + 1);   /* jump_step_counter (0x824c) */
+    if (move_step_count == 9) {
+        anim_target_cell = (u8)(p1_cell - 8);
+        apply_cell_animation(0x24);
+        move_step_count = 0;
+    }
+    enter_game_mode(0x0d);
+    dispatch_move_step();
     return;
 }
