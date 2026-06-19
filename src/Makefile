@@ -19,7 +19,7 @@ SPR_OBJS = bsprite.obj bsprite_buf.obj sprite.obj dosio.obj
 # Modules not yet implemented (input/player/level) are deferred; their
 # symbols are either not referenced from the stub main or will be added
 # in later tasks.
-BUMPY_OBJS = main.obj &
+BUMPY_OBJS = main.obj level.obj &
              vec.obj op12.obj video.obj &
              sprite.obj sprite_anim.obj sprite_chain.obj sprite_blit.obj &
              bg_render.obj entity.obj bgi_overlay.obj &

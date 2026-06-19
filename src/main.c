@@ -45,6 +45,7 @@
 
 #include "bumpy.h"
 #include "video.h"
+#include "level.h"
 
 /* -------------------------------------------------------------------------
  * Forward declarations for stubs not yet implemented.
@@ -119,8 +120,22 @@ static void init_game_session_state_stub(void)
  */
 static void run_game_session_stub(void)
 {
-    /* STUB: no gameplay yet — returns immediately so the boot harness can
-     * assert mode set + clean exit. */
+    /* Phase-1 Task 4: structurally wire the level-1 load into the boot path.
+     * The original run_game_session sets current_level = 1 and then enters
+     * game_loop, which (via reset_game_state → start_level) loads and renders
+     * the level.  Here we call start_level(1, 1) directly to mirror that
+     * load → render structure ahead of the full game_loop reconstruction.
+     *
+     * RECONSTRUCTION FIDELITY: under the current Phase-1 boot harness
+     * (tools/run_bumpy.py) DOS file I/O is not serviced, so the level load
+     * cannot complete at runtime yet (the D1.* / BUMSPJEU.BIN reads fail and
+     * start_level returns having rendered an empty frame).  This is EXPECTED
+     * and deferred: full boot-render validation is Task 7.  The call exists
+     * here so the link graph and call structure are in place. */
+    start_level(1, 1);
+
+    /* STUB: no game_loop / input / session loop yet — returns after the
+     * structural level-1 load so the boot harness can assert clean exit. */
 }
 
 /* -------------------------------------------------------------------------
