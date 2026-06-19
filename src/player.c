@@ -224,6 +224,12 @@ u8  tile_below_player;   /* tile under player (move_settle sets 0xb) */
 u8  p1_current_tile;     /* tile probed by move_left/right teleport check */
 s16 sound_device_state;  /* DGROUP 0x689c (ram0x00026c4c): -0x8000 == no sound; 4 == OPL/charger */
 
+/* ── Landing-leaf state (Task 3) ──────────────────────────────────────────────
+ * Globals introduced by the two landing leaves (land_on_tile_below /
+ * check_tile_below_ladder_or_land). */
+u8  anim_target_cell;    /* DGROUP 0x856f — cell-8 view/anim relocation target */
+u8  p1_latched_action;   /* DGROUP — latched action index into the land-sound tables */
+
 /*
  * game_mode_handlers — DGROUP 0x7ca  (the jump table p1_movement_dispatch indexes)
  * --------------------------------------------------------------------------
@@ -1458,5 +1464,167 @@ void p1_resolve_walk_right_contact(void)
     }
     enter_game_mode(mode);
     dispatch_move_step();
+    return;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  TASK 3 (Phase 2) — THE TWO LANDING / COLLISION LEAVES
+ *  ----------------------------------------------------------------------------
+ *  land_on_tile_below (1000:2810) and check_tile_below_ladder_or_land (1000:29a6),
+ *  ported 1:1 from the Ghidra decomp (verified live via MCP, 2026-06).  Task 6c
+ *  deferred these because they reach the animation-channel / FX allocator
+ *  apply_cell_animation (1000:69aa); their PHYSICS / mode-transition body is ported
+ *  here, with the FX/sound callees + the two move-step delegates kept as extern
+ *  stubs (player.h / game_stubs.c → Phase 4/5/6).
+ *
+ *  RECONSTRUCTION FIDELITY (stubbed callees): the leaves' faithful control flow is
+ *  reproduced 1:1, but four callees they reach are OUT OF SCOPE for this task and
+ *  remain extern stubs (each documented at its declaration in player.h):
+ *    - apply_cell_animation (1000:69aa) — the anim-channel / FX allocator (→ Phase 5/6).
+ *    - p1_exec_pending_action (1000:465e) — the move-step substate delegate
+ *      (pending-action LUT 0x36be → exec_move_action); a Task-4 substate (→ T4).
+ *    - move_down_step (1000:253f) — the downward move-step substate (→ T4).
+ *  These do NOT change px/py/move_anim; the mode TRANSITIONS that ARE in-leaf (the
+ *  cell<8 / land-table / ladder branches) are ported faithfully.  The per-fn
+ *  validation gate checks the physics globals only, so the stubbed FX/sound bodies
+ *  are irrelevant to it — but every in-leaf state/mode transition is 1:1.
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Landing DATA tables (DUMPED-REAL from BUMPY_unpacked.exe) ──────────────────
+ * Reconstructed byte-exact from the unpacked image (DGROUP base 0x11440 →
+ * file_off = 0x11440 + dgroup_off), like the Task-6c contact/collision tables. */
+
+/* land_mode_fx_tbl @ DGROUP 0x76a (file 0x11baa) — land_on_tile_below indexes it by
+ * tile_below_player as 2-byte [mode, fx] pairs: land_mode = tbl[tile*2],
+ * land_fx_code = tbl[tile*2 + 1].  0x30 tile entries (0..0x2f) = 0x60 bytes (the
+ * blob ends exactly where game_mode_handlers @ 0x7ca begins). */
+u8 land_mode_fx_tbl[0x60] = {
+    0x03,0x00, 0x06,0x40, 0x06,0x41, 0x06,0x42, 0x00,0x00, 0x2b,0x43,
+    0x2b,0x44, 0x06,0x45, 0x06,0x46, 0x06,0x47, 0x06,0x48, 0x07,0x00,
+    0x06,0x49, 0x06,0x4a, 0x0a,0x24, 0x06,0x27, 0x03,0x33, 0x06,0x4c,
+    0x2c,0x00, 0x06,0x4d, 0x2b,0x57, 0x2b,0x58, 0x06,0x4e, 0x06,0x4f,
+    0x06,0x50, 0x03,0x3f, 0x06,0x51, 0x06,0x52, 0x06,0x53, 0x06,0x54,
+    0x2c,0x55, 0x06,0x56, 0x06,0x00, 0x06,0x00, 0x00,0x00, 0x00,0x00,
+    0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00,
+    0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00
+};
+
+/* land_sound_tbl_opl @ DGROUP 0x266e (file 0x13aae) / land_sound_tbl_std @ 0x269e
+ * (file 0x13ade) — land_on_tile_below indexes these by p1_latched_action to pick
+ * the landing sound id (OPL/charger device vs. the others).  0x30 bytes each. */
+u8 land_sound_tbl_opl[0x30] = {
+    0x00,0x04,0x04,0x04,0x00,0x00,0x00,0x04,0x04,0x04,0x04,0x00,
+    0x04,0x04,0x04,0x00,0x04,0x00,0x00,0x04,0x04,0x04,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x04,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
+u8 land_sound_tbl_std[0x30] = {
+    0x00,0x02,0x02,0x02,0x00,0x00,0x00,0x02,0x02,0x02,0x02,0x00,
+    0x02,0x02,0x02,0x00,0x02,0x00,0x00,0x02,0x02,0x02,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x02,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
+
+/*
+ * land_on_tile_below — 1000:2810   (game_mode_handlers[0x2f])
+ * --------------------------------------------------------------------------
+ * The landing handler.  Unless the previous mode was 0x03/0x0d/0x10, plays the
+ * landing sound for the latched action (land_sound_tbl_opl/_std indexed by
+ * p1_latched_action, device-dependent).  Then resolves the tile below the player:
+ * if cell < 8 (no tile row below) enters mode 6; else reads tile_below_player =
+ * tilemap[cell-8], looks up its (mode, fx) pair in land_mode_fx_tbl, enters that
+ * mode; if the entered mode is 0x0a plays the charger sound, and if the fx code is
+ * nonzero runs the FX (apply_cell_animation — stubbed, → Phase 5/6).
+ *
+ * RECONSTRUCTION FIDELITY: the engine reads land_mode_fx_tbl / the sound tables as
+ * raw near byte tables in DGROUP (e.g. *(byte*)(tile*2 + 0x76a)); we model each as
+ * the dumped C array so the index arithmetic lands on the same byte.  The tilemap
+ * read uses the forward-declared `tilemap` far pointer (level data, → T7).  The
+ * decomp's `local_3 = tile_below_player` (an unused copy) is omitted.
+ * apply_cell_animation is the FX/anim-channel allocator (extern stub, → Phase 5/6).
+ */
+void land_on_tile_below(void)
+{
+    u8 sound_id;
+    u8 land_sound_id;
+    u8 land_fx_code;
+    u8 land_mode;
+
+    if (prev_game_mode != 0x03 && prev_game_mode != 0x0d && prev_game_mode != 0x10) {
+        if (sound_device_state == 4) {
+            land_sound_id = land_sound_tbl_opl[p1_latched_action];
+        } else {
+            land_sound_id = land_sound_tbl_std[p1_latched_action];
+        }
+        if (land_sound_id != 0) {
+            play_sound(land_sound_id);
+        }
+    }
+    if (p1_cell < 8) {
+        enter_game_mode(6);
+    } else {
+        anim_target_cell = (u8)(p1_cell - 8);
+        tile_below_player = tilemap[(u16)anim_target_cell];
+        land_mode    = land_mode_fx_tbl[(u16)tile_below_player * 2];
+        land_fx_code = land_mode_fx_tbl[(u16)tile_below_player * 2 + 1];
+        enter_game_mode(land_mode);
+        if (game_mode == 0x0a) {
+            if (sound_device_state == 4) {
+                sound_id = 9;
+            } else {
+                sound_id = 0x14;
+            }
+            play_sound(sound_id);
+        }
+        if (land_fx_code != 0) {
+            apply_cell_animation(land_fx_code);
+        }
+    }
+    return;
+}
+
+/*
+ * check_tile_below_ladder_or_land — 1000:29a6
+ * --------------------------------------------------------------------------
+ * Checks the tile below the player (cell-8): if it is the ladder tile 0x0e and no
+ * down input is held (input_state&2 == 0), plays the climb sound, runs FX 0x24
+ * (apply_cell_animation — stubbed) and enters mode 0x0a (climb).  If down is held,
+ * delegates to move_down_step (a move-step substate → T4).  Otherwise (and when
+ * cell < 8) delegates to p1_exec_pending_action (the pending-action move-step
+ * delegate → T4).
+ *
+ * RECONSTRUCTION FIDELITY: the ladder branch is ported 1:1 (the leaf's own mode
+ * transition to 0x0a).  The two delegate calls (p1_exec_pending_action 1000:465e,
+ * move_down_step 1000:253f) are move-step substates — out of scope for this task
+ * (Task 4) — and stay extern stubs.  apply_cell_animation is the FX allocator
+ * (extern stub, → Phase 5/6).  The tilemap read uses the forward-declared `tilemap`
+ * far pointer; the engine reads the cell-8 tile as a SIGNED char (`== '\x0e'`),
+ * mirrored here with a signed compare so a high-bit tile never spuriously matches.
+ */
+void check_tile_below_ladder_or_land(void)
+{
+    u8 sound_id;
+
+    if (p1_cell < 8) {
+        p1_exec_pending_action();
+    } else {
+        anim_target_cell = (u8)(p1_cell - 8);
+        if ((s8)tilemap[(u16)anim_target_cell] == 0x0e) {
+            if ((input_state & 2) == 0) {
+                if (sound_device_state == 4) {
+                    sound_id = 9;
+                } else {
+                    sound_id = 0x14;
+                }
+                play_sound(sound_id);
+                apply_cell_animation(0x24);
+                enter_game_mode(0x0a);
+            } else {
+                move_down_step();
+            }
+        } else {
+            p1_exec_pending_action();
+        }
+    }
     return;
 }

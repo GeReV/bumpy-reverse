@@ -67,18 +67,21 @@ u8 __far  *tilemap = synth_tilemap;
 /* Leaf-call trace: each stub bumps its counter so tests can assert routing. */
 static int n_play_sound, n_step_walk_anim;
 static int n_apply_contact_action, n_play_action_sound, n_play_walk_anim_default;
-static int n_land_on_tile_below;
-static int n_check_tile, n_fun_4802;
+static int n_fun_4802;
 
 void play_sound(u8 id) { (void)id; n_play_sound++; }
 void play_action_sound(void) { n_play_action_sound++; }
 void apply_contact_action(u8 c) { (void)c; n_apply_contact_action++; }
 void play_walk_anim_default(void) { n_play_walk_anim_default++; }
 void step_walk_anim(u8 a, u8 p, u16 fo, u16 fs) { (void)a;(void)p;(void)fo;(void)fs; n_step_walk_anim++; }
-/* 6c BOUNDARY leaves (animation/FX-table dependent) — still extern (→ T7). */
-void check_tile_below_ladder_or_land(void) { n_check_tile++; }
-void land_on_tile_below(void) { n_land_on_tile_below++; }
 void FUN_1000_4802(void) { n_fun_4802++; }
+/* Phase-2 T3: land_on_tile_below / check_tile_below_ladder_or_land are now DEFINED
+ * in player.c — no longer stubbed here.  The callees they reach that remain
+ * UNPORTED (the FX allocator + the two move-step substate delegates → T4) are
+ * stubbed instead, so player.c links. */
+void apply_cell_animation(u8 fx) { (void)fx; }
+void p1_exec_pending_action(void) { }
+void move_down_step(void) { }
 /* NOTE: move_down, p1_move_left/right, p1_handle_move_input, read_tile_*,
  * p1_enter_walk_*_mode, p1_begin_move, exec_move_action and the *_step_resolve /
  * *_walk_contact leaves are now SCOPE functions DEFINED in player.c (6c) — NOT
@@ -288,21 +291,28 @@ int main(void)
     /* E3: the override path — physics_frozen==0 && move_override!=0 → move_settle,
        NOT the table.  Probe by routing the current-mode slot AND confirming the
        move_settle land path ran instead.  move_settle ends in dispatch_move_step,
-       so pre-load a safe host stub into that slot. */
+       so pre-load a safe host stub into that slot.
+
+       Phase-2 T3: land_on_tile_below is now the REAL ported leaf (no counter stub).
+       With p1_cell == 0 (< 8) its faithful path is enter_game_mode(6), so we assert
+       the OBSERVABLE land result (game_mode == 6) instead of a stub-call counter. */
     {
         void (*saved)(void) = game_mode_handlers[0x10];
         g_routed = 0;
-        n_land_on_tile_below = 0;
         game_mode_handlers[0x10] = route_probe;
         reset_state();
         game_mode = 0x10;              /* within the reproduced move_step rows (0..0x11) */
         physics_frozen = 0;
         move_override = 1;
+        p1_cell = 0;                   /* < 8 -> land_on_tile_below enters mode 6 */
         p1_pending_action = 0;         /* != 0x11 -> land_on_tile_below path */
-        install_step_slot(0x10, 0, step_noop);   /* safe stub for dispatch_move_step */
+        /* move_settle -> land_on_tile_below sets game_mode=6, THEN dispatch_move_step
+           runs on mode 6's slot — install a safe host stub there (not mode 0x10). */
+        install_step_slot(6, 0, step_noop);
         p1_movement_dispatch();
         CHECK(g_routed == 0, "E3 override bypassed game_mode_handlers");
-        CHECK(n_land_on_tile_below == 1, "E3 override ran move_settle->land");
+        CHECK(game_mode == 6, "E3 override ran move_settle->land (mode->6): got 0x%x",
+              game_mode);
         CHECK(move_override == 0, "E3 move_settle cleared override");
         game_mode_handlers[0x10] = saved;
     }

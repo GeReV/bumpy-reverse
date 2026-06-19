@@ -40,10 +40,15 @@
  * NONE of these run on the level-1 boot path that this slice exercises; they are
  * reached only by the not-yet-reconstructed per-tick handler dispatch.
  *
- * (1) The 2 landing leaves past cell-resolution — pull in the anim-channel
- *     allocator apply_cell_animation (69aa) + FX/land/sound tables. */
-void land_on_tile_below(void)               {}  /* 1000:2810 */
-void check_tile_below_ladder_or_land(void)  {}  /* 1000:29a6 */
+ * (1) The 2 landing leaves past cell-resolution are now RECONSTRUCTED in player.c
+ *     (Phase 2, Task 3).  The callees they reach that remain out of scope stay
+ *     stubbed here: the anim-channel/FX allocator apply_cell_animation (69aa), and
+ *     the two move-step substate delegates p1_exec_pending_action (465e) /
+ *     move_down_step (253f) — these land with the move-step substates (Task 4) and
+ *     the animation/FX subsystem (Phase 5/6). */
+void apply_cell_animation(u8 fx_code)       { (void)fx_code; }  /* 1000:69aa */
+void p1_exec_pending_action(void)           {}  /* 1000:465e */
+void move_down_step(void)                   {}  /* 1000:253f */
 
 /* (2) Sound / anim helper leaves the move handlers call. */
 void play_sound(u8 sound_id)                { (void)sound_id; }  /* 1000:6e11 */

@@ -210,16 +210,28 @@ extern u8   action_tbl_right[0x30];           /* 203b:0x371e — p1_move_right[p
 extern u8   action_tbl_default[0x40];         /* 203b:0x377e — p1_handle_move_input[game_mode] */
 extern u8   down_action_lut[0x30];            /* 203b:0x374e — tile->down-action LUT (move_down) */
 
-/* ── BOUNDARY — leaves PAST cell-resolution (→ Task 7), forward-declared only ──
+/* ══ TASK 3 (Phase 2) — THE TWO LANDING / COLLISION LEAVES (now DEFINED) ═══════
  * land_on_tile_below and check_tile_below_ladder_or_land sit one layer beyond the
- * cell-resolution set: they pull in the animation-channel allocator
- * (apply_cell_animation @ 1000:69aa), the (mode,fx) land table @ DGROUP 0x76a, the
- * latched-action sound tables @ 0x266e/0x269e, and move_down_step/p1_exec_pending
- * (which recurse into exec_move_action + FUN_1000_4802/22b0).  Per the Task-6c
- * STOP-AND-SPLIT rule they are NOT ported here — Task 7 ports them with the
- * animation/FX subsystem during integration. */
-extern void check_tile_below_ladder_or_land(void);   /* 1000:29a6 — ladder/land probe (→ T7) */
-extern void land_on_tile_below(void);                /* 1000:2810 — landing resolution leaf (→ T7) */
+ * cell-resolution set: their PHYSICS / mode-transition body is ported 1:1 in
+ * player.c (the (mode,fx) land table @ DGROUP 0x76a + the latched-action sound
+ * tables @ 0x266e/0x269e are reconstructed there, dumped-real).  The FX/anim
+ * allocator and the two move-step delegates they reach remain extern stubs
+ * (apply_cell_animation, p1_exec_pending_action, move_down_step — declared below). */
+void land_on_tile_below(void);                /* 1000:2810 — landing resolution leaf */
+void check_tile_below_ladder_or_land(void);   /* 1000:29a6 — ladder/land probe       */
+
+/* Landing-leaf DGROUP globals + dumped-real DATA tables (DEFINED in player.c). */
+extern u8 anim_target_cell;       /* DGROUP 0x856f — cell-8 view/anim relocation target */
+extern u8 p1_latched_action;      /* latched action index into the land-sound tables */
+extern u8 land_mode_fx_tbl[0x60]; /* DGROUP 0x76a — [mode,fx] per tile (land_on_tile_below) */
+extern u8 land_sound_tbl_opl[0x30]; /* DGROUP 0x266e — landing sound (OPL/charger device) */
+extern u8 land_sound_tbl_std[0x30]; /* DGROUP 0x269e — landing sound (other devices)      */
+
+/* FX/anim-channel allocator + the two move-step delegates the landing leaves reach
+ * — OUT OF SCOPE for Task 3 (→ Phase 4/5/6), kept as extern stubs (game_stubs.c). */
+extern void apply_cell_animation(u8 fx_code);    /* 1000:69aa — anim-channel/FX allocator (→ Phase 5/6) */
+extern void p1_exec_pending_action(void);        /* 1000:465e — pending-action move-step delegate (→ T4) */
+extern void move_down_step(void);                /* 1000:253f — downward move-step substate (→ T4) */
 
 /* Other leaves the handlers call (sound/anim helpers; not tile-collision). */
 extern void play_sound(u8 sound_id);             /* 1000:6e11 */

@@ -72,16 +72,21 @@ u8 mode_script_tbl[64 * 4];
 static u8 synth_tilemap[TILEMAP_SIZE];
 u8 __far *tilemap = synth_tilemap;
 
-/* Leaf stubs (identical set to player_ctest.c — record that they were called so
-   the trajectory-stitch can localise reaching an UNPORTED leaf). */
-static int n_land_on_tile_below, n_check_tile;
+/* Leaf stubs (identical set to player_ctest.c).  land_on_tile_below and
+   check_tile_below_ladder_or_land are now DEFINED in player.c (Phase-2 T3) — they
+   are no longer host stubs here.  The callees they reach that remain UNPORTED
+   (apply_cell_animation FX allocator; p1_exec_pending_action / move_down_step
+   move-step substates → T4) are stubbed below; the latter two record that they
+   were called so the comparator can localise check_tile_below's delegate path. */
+static int n_exec_pending, n_move_down_step;
 void play_sound(u8 id) { (void)id; }
 void play_action_sound(void) { }
 void apply_contact_action(u8 c) { (void)c; }
 void play_walk_anim_default(void) { }
 void step_walk_anim(u8 a, u8 p, u16 fo, u16 fs) { (void)a;(void)p;(void)fo;(void)fs; }
-void check_tile_below_ladder_or_land(void) { n_check_tile++; }      /* → T3/T4 */
-void land_on_tile_below(void) { n_land_on_tile_below++; }           /* → T3/T4 */
+void apply_cell_animation(u8 fx) { (void)fx; }                      /* FX allocator → Phase 5/6 */
+void p1_exec_pending_action(void) { n_exec_pending++; }            /* move-step delegate → T4 */
+void move_down_step(void) { n_move_down_step++; }                 /* move-step substate → T4 */
 void FUN_1000_4802(void) { }
 /* Out-of-scope handler-table targets — host stubs so the table links. */
 void move_walk_right_anim_step(void) { }
@@ -275,11 +280,13 @@ static void (*hostmap_lookup(u16 off))(void)
 }
 
 /* Is the hooked-fn at this engine offset PORTED + host-callable as a per-fn
-   differential target?  p1_step_scripted_move and enter_game_mode are; the
-   dispatch fns and the landing leaves are not (handled specially / unported). */
+   differential target?  p1_step_scripted_move, enter_game_mode and (Phase-2 T3)
+   the two landing leaves land_on_tile_below / check_tile_below_ladder_or_land are;
+   the dispatch fns are handled specially (slot-arith / re-anchor). */
 static int fn_is_diff_ported(u16 fn_addr)
 {
-    return fn_addr == FN_P1_STEP_SCRIPTED || fn_addr == FN_ENTER_GAME_MODE;
+    return fn_addr == FN_P1_STEP_SCRIPTED || fn_addr == FN_ENTER_GAME_MODE ||
+           fn_addr == FN_LAND_ON_TILE     || fn_addr == FN_CHECK_TILE_BELOW;
 }
 
 /* ════════════════════════════════════════════════════════════════════════════ */
@@ -389,7 +396,7 @@ static int run_per_function(record_t *recs, long nrec, const char *scname,
                            scname, i, bad, got, want,
                            r->ent.mode, r->ent.facing, r->ent.steps_left);
             }
-        } else { /* FN_ENTER_GAME_MODE */
+        } else if (r->fn_addr == FN_ENTER_GAME_MODE) {
             const char *bad; long got, want;
             seed_globals(&r->ent);
             seed_script(r);
@@ -407,6 +414,99 @@ static int run_per_function(record_t *recs, long nrec, const char *scname,
                     printf("    FAIL [%s #%ld] enter_game_mode field %s: "
                            "got %ld want %ld (mode=%#x locked=%u)\n",
                            scname, i, bad, got, want, r->ex.mode, r->ent.locked);
+            }
+        } else if (r->fn_addr == FN_LAND_ON_TILE) {
+            /* land_on_tile_below: seed entry + the synthetic tilemap (cell-8 tile)
+               + mode_script_tbl[ex.mode] (the entered mode's script, reproduced
+               from the exit steps_left/facing — same construction as the
+               enter_game_mode target, since the leaf's mode transition IS an
+               enter_game_mode of the land-table-resolved mode).  The leaf reads
+               tile_below_player = tilemap[cell-8], resolves land_mode_fx_tbl, and
+               enter_game_mode(land_mode); the captured tile-window seeds cell-8 so
+               the resolved mode matches the capture by construction. */
+            const char *bad; long got, want;
+            seed_globals(&r->ent);
+            seed_script(r);
+            seed_mode_script_tbl(r);
+            land_on_tile_below();
+            bad = cmp_exit(&r->ex, &got, &want);
+            if (bad == NULL) {
+                st->pass++;
+            } else {
+                st->fail++; scen_fail = 1;
+                if (printed++ < 8)
+                    printf("    FAIL [%s #%ld] land_on_tile_below field %s: "
+                           "got %ld want %ld (entry mode=%#x cell=%u prev=%#x)\n",
+                           scname, i, bad, got, want,
+                           r->ent.mode, r->ent.cell, r->ent.prev_mode);
+            }
+        } else { /* FN_CHECK_TILE_BELOW */
+            /* check_tile_below_ladder_or_land: the leaf's OWN deterministic physics
+               output is decided by the cell-8 tile + the down-input bit.  On the
+               IN-LEAF ladder branch (tile 0x0e, no down) it enter_game_mode(0x0a) —
+               fully reproducible.  On every other branch the leaf is a pure
+               TAIL-CALL into a move-step substate (p1_exec_pending_action 465e /
+               move_down_step 253f) whose mode result depends on p1_pending_action /
+               rng_frame — neither captured in the SNAP, and the substate machinery
+               is Task 4.  So for the delegate branch we assert the leaf's own
+               invariants (it touches NO px/py/anim/step, and correctly ROUTES to
+               the delegate — n_exec_pending / n_move_down_step incremented) and the
+               unchanged fields; we do NOT assert the delegate's game_mode result
+               (that is the T4 substate's output, not this leaf's).  This is faithful
+               scoping — the leaf performs no mode transition on this path — not a
+               weakened comparator: the in-leaf ladder branch IS fully diffed. */
+            int cell = r->ent.cell;
+            int tile_below = -1;
+            seed_tilemap(r);
+            if (cell >= 8) {
+                unsigned idx = (unsigned)(cell - 8);
+                tile_below = (idx < TILEMAP_SIZE) ? synth_tilemap[idx] : -1;
+            }
+            if (cell >= 8 && tile_below == 0x0e && (r->ent.input & 2) == 0) {
+                /* IN-LEAF ladder branch — fully diff against the exit (the leaf
+                   itself plays a sound + FX then enter_game_mode(0x0a)). */
+                const char *bad; long got, want;
+                seed_globals(&r->ent);
+                seed_script(r);
+                seed_mode_script_tbl(r);
+                check_tile_below_ladder_or_land();
+                bad = cmp_exit(&r->ex, &got, &want);
+                if (bad == NULL) {
+                    st->pass++;
+                } else {
+                    st->fail++; scen_fail = 1;
+                    if (printed++ < 8)
+                        printf("    FAIL [%s #%ld] check_tile_below (ladder) "
+                               "field %s: got %ld want %ld\n",
+                               scname, i, bad, got, want);
+                }
+            } else {
+                /* DELEGATE branch — assert the leaf's own invariants only. */
+                int routed_before_e = n_exec_pending, routed_before_d = n_move_down_step;
+                snap_t snap_in = r->ent;
+                seed_globals(&r->ent);
+                seed_script(r);
+                check_tile_below_ladder_or_land();
+                /* the leaf must (a) route to a delegate substate, and
+                   (b) leave px/py/anim/step/facing/steps_left untouched. */
+                if ((n_exec_pending == routed_before_e &&
+                     n_move_down_step == routed_before_d) ||
+                    p1_pixel_x != snap_in.px || p1_pixel_y != snap_in.py ||
+                    p1_move_anim != snap_in.anim || p1_move_step_idx != snap_in.step ||
+                    p1_facing_left != snap_in.facing ||
+                    p1_move_steps_left != snap_in.steps_left) {
+                    st->fail++; scen_fail = 1;
+                    if (printed++ < 8)
+                        printf("    FAIL [%s #%ld] check_tile_below (delegate) "
+                               "leaf invariant: routed=%d px %d/%d py %d/%d "
+                               "anim %u/%u\n", scname, i,
+                               (n_exec_pending != routed_before_e ||
+                                n_move_down_step != routed_before_d),
+                               p1_pixel_x, snap_in.px, p1_pixel_y, snap_in.py,
+                               p1_move_anim, snap_in.anim);
+                } else {
+                    st->pass++;
+                }
             }
         }
     }
@@ -440,6 +540,26 @@ static stitch_result_t run_trajectory_stitch(record_t *recs, long nrec, const ch
         } else if (r->fn_addr == FN_ENTER_GAME_MODE) {
             seed_mode_script_tbl(r);
             enter_game_mode(r->ex.mode);
+        } else if (r->fn_addr == FN_LAND_ON_TILE) {
+            /* land_on_tile_below is now host-callable (Phase-2 T3): its mode
+               transition is the land-table-resolved enter_game_mode, reproducible
+               from the seeded tilemap + mode_script_tbl.  Call it through so the
+               stitch ADVANCES PAST the landing step instead of stopping. */
+            seed_mode_script_tbl(r);
+            land_on_tile_below();
+        } else if (r->fn_addr == FN_CHECK_TILE_BELOW) {
+            /* check_tile_below_ladder_or_land: on the captured non-ladder path it
+               tail-calls an UNPORTED move-step substate (p1_exec_pending_action /
+               move_down_step → T4) whose mode result is not reproducible from the
+               SNAP.  Call the leaf through (its in-leaf branch is faithful), then
+               re-anchor to the captured exit (the delegate's substate output is
+               T4's, not this leaf's) so the stitch keeps advancing. */
+            seed_mode_script_tbl(r);
+            check_tile_below_ladder_or_land();
+            seed_globals(&r->ex);
+            seed_script(&recs[(i + 1 < nrec) ? i + 1 : i]);
+            res.matched++;
+            continue;
         } else if (r->fn_addr == FN_DISPATCH_MOVE_STEP) {
             /* the substate targets (0x63xx) are UNPORTED — we cannot call-through.
                Honour the captured exit (these substates touch state the stitch
