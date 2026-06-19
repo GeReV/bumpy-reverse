@@ -23,5 +23,5 @@ echo "   player.c builds clean (wcc -ml -bt=dos -zq -wx)"
 
 echo "== host per-function differential: p1_step_scripted_move =="
 POUT="${TMPDIR:-/tmp}/player_ctest"
-cc -O2 -Wall -o "$POUT" tools/player_ctest.c
+cc -O2 -Wall -Werror -o "$POUT" tools/player_ctest.c
 "$POUT"

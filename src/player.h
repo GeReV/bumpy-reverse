@@ -155,30 +155,71 @@ extern u8  tile_below_player;   /* tile under player (set by move_settle = 0xb) 
 extern u8  p1_current_tile;     /* tile probed by move_left/right teleport check */
 extern s16 sound_device_state;  /* DGROUP 0x689c (ram0x00026c4c): -0x8000 == no sound; 4 == OPL/charger */
 
-/* ══ BOUNDARY — TILE-COLLISION LEAVES + OUT-OF-SCOPE HANDLERS (→ Task 6c) ══════
+/* ══ TASK 6c — TILE-COLLISION (CELL-RESOLUTION) LAYER ═════════════════════════
  *
- * Forward-declared only.  These are the tile-collision / deeper-mode leaves the
- * Task-6b handlers call; Task 6c ports them (the tilemap-collision layer).
- * player.c is NOT linked into BUMPY.EXE this task, so unresolved externs are fine.
+ * The closed set of tilemap-reading "tile leaves" the Task-6b handlers call to
+ * resolve a grid cell into a contact code / next game_mode, ported 1:1 from the
+ * Ghidra decomp (verified live via MCP, 2026-06).  Each cites its engine address.
+ * See player.c for bodies and the contact/collision DATA tables (dumped-real from
+ * the unpacked image).  The cell-resolution closure is exactly these leaves plus
+ * exec_move_action; the leaves they call that go PAST cell-resolution
+ * (land_on_tile_below / check_tile_below_ladder_or_land — animation-channel and
+ * FX-table dependent) remain forward-declared below (→ Task 7).
  */
 
-/* Tile-collision LEAVES that READ the level tilemap to resolve a cell (→ T6c). */
-extern u8 __far *tilemap;                  /* level tilemap far pointer */
-extern void read_tile_layer_contact(u8 cell);   /* 1000:6bd4 — resolve cell -> p1_contact_code */
-extern void read_tile_at_cell(u8 cell);          /* probe tile at cell -> p1_current_tile */
-extern u8   contact_transition_tbl[];      /* 203b:0x42f6 — [p1_contact_code] -> next mode (gamemode_26 right) */
-extern u8   contact_transition_tbl_b[];    /* 203b:0x42d6 — [p1_contact_code] -> next mode (gamemode_25 left) */
-extern u8   contact_action_tbl_left[];     /* 203b:0x4256 — [p1_contact_code] -> resolved mode (move_left) */
-extern u8   collision_mode_table_right[];  /* 203b:0x4276 — [p1_contact_code] -> resolved mode (move_right) */
-extern void p1_enter_walk_right_mode(void);
-extern void p1_enter_walk_left_mode(void);
-extern void p1_handle_move_input(void);          /* 1000: handle_move_input pending==0x0a leaf */
-extern void p1_move_right(void);                 /* tilemap move-right leaf */
-extern void p1_move_left(void);                  /* tilemap move-left leaf  */
-extern void check_tile_below_ladder_or_land(void);   /* tilemap ladder/land probe */
-extern void p1_begin_move(u8 action);            /* 1000: begins move from action code */
-extern void land_on_tile_below(void);            /* 1000:2810 — landing resolution leaf */
-extern u8   down_action_lut[];                   /* 203b:0x374e — tile->down-action LUT (move_down) */
+/* tilemap: the level tilemap far pointer, OWNED by level.c/level data (cross-module).
+   Kept extern — T7 resolves its definition + the BUMPY.EXE link. */
+extern u8 __far *tilemap;                  /* level tilemap far pointer (cross-module) */
+
+/* The two raw tilemap reads (the actual "tile leaves"). */
+void read_tile_layer_contact(u8 cell);     /* 1000:6bd4 — p1_contact_code = tilemap[cell+0x30] */
+void read_tile_at_cell(u8 cell);           /* 1000:6bb5 — p1_current_tile = tilemap[cell] */
+
+/* Cell-resolution leaves (probe tile + index a collision table → enter mode). */
+void p1_enter_walk_right_mode(void);       /* 1000:2261 — probe cell+1 -> mode 0x2a/0x26 */
+void p1_enter_walk_left_mode(void);        /* 1000:21bb — probe cell-1 -> mode 0x29/0x25 */
+void p1_begin_move(u8 mode);               /* 1000:472d — enter_game_mode(mode)+dispatch */
+void p1_move_left(void);                   /* 1000:467d — exec_move_action(action_tbl_left[pending]) */
+void p1_move_right(void);                  /* 1000:469c — exec_move_action(action_tbl_right[pending]) */
+void p1_handle_move_input(void);           /* 1000:47cb — left/right/exec_move_action(default[mode]) */
+void exec_move_action(u8 action);          /* 1000:46bb — action -> move dispatch */
+void move_left_step_resolve(void);         /* 1000:270c — resolve left cell (collision_mode_table_left) */
+void move_right_step_resolve_alt(void);    /* 1000:2776 — resolve right cell (collision_mode_table_right_alt) */
+void p1_resolve_walk_left_contact(void);   /* 1000:1fbe — leftward walk-contact resolve (modes 0x1a/0x34/0x36/0x38/0x3a) */
+void p1_resolve_walk_right_contact(void);  /* 1000:207d — rightward walk-contact resolve (modes 0x1b/0x35/0x37/0x39/0x3b) */
+
+/* ── Contact/collision DATA tables (DEFINED in player.c, dumped-real) ──────────
+ * Each is indexed by p1_contact_code (0..0x3f); only entries 0..0x13 are non-zero
+ * in the engine.  Dumped byte-exact from BUMPY_unpacked.exe (DGROUP base 0x11440).
+ * Declared as fixed-size [0x40] so the host ctest can index any contact code. */
+extern u8   contact_transition_tbl[0x40];     /* 203b:0x42f6 — gamemode_26 right -> next mode */
+extern u8   contact_transition_tbl_b[0x40];   /* 203b:0x42d6 — gamemode_25 left  -> next mode */
+extern u8   contact_action_tbl_left[0x40];    /* 203b:0x4256 — move_left  -> resolved mode */
+extern u8   collision_mode_table_right[0x40]; /* 203b:0x4276 — move_right -> resolved mode */
+extern u8   collision_mode_table_left[0x40];  /* 203b:0x4296 — move_left_step_resolve */
+extern u8   collision_mode_table_right_alt[0x40]; /* 203b:0x42b6 — move_right_step_resolve_alt */
+extern u8   left_walk_contact_tbl_34[0x40];   /* 203b:0x4316 — p1_resolve_walk_left_contact */
+extern u8   right_walk_contact_tbl_35[0x40];  /* 203b:0x4336 — p1_resolve_walk_right_contact */
+extern u8   left_walk_contact_tbl_38[0x40];   /* 203b:0x4356 — p1_resolve_walk_left_contact */
+extern u8   right_walk_contact_tbl_39[0x40];  /* 203b:0x4376 — p1_resolve_walk_right_contact */
+
+/* Action LUTs (DEFINED in player.c, dumped-real).  Indexed by p1_pending_action /
+   game_mode / tile value; exec_move_action consumes the mapped action code. */
+extern u8   action_tbl_left[0x30];            /* 203b:0x36ee — p1_move_left[pending]  */
+extern u8   action_tbl_right[0x30];           /* 203b:0x371e — p1_move_right[pending] */
+extern u8   action_tbl_default[0x40];         /* 203b:0x377e — p1_handle_move_input[game_mode] */
+extern u8   down_action_lut[0x30];            /* 203b:0x374e — tile->down-action LUT (move_down) */
+
+/* ── BOUNDARY — leaves PAST cell-resolution (→ Task 7), forward-declared only ──
+ * land_on_tile_below and check_tile_below_ladder_or_land sit one layer beyond the
+ * cell-resolution set: they pull in the animation-channel allocator
+ * (apply_cell_animation @ 1000:69aa), the (mode,fx) land table @ DGROUP 0x76a, the
+ * latched-action sound tables @ 0x266e/0x269e, and move_down_step/p1_exec_pending
+ * (which recurse into exec_move_action + FUN_1000_4802/22b0).  Per the Task-6c
+ * STOP-AND-SPLIT rule they are NOT ported here — Task 7 ports them with the
+ * animation/FX subsystem during integration. */
+extern void check_tile_below_ladder_or_land(void);   /* 1000:29a6 — ladder/land probe (→ T7) */
+extern void land_on_tile_below(void);                /* 1000:2810 — landing resolution leaf (→ T7) */
 
 /* Other leaves the handlers call (sound/anim helpers; not tile-collision). */
 extern void play_sound(u8 sound_id);             /* 1000:6e11 */

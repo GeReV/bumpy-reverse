@@ -36,49 +36,53 @@ typedef int16_t  s16;
 typedef int32_t  s32;
 #define __far
 #define __huge
-/* player.c never executes the MK_FP path in this test (enter_game_mode is not
-   driven), but the symbol must exist for the translation unit to compile. */
-#define MK_FP(seg, off) ((void *)(uintptr_t)(((u32)(seg) << 4) + (u16)(off)))
+/* MK_FP host model: a 1 MB+ linear "far memory" shadow indexed by the real-mode
+   linear address (seg<<4 + off).  Task 6a/6b only needed MK_FP to compile (the
+   spine tests never dereferenced a built far pointer); Task 6c DOES drive
+   enter_game_mode for many modes, which loads mode_script_tbl[mode] as a far
+   pointer and dereferences script[0..5].  Backing MK_FP with this shadow makes
+   those reads land in valid (zeroed) host memory instead of a near-null deref. */
+static unsigned char far_mem[0x110000];   /* covers any seg<<4+off (seg,off 16-bit) */
+#define MK_FP(seg, off) ((void *)(far_mem + (((u32)(seg) << 4) + (u16)(off))))
 
 /* input_state is normally owned by input.c; provide a host definition. */
 u8 input_state;
 
-/* ── Task 6b: src/player.c now DEFINES game_mode_handlers, move_step_dispatch_tbl,
- * the handler bodies and the game-state globals.  We only stub the still-extern
- * TILE-COLLISION leaves + helper leaves (→ T6c) so the TU links.  These stubs
- * record that they were called, for the dispatch-wiring assertions below. */
+/* ── Task 6b/6c: src/player.c now DEFINES game_mode_handlers, move_step_dispatch_tbl,
+ * the handler bodies, the game-state globals, AND (6c) the tile-collision leaves +
+ * the contact/collision/action DATA tables.  We provide a host backing for the
+ * cross-module `tilemap` far pointer (level data) and still-extern helper leaves +
+ * the two boundary leaves deferred to T7 (land/ladder).  These stubs record that
+ * they were called, for the dispatch-wiring + routing assertions below. */
 u8         mode_script_tbl[64 * 4];   /* still forward-declared (populated elsewhere) */
-u8 __far  *tilemap;                   /* level tilemap far pointer (→ T6c) */
-u8         contact_transition_tbl[0x40];
-u8         contact_transition_tbl_b[0x40];
-u8         contact_action_tbl_left[0x40];
-u8         collision_mode_table_right[0x40];
-u8         down_action_lut[0x100];
+
+/* tilemap is the cross-module level data far pointer (owned by level.c → T7).  The
+ * host points it at a synthetic SYNTH_TILES byte array; on the host __far is erased
+ * so `u8 *` and `u8 __far *` are the same.  read_tile_layer_contact reads
+ * tilemap[cell+0x30], so the backing array must cover cell+0x30. */
+#define TILEMAP_SIZE 0x200
+static u8 synth_tilemap[TILEMAP_SIZE];
+u8 __far  *tilemap = synth_tilemap;
 
 /* Leaf-call trace: each stub bumps its counter so tests can assert routing. */
-static int n_play_sound, n_step_walk_anim, n_read_tile_contact, n_read_tile_at_cell;
+static int n_play_sound, n_step_walk_anim;
 static int n_apply_contact_action, n_play_action_sound, n_play_walk_anim_default;
-static int n_land_on_tile_below, n_begin_move;
-static int n_p1_move_right, n_p1_move_left, n_p1_handle_move_input;
-static int n_check_tile, n_fun_4802, n_walk_right_mode, n_walk_left_mode;
+static int n_land_on_tile_below;
+static int n_check_tile, n_fun_4802;
 
 void play_sound(u8 id) { (void)id; n_play_sound++; }
 void play_action_sound(void) { n_play_action_sound++; }
 void apply_contact_action(u8 c) { (void)c; n_apply_contact_action++; }
 void play_walk_anim_default(void) { n_play_walk_anim_default++; }
 void step_walk_anim(u8 a, u8 p, u16 fo, u16 fs) { (void)a;(void)p;(void)fo;(void)fs; n_step_walk_anim++; }
-void read_tile_layer_contact(u8 c) { (void)c; n_read_tile_contact++; }
-void read_tile_at_cell(u8 c) { (void)c; n_read_tile_at_cell++; }
-void p1_enter_walk_right_mode(void) { n_walk_right_mode++; }
-void p1_enter_walk_left_mode(void) { n_walk_left_mode++; }
-void p1_handle_move_input(void) { n_p1_handle_move_input++; }
-void p1_move_right(void) { n_p1_move_right++; }
-void p1_move_left(void) { n_p1_move_left++; }
+/* 6c BOUNDARY leaves (animation/FX-table dependent) — still extern (→ T7). */
 void check_tile_below_ladder_or_land(void) { n_check_tile++; }
-void p1_begin_move(u8 a) { (void)a; n_begin_move++; }
 void land_on_tile_below(void) { n_land_on_tile_below++; }
 void FUN_1000_4802(void) { n_fun_4802++; }
-/* NOTE: move_down is a SCOPE handler DEFINED in player.c — not stubbed here. */
+/* NOTE: move_down, p1_move_left/right, p1_handle_move_input, read_tile_*,
+ * p1_enter_walk_*_mode, p1_begin_move, exec_move_action and the *_step_resolve /
+ * *_walk_contact leaves are now SCOPE functions DEFINED in player.c (6c) — NOT
+ * stubbed here. */
 
 /* Out-of-scope handler-table targets (→ T6c) — host stubs so the table links. */
 void move_walk_right_anim_step(void) { }
@@ -347,11 +351,213 @@ int main(void)
         CHECK(g_routed == 1, "E6 dispatch_move_step[2][3] routed to probe");
     }
 
+    /* ══ F. TILE-COLLISION cell-resolution (Task 6c) ═════════════════════════
+     * Build a SYNTHETIC tilemap and drive the ported tile leaves with a set
+     * p1_cell, asserting p1_contact_code / p1_current_tile / resolved game_mode
+     * match the decomp logic AND the dumped contact/collision tables.
+     *
+     * read_tile_layer_contact reads tilemap[cell+0x30]; read_tile_at_cell reads
+     * tilemap[cell].  The resolvers end in dispatch_move_step, so we install safe
+     * step slots for any game_mode they can enter before calling them. */
+
+    /* Install safe step-slots for EVERY mode (the dispatch table is the full 0x40
+       rows after the 6c bound-correction), so the resolvers' tail dispatch_move_step
+       never jumps to a raw near offset regardless of which mode they enter. */
+    {
+        unsigned m;
+        for (m = 0; m < 0x40; m++) {
+            install_step_slot(m, 0, step_noop);
+        }
+    }
+    /* enter_game_mode reads mode_script_tbl[mode*4] far ptr for modes not in
+       {5,0xb,0x1c}; the host MK_FP yields a host pointer, and script[0/1] reads
+       index into the zeroed mode_script_tbl backing — harmless (sets steps/facing
+       to 0).  We only assert game_mode, which enter_game_mode sets directly. */
+
+    /* F1: read_tile_layer_contact — p1_contact_code = tilemap[cell+0x30]. */
+    {
+        memset(synth_tilemap, 0, TILEMAP_SIZE);
+        synth_tilemap[0x10 + 0x30] = 0x07;   /* contact-layer byte for cell 0x10 */
+        p1_contact_code = 0xaa;
+        read_tile_layer_contact(0x10);
+        CHECK(p1_contact_code == 0x07,
+              "F1 read_tile_layer_contact: got 0x%02x want 0x07", p1_contact_code);
+    }
+
+    /* F2: read_tile_at_cell — p1_current_tile = tilemap[cell]. */
+    {
+        memset(synth_tilemap, 0, TILEMAP_SIZE);
+        synth_tilemap[0x0b] = 0x0b;          /* teleport tile at cell 0x0b */
+        p1_current_tile = 0xaa;
+        read_tile_at_cell(0x0b);
+        CHECK(p1_current_tile == 0x0b,
+              "F2 read_tile_at_cell: got 0x%02x want 0x0b", p1_current_tile);
+    }
+
+    /* F3: move_left (6b) routes contact_code -> contact_action_tbl_left -> mode.
+       Set the cell's contact-layer byte so read_tile_layer_contact latches a
+       contact code, then assert move_left enters contact_action_tbl_left[code].
+       contact_code 1 in that table maps to mode 1 (then teleport-tile check). */
+    {
+        memset(synth_tilemap, 0, TILEMAP_SIZE);
+        reset_state();
+        move_step_count = 1;                  /* != 0, take the resolve path */
+        p1_cell = 0x20;
+        /* read_tile_layer_contact(cell-1=0x1f) reads tilemap[0x1f+0x30]. */
+        synth_tilemap[0x1f + 0x30] = 0x08;    /* contact code 0x08 */
+        /* contact_action_tbl_left[0x08] == 0x21 (from the dumped table). */
+        synth_tilemap[0x1f] = 0x00;           /* base tile not 0x0b */
+        move_left();
+        CHECK(contact_action_tbl_left[0x08] == 0x21, "F3 table[0x08]==0x21");
+        CHECK(game_mode == 0x21,
+              "F3 move_left contact8 -> mode 0x21: got 0x%02x", game_mode);
+        CHECK(p1_cell_prev == 0x1f, "F3 cell_prev = cell-1: got 0x%02x", p1_cell_prev);
+    }
+
+    /* F4: move_left contact code 1 -> table maps to 1 -> teleport-tile probe.
+       contact_action_tbl_left[1] == 0x12 (NOT 1), so no teleport branch; assert
+       the table-driven mode is taken directly. */
+    {
+        memset(synth_tilemap, 0, TILEMAP_SIZE);
+        reset_state();
+        move_step_count = 1;
+        p1_cell = 0x20;
+        synth_tilemap[0x1f + 0x30] = 0x01;    /* contact code 1 */
+        move_left();
+        CHECK(contact_action_tbl_left[0x01] == 0x12, "F4 table[1]==0x12");
+        CHECK(game_mode == 0x12,
+              "F4 move_left contact1 -> mode 0x12: got 0x%02x", game_mode);
+    }
+
+    /* F5: move_right routes via collision_mode_table_right.  contact code 0 ->
+       table[0]==0x02 -> resolved_mode 2 -> teleport probe at cell+1.  With base
+       tile 0x0b at cell+1, mode becomes 0x17; else 2. */
+    {
+        memset(synth_tilemap, 0, TILEMAP_SIZE);
+        reset_state();
+        move_step_count = 1;                  /* != 7, resolve path */
+        p1_cell = 0x20;
+        synth_tilemap[0x20 + 0x30] = 0x00;    /* contact code 0 */
+        synth_tilemap[0x21] = 0x0b;           /* teleport tile at cell+1 */
+        move_right();
+        CHECK(collision_mode_table_right[0x00] == 0x02, "F5 table[0]==0x02");
+        CHECK(p1_current_tile == 0x0b, "F5 read cell+1 tile == 0x0b");
+        CHECK(game_mode == 0x17,
+              "F5 move_right code0+teleport -> mode 0x17: got 0x%02x", game_mode);
+    }
+
+    /* F6: move_right same contact, base tile NOT 0x0b -> resolved mode stays 2. */
+    {
+        memset(synth_tilemap, 0, TILEMAP_SIZE);
+        reset_state();
+        move_step_count = 1;
+        p1_cell = 0x20;
+        synth_tilemap[0x20 + 0x30] = 0x00;
+        synth_tilemap[0x21] = 0x05;           /* not the teleport tile */
+        move_right();
+        CHECK(game_mode == 0x02,
+              "F6 move_right code0 no-teleport -> mode 0x02: got 0x%02x", game_mode);
+    }
+
+    /* F7: p1_enter_walk_right_mode probes cell+1 -> mode 0x2a (tile 0x0b) / 0x26. */
+    {
+        memset(synth_tilemap, 0, TILEMAP_SIZE);
+        reset_state();
+        p1_cell = 0x30;
+        synth_tilemap[0x31] = 0x0b;
+        p1_enter_walk_right_mode();
+        CHECK(game_mode == 0x2a, "F7a tile0x0b -> mode 0x2a: got 0x%02x", game_mode);
+        memset(synth_tilemap, 0, TILEMAP_SIZE);
+        reset_state();
+        p1_cell = 0x30;
+        synth_tilemap[0x31] = 0x03;
+        p1_enter_walk_right_mode();
+        CHECK(game_mode == 0x26, "F7b tile!=0x0b -> mode 0x26: got 0x%02x", game_mode);
+    }
+
+    /* F8: p1_enter_walk_left_mode probes cell-1 -> mode 0x29 (tile 0x0b) / 0x25. */
+    {
+        memset(synth_tilemap, 0, TILEMAP_SIZE);
+        reset_state();
+        p1_cell = 0x30;
+        synth_tilemap[0x2f] = 0x0b;
+        p1_enter_walk_left_mode();
+        CHECK(game_mode == 0x29, "F8a tile0x0b -> mode 0x29: got 0x%02x", game_mode);
+        memset(synth_tilemap, 0, TILEMAP_SIZE);
+        reset_state();
+        p1_cell = 0x30;
+        synth_tilemap[0x2f] = 0x03;
+        p1_enter_walk_left_mode();
+        CHECK(game_mode == 0x25, "F8b tile!=0x0b -> mode 0x25: got 0x%02x", game_mode);
+    }
+
+    /* F9: exec_move_action dispatch — action 0->move_down, 1->move_left,
+       2->move_right, 3->move_settle, default->p1_begin_move(action).  Probe the
+       default arm: action 0x07 (not a special) enters mode 0x07 via p1_begin_move
+       (= enter_game_mode(7)+dispatch).  install step slot for mode 7. */
+    {
+        reset_state();
+        install_step_slot(0x07, 0, step_noop);
+        exec_move_action(0x07);
+        CHECK(game_mode == 0x07,
+              "F9 exec_move_action(0x07) -> p1_begin_move mode 7: got 0x%02x",
+              game_mode);
+    }
+
+    /* F10: p1_move_left maps pending action via action_tbl_left then exec_move_action.
+       action_tbl_left[0x12] == 0x10 (from the dump) -> exec_move_action(0x10) ->
+       default arm -> p1_begin_move(0x10) -> mode 0x10. */
+    {
+        reset_state();
+        install_step_slot(0x10, 0, step_noop);
+        p1_pending_action = 0x12;
+        CHECK(action_tbl_left[0x12] == 0x10, "F10 action_tbl_left[0x12]==0x10");
+        p1_move_left();
+        CHECK(game_mode == 0x10,
+              "F10 p1_move_left(pending0x12) -> mode 0x10: got 0x%02x", game_mode);
+    }
+
+    /* F11: move_down (6b) indexes down_action_lut[tilemap[cell-8]] (6c table).
+       tile-below value 0x05 -> down_action_lut[0x05]==0x11 -> p1_begin_move(0x11). */
+    {
+        memset(synth_tilemap, 0, TILEMAP_SIZE);
+        reset_state();
+        install_step_slot(0x11, 0, step_noop);
+        p1_cell = 0x40;
+        synth_tilemap[0x40 - 8] = 0x05;       /* tile below */
+        CHECK(down_action_lut[0x05] == 0x11, "F11 down_action_lut[5]==0x11");
+        move_down();
+        CHECK(game_mode == 0x11,
+              "F11 move_down tile5 -> action 0x11 -> mode 0x11: got 0x%02x",
+              game_mode);
+    }
+
+    /* F12: p1_resolve_walk_right_contact — step!=7, contact code routes the
+       right_walk_contact_tbl_39 table.  With contact code whose table entry ==0x39
+       it forces mode 0x39.  contact code 1 -> table[1]==0x39. */
+    {
+        memset(synth_tilemap, 0, TILEMAP_SIZE);
+        reset_state();
+        move_step_count = 1;                  /* != 7 */
+        p1_cell = 0x20;
+        synth_tilemap[0x20 + 0x30] = 0x01;    /* contact code 1 */
+        CHECK(right_walk_contact_tbl_39[0x01] == 0x39, "F12 tbl39[1]==0x39");
+        p1_resolve_walk_right_contact();
+        CHECK(game_mode == 0x39,
+              "F12 resolve_walk_right contact1 -> mode 0x39: got 0x%02x", game_mode);
+    }
+
     if (failures == 0) {
         printf("PASS: p1_step_scripted_move spine (right/left/guards) + Task 6b "
                "dispatch wiring (game_mode_handlers index map, p1_movement_dispatch "
                "table/override routing, dispatch_move_step slot arithmetic, "
-               "gamemode_22/23 handler routing) [synthetic move-script]\n");
+               "gamemode_22/23 handler routing) + Task 6c tile-collision "
+               "(read_tile_layer_contact/read_tile_at_cell tilemap reads, "
+               "move_left/move_right collision-table routing + teleport-tile probe, "
+               "p1_enter_walk_{left,right}_mode, exec_move_action dispatch, "
+               "p1_move_left action LUT, move_down down_action_lut, "
+               "p1_resolve_walk_right_contact walk-contact table) "
+               "[synthetic tilemap + dumped-real tables]\n");
         return 0;
     }
     printf("FAIL: %d assertion(s) failed\n", failures);
