@@ -36,6 +36,51 @@ feasible, bring back toward 1:1. Each module's `.h` carries the detailed in-code
 | `input.c` | Transcription | Pure keyboard-input layer ported 1:1 (install_keyboard_isr 798a, get_key_state 7ab4, flush_keyboard_buffer 7b01, input_state_clear 65d2, poll_input 1dde, read_input_action 75a2). Owns `input_state` (0x8244), `g_key_state_table` (0x4d42), `g_joystick_handler_table` (0x4cf2), `g_keyboard_isr_installed` (0x4dc4). Its `extern int dos_abort(void)` (faithful abort-path control flow) is resolved by a `game_stubs.c` stub for the linked build. **No ownership edits were needed in Task 7.** |
 | `player.c` | Transcription | P1 move-execution spine + 19 game-mode handlers + tile-collision leaves, ported 1:1 (Tasks 6a/6b/6c); dispatch/contact/action tables dumped byte-exact from the unpacked image. Owns all P1 move-state scalars (`p1_pixel_x/y`, `game_mode`, `move_locked`, `p1_cell`, `rng_frame`, …) and the dumped tables. Its forward-declared out-of-scope handlers + the 2 deferred landing leaves + `mode_script_tbl` are resolved by `game_stubs.c` for the linked build (NOT reached on the level-1 boot path). **No ownership edits were needed in Task 7.** |
 
+## Phase-2 module audit (physics state machine additions to `player.c`)
+
+| Module / function set | Fidelity | Notes |
+|---|---|---|
+| `land_on_tile_below` (2810) | Transcription | Landing handler: prev-mode guard, per-device sound lookup, cell-8 tile probe → `land_mode_fx_tbl`, FX dispatch. Tables `land_mode_fx_tbl` (0x60 B), `land_sound_tbl_opl` / `land_sound_tbl_std` (0x30 B each) dumped byte-exact from the unpacked image. Callee `apply_cell_animation` (69aa, anim-channel allocator) stays stubbed → Phase 5. Sound callees stubbed → Phase 6. |
+| `check_tile_below_ladder_or_land` (29a6) | Transcription | Tile-below probe: signed `== 0x0e` ladder test (mirrors engine's signed char compare), three exit paths — climb (enter mode 0x0a + `apply_cell_animation` stubbed), down-held delegate (`move_down_step`), else pending-action delegate (`p1_exec_pending_action`). `apply_cell_animation` stubbed → Phase 5; delegate substates ported in Task 4. |
+| Move-step substates: `cursor_move_up` / `_down` / `_right` (64e2/64ff/6535) | Transcription | Cursor row/column counters; thin wrappers around `enter_game_mode` + `dispatch_move_step`. Ported 1:1. |
+| `p1_try_jump_action` (6587) | Transcription | Jump-trigger: checks `move_locked` + input bit; sets `jump_ticks = 0x34`; enters jump mode + dispatches. Dumped jump-tick constant matches engine. |
+| `p1_try_trigger_pending_action` (654e) | Transcription | Pending-action trigger: indexes `pending_anim_lut_3cda` by `p1_pending_action`; calls `p1_set_cell_animation`. Table (0x30 B) dumped byte-exact. |
+| `input_state_mask_10` / `_1d` / `_0f` (65e5/65fb/6611) | Transcription | Input-state mask combiners: AND `input_state` with the named literal; thin, ported 1:1. |
+| `p1_move_step_with_sound` (6648) | Transcription | Move-step with sound: anim select via `pending_anim_lut_3d0a`, per-device sound via `move_sound_lut_opl_25ae` / `_std_25de` (tables dumped byte-exact, 0x30 B each); runs `p1_dispatch_pending_action` + `play_sound` (stubbed → Phase 6). |
+| `move_step_last_variant` (66d8) | Transcription | Contact-sound dispatch: indexes `contact_sound_lut_35de` by `p1_contact_code` (table 0x30 B, dumped byte-exact); calls `apply_contact_action` (stubbed → Phase 5/6). |
+| `move_step_landed` (6717) | Transcription | Post-step land: reads tile under cell, checks `tile_followup_action_lut`; if tile is `'['` clears `level_complete_flag`; indexes `g_anim_channel_idx`. Table `tile_followup_action_lut` (0x30 B) dumped byte-exact including the 6 tail bytes that overlap the dispatch table. |
+| `move_step_noop` / `move_step_noop_sentinel` (673a/7111) | Transcription | No-op substates; return immediately. Ported 1:1. |
+| `run_physics_settle_wrap` / `run_physics_settle` / `FUN_1000_22b0` (22c1/22fc/22b0) | Transcription | Physics settle: unfreeze, busy-loop 1000 × `p1_read_tile_under`, decrement `settle_countdown`, raise `frame_abort_flag` on expiry. Ported 1:1 including the 1000-iteration literal. |
+| `p1_exec_pending_action` (465e) | Transcription | Pending-action executor: indexes `pending_action_lut_36be` (0x30 B, dumped byte-exact) by `p1_pending_action`; calls `exec_move_action` with the result. |
+| `move_down_step` (253f) | Transcription | Downward step: increments `move_step_count`; if counter reaches threshold delegates to `check_tile_below_ladder_or_land`, else dispatches. Ported 1:1. |
+| Supporting wrappers: `p1_set_cell_animation*`, `p1_trigger_cell_animation`, `p1_dispatch_pending_action`, `p1_step_landed`, `p1_read_tile_under`, `run_physics_settle` | Transcription | Thin anim/tile wrappers, each ported 1:1 from the live decomp. All call the stubbed `apply_cell_animation` (→ Phase 5) or the stubbed `play_sound` (→ Phase 6). |
+
+**Phase-2 deviations (all in-code RECONSTRUCTION FIDELITY notes present):**
+
+- `apply_cell_animation` (69aa, anim-channel allocator) — extern stub throughout; the full channel-A allocator subsystem is out of scope → Phase 5.
+- `play_sound` / `play_state_sound` (6e11/647e) — extern stubs → Phase 6.
+- `check_exit_tile_vert` (6372) / `move_step_read_item` (6627) — exit/item boundary callees stay stubbed → Phase 3.
+- `p1_movement_dispatch` (1e02) call-through — this Phase-1 dispatcher tail-calls `dispatch_move_step` with the raw engine near-offset from `game_mode_handlers`; the host cannot call through that table (engine offsets, not host fn-ptrs). The harness skips these 624 records (`UNPORTED`); the physics validation covers every ported substate directly. Modeling the call-through dispatcher as a host-safe table is deferred (not a physics gap).
+
+**Phase-2 validation method:** per-function physics differential (seed entry snapshot + captured script/tilemap → call the reconstructed C fn → assert 10 output fields vs the engine's exit snapshot) **plus** trajectory-stitch over 5 scenarios (walk / jump-up→bounce / jump+lateral arc / ledge-fall / land). Validation granularity is the engine's **move-step**, not the int8 tick (the int8 end-to-end gate remains deferred — see Phase-1 status note below). The 624 UNPORTED records are solely the `p1_movement_dispatch` call-through dispatcher entries; every ported substate passes FAIL=0.
+
+## Phase-2 status (Player-1 physics state machine)
+
+As of Phase-2 Task 4, the Player-1 physics state machine is **reconstructed and validated**:
+
+- **Reconstructed 1:1**: landing leaves (`land_on_tile_below` 2810, `check_tile_below_ladder_or_land` 29a6) plus the full set of move-step substates and handler delegates (`cursor_move_*`, `p1_try_jump_action`, `p1_try_trigger_pending_action`, `input_state_mask_*`, `p1_move_step_with_sound`, `move_step_last_variant`, `move_step_landed`, `move_step_noop*`, `run_physics_settle_wrap`, `p1_exec_pending_action`, `move_down_step`) — all ported 1:1 from the live Ghidra decomp (verified via MCP + disasm).
+- **Runtime move-scripts recovered**: the bounce/gravity arc scripts (`[anim, dx, dy]` 6-byte entries for modes 0x0/0x2/0x3/0x4/0x6/0x2d) recovered by T1 physics oracle capture; byte-exact land/contact tables (six LUTs, 0x30–0x60 B each) dumped from the unpacked image.
+- **Gate re-confirmed (2026-06-19)**: `validate_physics` PASS=16584 FAIL=0 UNPORTED=624; trajectory-stitch fully matches all 5 scenarios (matched == total − skipped_dispatch, no early stop). No-regression: `validate_blit` 17/17 chain + 24/24 blits; `validate_composite` 54152 @ 53858 baseline; `validate_player` PASS; `BUMPY.EXE` links clean.
+
+**Deferred from Phase 2:**
+
+1. **Exit / item boundary callees** (`check_exit_tile_vert` 6372, `move_step_read_item` 6627) — Phase 3.
+2. **Player 2** — Phase 4.
+3. **Anim-channel / FX allocator** (`apply_cell_animation` 69aa) — Phase 5.
+4. **Sound** (`play_sound`, `play_state_sound`) — Phase 6.
+5. **`p1_movement_dispatch` call-through host model** — the dispatcher's handler table holds raw engine near-offsets; a host-safe call-through table model is needed before end-to-end host replay can drive the full game-mode handler chain. Not a physics gap; deferred.
+6. **int8-synced end-to-end gate** — the Unicorn capture granularity does not match the engine's physics-frame rate. A frame-accurate capture (DOSBox path) is needed before the full game-loop can be replay-validated tick-for-tick. Deferred.
+
 ## Phase-1 slice status (vertical slice — session → loop → modules)
 
 As of Phase-1 Task 7 the reconstructed `src/` tree forms a complete, **linkable**
