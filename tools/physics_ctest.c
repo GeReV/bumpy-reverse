@@ -170,6 +170,12 @@ static const char *cmp_exit(const snap_t *e, long *got, long *want)
     FLD("input",      input_state,       e->input);
     FLD("override",   move_override,     e->override);
     FLD("locked",     move_locked,       e->locked);
+    /* physics_frozen: not an output of the current per-fn targets
+       (p1_step_scripted_move and enter_game_mode do not touch it). */
+    /* prev_mode: set only by enter_game_mode's caller (p1_movement_dispatch),
+       which is not a per-fn diff target yet (T3/T4); excluded intentionally. */
+    /* cell: a read-only input to the physics fns being tested here; the entry
+       and exit snaps carry the same value, so comparing it adds no signal. */
 #undef FLD
     return NULL;
 }
@@ -291,7 +297,7 @@ static const char *fn_name(u16 fn_addr)
 }
 
 /* Per-fn comparator stat accumulators. */
-typedef struct { long pass, fail, unported; } stats_t;
+typedef struct { long pass, fail, unported, skipped_mode; } stats_t;
 
 /* dispatch_move_step slot-arithmetic probe (call-through is unsafe).  Verifies
    the slot address dispatch_move_step computes lands on exactly
@@ -305,9 +311,14 @@ static int check_dispatch_slot_arith(const record_t *r)
     unsigned off;
     void (*saved_fn)(void);
     void *slot;
-    /* a real engine table only has 0x40 mode rows; the captured modes (idle/walk
-       /jump/fall) are all < 0x40, so the slot is in-bounds. */
-    if (mode >= 0x40) return 1;   /* out of reconstructed table -> skip (vacuous pass) */
+    /* a real engine table only has 0x40 mode rows; all captured modes (idle/walk
+       /jump/fall) are < 0x40 — assert the invariant so inflated PASS counts are
+       impossible; hard-fail if a future capture ever violates it. */
+    if (mode >= 0x40) {
+        fprintf(stderr, "ASSERT: dispatch record has mode=%#x >= 0x40 "
+                "(invariant violated — should never happen in this capture)\n", mode);
+        return -1;   /* caller treats negative as a hard failure */
+    }
     off = mode * 0x22 + step * 2;
     slot = &move_step_dispatch_tbl[off];
     /* install a host probe at the exact slot, run the slot-address path, restore. */
@@ -334,8 +345,16 @@ static int run_per_function(record_t *recs, long nrec, const char *scname,
         record_t *r = &recs[i];
         if (r->fn_addr == FN_DISPATCH_MOVE_STEP) {
             /* slot-address arithmetic only (call-through crashes on the host). */
-            if (check_dispatch_slot_arith(r)) {
+            int arith = check_dispatch_slot_arith(r);
+            if (arith > 0) {
                 st->pass++;
+            } else if (arith < 0) {
+                /* mode >= 0x40 invariant violated — hard fail */
+                st->fail++; scen_fail = 1;
+                if (printed++ < 8)
+                    printf("    FAIL [%s #%ld] dispatch_move_step mode=%#x >= 0x40 "
+                           "(invariant violation)\n",
+                           scname, i, r->ent.mode);
             } else {
                 st->fail++; scen_fail = 1;
                 if (printed++ < 8)
@@ -402,10 +421,14 @@ static int run_per_function(record_t *recs, long nrec, const char *scname,
  * record requires an UNPORTED fn (landing leaves, or a dispatch target absent
  * from move_step_dispatch_tbl's host-callable set) we STOP and report the step,
  * which is the clean localisation the brief asks for (no crash, no hard-fail). */
-static long run_trajectory_stitch(record_t *recs, long nrec, const char *scname)
+/* run_trajectory_stitch return: matched steps and skipped dispatch records. */
+typedef struct { long matched; long skipped_dispatch; long stop_step; } stitch_result_t;
+
+static stitch_result_t run_trajectory_stitch(record_t *recs, long nrec, const char *scname)
 {
     long i;
-    if (nrec == 0) return 0;
+    stitch_result_t res = { 0, 0, nrec };
+    if (nrec == 0) return res;
     seed_globals(&recs[0].ent);
     seed_script(&recs[0]);
     for (i = 0; i < nrec; i++) {
@@ -426,12 +449,9 @@ static long run_trajectory_stitch(record_t *recs, long nrec, const char *scname)
             /* p1_movement_dispatch / landing leaves.  p1_movement_dispatch's
                handlers (game_mode_handlers[]) tail-call dispatch_move_step, which
                on the host would call-through a RAW ENGINE OFFSET and crash — so we
-               do NOT call-through any handler here.  The HOSTMAP (engine-offset ->
-               reconstructed-C-fn, seeded with the Phase-1-ported handlers) is the
-               table T3/T4 will dispatch through once the 0x63xx substates are
-               ported and the move_step_dispatch_tbl slots can be host-bound; for
-               now we look up game_mode's handler to confirm it IS host-mapped, then
-               rely on the captured-exit re-anchor below (graceful, no call-through).
+               do NOT call-through any handler here.  We re-anchor from the captured
+               exit and count this as a skipped dispatch record (not matched),
+               distinguishing genuinely-executed steps from re-anchored-only ones.
                Landing leaves have no host map entry at all -> the UNPORTED stop. */
             if (r->fn_addr == FN_P1_MOVEMENT_DISPATCH) {
                 static const u16 mode_handler_off[0x40] = {
@@ -442,11 +462,16 @@ static long run_trajectory_stitch(record_t *recs, long nrec, const char *scname)
                 };
                 u16 hoff = (game_mode < 0x40) ? mode_handler_off[game_mode] : 0;
                 (void)hostmap_lookup(hoff);   /* confirm host-map coverage; no call */
+                /* Count as skipped (not matched): re-anchor and move on. */
+                res.skipped_dispatch++;
+                seed_globals(&r->ex);
+                continue;
             } else {
                 /* landing leaf (land_on_tile_below / check_tile_below) — UNPORTED. */
                 printf("    STITCH stop [%s] step %ld: UNPORTED fn %s "
                        "(expected until T3/T4)\n", scname, i, fn_name(r->fn_addr));
-                return i;
+                res.stop_step = i;
+                return res;
             }
         }
         /* compare the produced trajectory fields against the captured exit. */
@@ -459,13 +484,16 @@ static long run_trajectory_stitch(record_t *recs, long nrec, const char *scname)
                    scname, i, fn_name(r->fn_addr),
                    p1_pixel_x, p1_pixel_y, p1_move_anim, game_mode,
                    r->ex.px, r->ex.py, r->ex.anim, r->ex.mode);
-            return i;
+            res.stop_step = i;
+            return res;
         }
         /* re-anchor to the captured exit so the next step starts from ground
            truth (the stitch validates per-step deltas, not unbounded drift). */
         seed_globals(&r->ex);
+        res.matched++;
     }
-    return nrec;
+    res.stop_step = nrec;
+    return res;
 }
 
 /* ════════════════════════════════════════════════════════════════════════════ */
@@ -505,8 +533,8 @@ int main(int argc, char **argv)
         char scname[64];
         u32 nrec, k;
         record_t *recs;
-        stats_t sst = { 0, 0, 0 };
-        long stitched;
+        stats_t sst = { 0, 0, 0, 0 };
+        stitch_result_t sr;
         int per_ok;
 
         sid = b[o]; o += 1;
@@ -538,21 +566,22 @@ int main(int argc, char **argv)
 
         /* PRIMARY */
         per_ok = run_per_function(recs, (long)nrec, scname, &sst);
-        printf("  per-fn: PASS=%ld  FAIL=%ld  UNPORTED=%ld\n",
-               sst.pass, sst.fail, sst.unported);
+        printf("  per-fn: PASS=%ld  FAIL=%ld  UNPORTED=%ld  SKIPPED_MODE=%ld\n",
+               sst.pass, sst.fail, sst.unported, sst.skipped_mode);
         if (!per_ok) hard_fail = 1;
 
         /* SECONDARY */
-        stitched = run_trajectory_stitch(recs, (long)nrec, scname);
-        printf("  trajectory-stitch: matched %ld/%lu steps before UNPORTED stop\n",
-               stitched, (unsigned long)nrec);
+        sr = run_trajectory_stitch(recs, (long)nrec, scname);
+        printf("  trajectory-stitch: matched %ld / skipped_dispatch %ld / total %lu\n",
+               sr.matched, sr.skipped_dispatch, (unsigned long)nrec);
 
         st.pass += sst.pass; st.fail += sst.fail; st.unported += sst.unported;
+        st.skipped_mode += sst.skipped_mode;
         free(recs);
     }
 
-    printf("\n=== TOTAL per-fn: PASS=%ld  FAIL=%ld  UNPORTED=%ld ===\n",
-           st.pass, st.fail, st.unported);
+    printf("\n=== TOTAL per-fn: PASS=%ld  FAIL=%ld  UNPORTED=%ld  SKIPPED_MODE=%ld ===\n",
+           st.pass, st.fail, st.unported, st.skipped_mode);
     if (hard_fail || st.fail != 0) {
         printf("FAIL: %ld per-function differential failure(s) on PORTED fns\n",
                st.fail);
