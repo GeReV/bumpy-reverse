@@ -21,9 +21,10 @@
 # Phase-5 T2 report for the deviation record.
 #
 # Exit 0 iff anim.c builds clean AND the per-function differential has ZERO failures
-# on the PORTED fns.  This is the Task-2 self-check: as of this task ALL SEVEN anim
-# functions are UNPORTED (src/anim.c is the globals-only skeleton; the bodies port in
-# Phase-5 T3/T4), so the expected result is every record UNPORTED with zero FAIL.
+# on the PORTED fns.  All seven anim-channel fns are reconstructed 1:1 in src/anim.c:
+# the allocator + A/B steppers are semantic-state validated, the A/B draw/erase are
+# descriptor-level validated.  Expected: PASS=45 FAIL=0 DESC_CHECKED=28 (UNPORTED=1 is
+# the one genuinely-unexercised apply_cell_animation lifecycle record).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
