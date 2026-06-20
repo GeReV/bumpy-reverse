@@ -81,6 +81,49 @@ As of Phase-2 Task 4, the Player-1 physics state machine is **reconstructed and 
 5. **`p1_movement_dispatch` call-through host model** — the dispatcher's handler table holds raw engine near-offsets; a host-safe call-through table model is needed before end-to-end host replay can drive the full game-mode handler chain. Not a physics gap; deferred.
 6. **int8-synced end-to-end gate** — the Unicorn capture granularity does not match the engine's physics-frame rate. A frame-accurate capture (DOSBox path) is needed before the full game-loop can be replay-validated tick-for-tick. Deferred.
 
+## Phase-3 module audit (item/scoring/exit game-state — `items.c`)
+
+| Module / function set | Fidelity | Notes |
+|---|---|---|
+| `read_tile_layer2` (6bf4) | Transcription | Layer-C item-byte read leaf: `p1_item_code = tilemap[cell + 0x60]`. Sibling of `read_tile_layer_contact` (+0x30) / `read_tile_at_cell` (+0x00) in `player.c`; owns `p1_item_code`, reconstructed here. Ported 1:1. |
+| `p1_collect_item_score` (6c95) | Transcription | Score award: base +250 (`ADD score_lo,0xfa; ADC score_hi,0`), then per item-code: `'#'` increments `sharp_item_counter` only; `'/'` adds +9750 (`+0x2616`); `'0'` adds +49750 (`+0xc256`). **Score arithmetic**: the Ghidra decomp hoists the carry into comparator expressions; the raw disasm (6ceb–6d1f) is a plain `ADD/ADC` sequence — this port mirrors the machine code (faithful form); result is identical. **Cell-view erase staging** (6ca1–6ce7): the engine queues a 2-tile view-erase (`pending_erase_count`, pixel tables, erase_kind) into the per-tick view-present chain — render-subsystem state (→ Phase 5); documented in-code, not reproduced against invented render globals. Numerically verified via items-trace differential. |
+| `p1_collect_item` (6c14) | Transcription | Item pickup: calls `p1_collect_item_score`, clears `tilemap[p1_cell+0x60]`; decrements `items_remaining` (unless item is `\x01` or `'#'`); on last item sets `level_complete_flag = 1`, arms `level_complete_anim_counter = 0xf2`, relocates `anim_target_cell`, fires exit animation. Deviations (all noted in-code): `apply_cell_animation` (69aa → Phase 5), `play_sound` (→ Phase 6), `collect_mode_2810 = 0xf` DGROUP tag reproduced but not part of validated semantic state. |
+| `move_step_read_item` (6627) | Transcription | Move-step dispatch leaf: calls `read_tile_layer2(p1_cell)`; if `p1_item_code != 0`, calls `p1_collect_item`. Ported 1:1 from the decomp. |
+| `check_exit_tile_vert` (6372) | Transcription | Exit-tile detection: if `move_step_count != 7` AND `tilemap[p1_cell+0x30] == 0x0c`, commits the exit transition: `p1_move_step_idx = 0`, `physics_frozen = 1`, `enter_game_mode(0x2e)`, plays exit sound (device-dependent). Verified against disasm 1000:6372–63bd (offset guards, tilemap probe, sound-id select). `play_sound` stays stubbed → Phase 6. |
+| `teleport_to_next_exit_tile` (25ad) | Transcription | Teleport: forward-scans `tilemap[scan_cell]` (wrapping at 0x30) for the next `0x0f` tile; on hit: sets `anim_target_cell = p1_cell = scan_cell`, calls `p1_set_pixel_from_cell`, nudges `p1_pixel_y += 0x0d`, fires teleport FX + sound, enters game mode 0x0f, dispatches. Verified against disasm 1000:25ad–2633. `apply_cell_animation` + `play_sound` stubbed → Phase 5/6; `p1_set_pixel_from_cell` (4906) is a faithful-signature stub in `game_stubs.c` for `BUMPY.EXE` (→ Phase-2 player subsystem completion); the items harness reproduces its coord-table effect for the per-fn differential. |
+| **Protection hook (`level.c`)** | **Deviation** | `start_level` (1000:2d14) opens with: `if (1 < current_level && copyprotect_flag == 0) copyprotect_challenge(); if (copyprotect_flag == -1) current_level = 1;` The entire hook (both guards + challenge body) is compiled behind `#ifdef BUMPY_COPY_PROTECTION`, **not defined** in the default build → compiles out. With it OFF, level-advance to levels 2+ flows with no challenge, exactly matching the **cracked-build** runtime (the shipped DOS English release unconditionally sets `copyprotect_flag = 1` in `copyprotect_challenge` — before any input — so the compare never fires and `-1` is never written). The `#define` switches the hook back on; the placeholder `copyprotect_challenge()` carries only the cracked-build invariant until the **faithful un-cracked body** (sprite quiz + answer compare) ports in **Phase 7b**. |
+| **Level-advance wiring (`game.c`)** | Transcription (structure) | The exit→advance path is the Phase-1 `run_game_session`/`game_loop` tail (1000:0258/0c18), ported 1:1 from the decomp: `all_entries_flag_set()` → `current_level + 1` → `if (current_level != 0x0a)` break (title return), else loop. `start_level(current_level, current_level)` is the generalised call (the engine's `start_level` reads `current_level` directly; passing it for both args reproduces the read exactly). **Validation method**: the advance state-transition was validated by a **hand-rolled re-derivation of the advance decision inside the test harness** (`items_ctest.c`'s `adv_step`/`adv_start_level`), which exercises the advance logic (level-complete flag → `current_level+1`, protection-off path, boundary at 0x0a) without going through the reconstructed `run_game_session` / `game_loop` engine path. The reconstructed engine path (`run_game_session` loop with `start_level`, screen-transition stubs, etc.) was NOT exercised end-to-end — its per-tick callees remain stubs, making a full reconstructed-path advance run impractical. That full engine-path validation is DEFERRED (see Phase-3 deferred list). The wiring structure (control-flow, comparisons, call order) is structurally 1:1 from the decomp and is documented in-code. |
+
+**Phase-3 validation method:** per-function semantic-state differential at the item/exit function-call boundary (discrete events; no trajectory desync). Engine ground truth captured by `tools/items_oracle.py` (Unicorn instrumentation); 5 scenarios (collect normal/special/last, exit detect, reach exit + complete); 11 records total; every ported record PASS, FAIL=0, UNPORTED=0.
+
+**Phase-3 deviations (all in-code RECONSTRUCTION FIDELITY notes present):**
+
+- `apply_cell_animation` (69aa, anim-channel allocator) — extern stub throughout; FX allocator subsystem → Phase 5.
+- `play_sound` / `play_state_sound` (6e11/647e) — extern stubs → Phase 6.
+- `p1_set_pixel_from_cell` (4906) — faithful-signature stub in `game_stubs.c` for the `BUMPY.EXE` link; its coord-table effect is reproduced in the items-harness differential → Phase-2 player subsystem completion.
+- Cell-view erase staging (6ca1–6ce7) — render-subsystem state (per-tick view-present chain, → Phase 5); documented in-code rather than reproduced against invented render globals.
+- Copy-protection challenge body — `#ifdef BUMPY_COPY_PROTECTION` gated (OFF by default); faithful un-cracked sprite-quiz body → Phase 7b.
+- Full reconstructed-engine-path level-advance validation — deferred (live `run_game_session` loop has stubbed callees; impractical until stubs are un-stubbed or a live loop replay harness is built).
+
+## Phase-3 status (item/scoring/exit game-state + level-advance)
+
+As of Phase-3 Task 4 (validate gate re-confirmed Phase-3 Task 5), the item/scoring/exit game-state is **reconstructed and validated**:
+
+- **Reconstructed 1:1**: `read_tile_layer2` (6bf4), `p1_collect_item_score` (6c95), `p1_collect_item` (6c14), `move_step_read_item` (6627), `check_exit_tile_vert` (6372), `teleport_to_next_exit_tile` (25ad) — all ported 1:1 from the live Ghidra decomp (verified via MCP + raw disasm).
+- **Gameplay loop closed (structurally)**: collect → `level_complete_flag` → `all_entries_flag_set` → `current_level+1` → `start_level(N)` wiring is structurally 1:1 from the decomp. The copy-protection hook is faithful-structure (cracked-build semantics reproduced by default; `#define` switches the hook on for the un-cracked body when it lands in Phase 7b).
+- **Gate re-confirmed (2026-06-20)**: `validate_items` PASS=11 FAIL=0 UNPORTED=0 (all five item/exit functions ported); level-advance state-transition re-derivation PASS (1→2 `start_level(2)`, protection-OFF path, boundary 0x0a). No-regression: `validate_blit` 17/17 anim + 17/17 chain + 24/24 blits; `validate_composite` 54152 @ 53858 baseline; `validate_player` PASS; `validate_physics` PASS=16584 FAIL=0 UNPORTED=624; `BUMPY.EXE` links clean.
+
+**Deferred from Phase 3:**
+
+1. **Faithful un-cracked copy-protection challenge body** (`copyprotect_challenge` 1000:4015, sprite quiz + answer compare) — Phase 7b. `#define BUMPY_COPY_PROTECTION` switches it on.
+2. **Score HUD display** (rendering the 32-bit score on-screen) — Phase 7.
+3. **FX allocator** (`apply_cell_animation` 69aa, anim-channel allocator) — Phase 5.
+4. **Sound** (`play_sound`, `play_state_sound`) — Phase 6.
+5. **Player 2 collision** — Phase 4.
+6. **`p1_set_pixel_from_cell` (4906)** — faithful-signature stub; completion deferred to Phase-2 player subsystem completion.
+7. **Full reconstructed-engine-path level-advance validation** — the live `run_game_session` loop has stubbed callees (screen-transition fns, P2 step, etc.); a complete advance run through the reconstructed engine path requires those stubs to be un-stubbed (or a live loop replay harness). Deferred.
+8. **int8-synced end-to-end gate** — Unicorn capture granularity does not match the engine's physics-frame rate; a frame-accurate capture (DOSBox path) is needed. Deferred (unchanged from Phase 2).
+
 ## Phase-1 slice status (vertical slice — session → loop → modules)
 
 As of Phase-1 Task 7 the reconstructed `src/` tree forms a complete, **linkable**
