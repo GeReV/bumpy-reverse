@@ -6,14 +6,16 @@
 /* ────────────────────────────────────────────────────────────────────────────
  *  anim.h — animation-channel FX module (Phase-5 reconstruction).
  *
- *  SKELETON (Phase-5 Task 2): this header declares the anim-channel module's
- *  globals + the seven anim-channel function prototypes.  The function BODIES are
- *  NOT reconstructed yet — they port across Phase-5 Tasks 3/4 (allocator+steppers
- *  on semantic state, draw+erase at descriptor level).  Until then the seven anim
- *  functions remain stubbed in game_stubs.c (no dup: src/anim.c defines ONLY
- *  globals, no bodies) and anim.obj contributes only its globals to BUMPY.EXE.
- *  The host replay harness tools/anim_ctest.c #includes src/anim.c for the globals
- *  and validates each ported body as it lands.
+ *  RECONSTRUCTED (Phase-5 Tasks 2–4): this header declares the anim-channel
+ *  module's globals + the seven anim-channel function prototypes, all of which now
+ *  have 1:1 reconstructed bodies in src/anim.c.  The globals landed in T2; the
+ *  bodies landed across T3/T4 — apply_cell_animation (69aa) + the two steppers
+ *  step_anim_channels_a/b (14e4/15a1) are validated on semantic state (allocator +
+ *  channel-record table), and the two draw + two erase fns draw_anim_channels_a/b
+ *  (165e/17c7) + erase_anim_channels_a/b (1a67/1b2b) are validated at descriptor
+ *  level.  anim.obj contributes both its globals and these seven bodies to
+ *  BUMPY.EXE (game_stubs.c no longer stubs them — no dup).  The host replay harness
+ *  tools/anim_chan_ctest.c #includes src/anim.c and gates every body.
  *
  *  The anim subsystem drives the two per-cell animated overlay layers (channel A:
  *  3 slots; channel B: 4 slots).  Channel A has an allocator (apply_cell_animation,
@@ -134,11 +136,11 @@ extern u8 __far *tilemap;             /* game.c   0xa0d8 — base tilemap layer 
    transitively via bumpy.h only if needed — not required by the skeleton. */
 
 /* ════════════════════════════════════════════════════════════════════════════
- *  Anim functions — DECLARED here, BODIES reconstructed in Phase-5 T3/T4.
- *  (Until ported they remain stubbed in game_stubs.c; anim.c defines no bodies.)
+ *  Anim functions — DECLARED here, BODIES reconstructed in src/anim.c (Phase-5 T3/T4).
+ *  All seven are now defined 1:1 in anim.c (game_stubs.c no longer stubs them).
  *  These prototypes match the existing declarations in game.h (the six step/draw/
  *  erase fns) and player.h (apply_cell_animation) — restated here for module
- *  documentation; the bodies are NOT defined in anim.c this task.
+ *  documentation.
  *  Engine seg-1000 offsets are noted for the harness's per-fn registry.
  * ════════════════════════════════════════════════════════════════════════════ */
 void apply_cell_animation(u8 fx_code);  /* 1000:69aa — channel-A allocator           */

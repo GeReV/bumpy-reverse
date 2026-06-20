@@ -1,4 +1,4 @@
-/* Host REPLAY HARNESS for src/anim.c — Phase-5 Task 2.
+/* Host REPLAY HARNESS for src/anim.c — Phase-5 Tasks 2–4.
  *
  * NAMING NOTE: this file is tools/anim_chan_ctest.c, NOT tools/anim_ctest.c.  The
  * Phase-5 plan named the new anim-channel harness "tools/anim_ctest.c", but that
@@ -16,14 +16,13 @@
  * (magic "ANIMTRC1", version 1 — layout frozen in tools/anim_oracle.py's header
  * §"TRACE LAYOUT" and local/build/anim_model.md).
  *
- * As of Phase-5 T2, src/anim.c is the GLOBALS-ONLY skeleton (no fn bodies): every
- * PORTED[] entry below is NULL, so every record is reported UNPORTED and the
- * comparators do not run.  Phase-5 T3 fills in apply_cell_animation + the two
- * steppers (semantic-state gate); T4 fills in the two draw + two erase fns
- * (descriptor gate); each then swaps NULL for its C name in PORTED[] and its
- * UNPORTED count converts to a per-function diff with no other harness change.
+ * As of Phase-5 T4, src/anim.c reconstructs all seven anim-channel bodies and every
+ * PORTED[] entry below holds its C name, so the comparators run on every exercised
+ * record.  T3 ported apply_cell_animation + the two steppers (semantic-state gate);
+ * T4 ported the two draw + two erase fns (descriptor gate).  Records still reported
+ * UNPORTED are only those for fns genuinely unexercised by the captured trace.
  *
- * ── COMPARATORS (present now; exercised only on PORTED records — none this task) ─
+ * ── COMPARATORS (exercised on every PORTED record the trace drives) ──────────────
  *   (A) SEMANTIC-STATE DIFFERENTIAL (the allocator + stepper gate, T3).  For each
  *       record of a PORTED, host-callable fn: seed the reconstructed anim globals +
  *       the channel-record table + tilemap from the record's ENTRY SNAP, call the fn
@@ -37,11 +36,11 @@
  *       host-visible descriptor, this asserts the produced descriptor bytes == the
  *       captured ones.  Until then the bytes are retained for the future port.
  *
- *   GRACEFUL UNPORTED DEGRADATION.  A function with no reconstructed C body yet (ALL
- *     seven this task) is marked UNPORTED and SKIPPED: it is NEVER referenced as a
- *     symbol (its PORTED entry holds a NULL callable), so the harness never
- *     link-depends on the missing body and never call-throughs into it.  UNPORTED is
- *     NOT a crash and NOT a hard failure.
+ *   GRACEFUL UNPORTED DEGRADATION.  A record whose fn is not host-callable (its PORTED
+ *     entry holds a NULL callable) is marked UNPORTED and SKIPPED: the harness never
+ *     references the (absent) symbol and never call-throughs into it.  With all seven
+ *     bodies now reconstructed, UNPORTED only arises for fns genuinely unexercised by
+ *     the trace.  UNPORTED is NOT a crash and NOT a hard failure.
  *
  * Build/run (also wrapped by tools/validate_anim.sh):
  *     cc -O2 -Wall -Werror -o /tmp/anim_chan_ctest tools/anim_chan_ctest.c && \
@@ -530,12 +529,11 @@ static const char *cmp_descriptor(const record_t *r, long *got, long *want)
  *  PORTED REGISTRY — engine seg-1000 offset -> reconstructed-C callable.
  *
  *  Each anim function is host-callable iff it has a reconstructed body in
- *  src/anim.c.  This task (the GLOBALS-ONLY skeleton) ports NONE, so every entry's
- *  callable is NULL -> the harness marks the record UNPORTED and never references
- *  the (absent) symbol.  Phase-5 T3 fills in a body in anim.c AND swaps NULL for
- *  the function's C name here (e.g. { FN_APPLY_CELL_ANIMATION, NULL } becomes
- *  { FN_APPLY_CELL_ANIMATION, (void(*)(void))apply_cell_animation }); that record's
- *  UNPORTED count then converts to a per-function diff with no other harness change.
+ *  src/anim.c.  All seven now do (ported across T3/T4), so every entry below holds
+ *  its function's C name (e.g. { FN_APPLY_CELL_ANIMATION,
+ *  (void(*)(void))apply_cell_animation }) and the harness diffs each record the
+ *  trace drives.  A NULL callable would mark its record UNPORTED and skip the symbol;
+ *  none are NULL here.
  *
  *  apply_cell_animation takes a cdecl arg (the action code); that is handled in the
  *  run loop (recovered from the scenario), not the registry, which holds void(*)(void).
@@ -686,9 +684,9 @@ int main(int argc, char **argv)
 
     printf("anim_chan_ctest: replay harness over %s\n", path);
     printf("  trace: ANIMTRC1 v%u, %u scenarios, %u fn-names\n", ver, nsc, nfn);
-    printf("  src/anim.c is the GLOBALS-ONLY skeleton (Phase-5 T2): all seven anim "
-           "fns UNPORTED (bodies port in T3/T4) — expected result is every record "
-           "UNPORTED, FAIL=0.\n");
+    printf("  src/anim.c reconstructs all seven anim fns (Phase-5 T3/T4): allocator + "
+           "steppers gated on semantic state, draw/erase gated at descriptor level. "
+           "UNPORTED records are only genuinely-unexercised fns; expected FAIL=0.\n");
 
     for (s = 0; s < nsc; s++) {
         u8 sid, name_len, seeded, level;
@@ -750,8 +748,9 @@ int main(int argc, char **argv)
                st.fail);
         return 1;
     }
-    printf("PASS: FAIL=0.  %ld records UNPORTED (all seven anim fns are unported in "
-           "the Phase-5 T2 globals-only skeleton; %ld matched).\n",
+    printf("PASS: FAIL=0.  %ld records UNPORTED (fns genuinely unexercised by the "
+           "trace; all seven anim bodies are reconstructed in src/anim.c); %ld "
+           "matched.\n",
            st.unported, st.pass);
     return 0;
 }
