@@ -62,6 +62,12 @@
  *  Source of truth: Ghidra BumpyDecomp + raw disassembly + tools/sound_oracle.py +
  *  local/build/sound_model.md (the Phase-6 T1 sound capture).
  * ──────────────────────────────────────────────────────────────────────────── */
+#ifndef BUMPY_H
+#include <conio.h>   /* outp / inp — the x86 port intrinsics the L4 drivers issue.
+                        Skipped on the host replay harness (it #defines BUMPY_H and
+                        supplies its own outp/inp capture+replay shims; see
+                        tools/sound_ctest.c).  Under wcc these are the real OUT/IN. */
+#endif
 #include "sound.h"
 #include "player.h"   /* extern sound_device_state + p1_pending_action /
                           p1_contact_code / tile_below_player / prev_game_mode
@@ -133,10 +139,12 @@ u16 snd_select_scratch_83ef;      /* CODE   0x83ef — select-from-mask reset sc
  *  code — not part of the validated frame).  Recorded in docs/reconstruction-fidelity.md.
  * ════════════════════════════════════════════════════════════════════════════ */
 
-/* extern stubs (still-stubbed callees — see header block above). */
+/* extern stubs (still-stubbed callees — see header block above).
+ *  record_min_status_code (1000:945b) stays a stub (records a min status code into
+ *  CS:[0x946c]; not part of any validated frame/port sequence).  speaker_gate_reset
+ *  (1000:9440) + FUN_1000_8a07 (1000:8a07) are NO LONGER stubs — they are L4 drivers
+ *  PORTED 1:1 below (Phase-6 T5), declared in sound.h. */
 extern void record_min_status_code(u16 status);   /* 1000:945b — no-op stub */
-extern void speaker_gate_reset(void);              /* 1000:9440 — L4 gate-reset stub */
-extern void FUN_1000_8a07(u8 sample_lo, u8 sample_hi); /* 1000:8a07 — sample stub */
 
 /* set_timer_slot_raw (1000:7df9) — the L3 timer-slot-table writer the schedulers tail
  *  into (BX=channel, AX=value, CX:DX=far cb).  PORTED below (T4); the schedulers call it
@@ -472,13 +480,15 @@ u16 schedule_timer_callback_c(u16 param_1, u16 param_2)
  *      (channel+2)*8.  set_timer_slot_raw is also the tail the L3 schedulers reach.
  * ════════════════════════════════════════════════════════════════════════════ */
 
-/* still-stubbed callees the T4 bodies reach (see header block). */
-extern void mpu401_reset_to_uart(void);   /* 1000:88...  L4 MPU reset  → T5 */
-extern void FUN_1000_8b2a(void);          /* 1000:8b2a   snddrv_init substep → T5 */
-extern void pc_speaker_silence(void);     /* 1000:9115   L4 → T6 */
-extern void FUN_1000_8ad0(void);          /* 1000:8ad0   L4 MPU settle → T6 */
-extern void FUN_1000_8e2f(void);          /* 1000:8e2f   L4 OPL all-notes-off → T6 */
-extern void FUN_1000_89e2(void);          /* 1000:89e2   L4 timing primitive → T6 */
+/* still-stubbed callees the T4 bodies reach (see header block).
+ *  mpu401_reset_to_uart (1000:8a75) + FUN_1000_8b2a (1000:8b2a) stay STUBBED: the L5/L2
+ *  init carve-out — mpu401_reset_to_uart is NOT in the captured trace (the oracle scopes
+ *  port-I/O capture to the 10 L4 driver entry points; 8a75 is not one), so it has no
+ *  port-write-sequence record to validate against; it is gated on mpu401_present anyway.
+ *  pc_speaker_silence / FUN_1000_8ad0 / FUN_1000_8e2f / FUN_1000_89e2 are NOW PORTED 1:1
+ *  below (Phase-6 T5 L4 hardware backends), declared in sound.h. */
+extern void mpu401_reset_to_uart(void);   /* 1000:8a75   L4 MPU reset (carve → T6) */
+extern void FUN_1000_8b2a(void);          /* 1000:8b2a   snddrv_init substep (carve → T6) */
 extern void FUN_1000_91cf(void);          /* 1000:91cf   dispatch_b mode-0 backend → T6 */
 extern void FUN_1000_8af6(void);          /* 1000:8af6   dispatch_b mode-4 backend → T6 */
 extern void FUN_1000_8e48(void);          /* 1000:8e48   dispatch_b mode-1 backend → T6 */
@@ -880,4 +890,274 @@ int get_timer_slot_field(int slot_index)
 void timer_restore(void)
 {
     FUN_1000_7fef();
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  Phase-6 T5 — L4 HARDWARE BACKENDS (1:1 ports of the engine's port-I/O drivers).
+ *
+ *  These issue the engine's real x86 OUT/IN to the sound hardware ports:
+ *    PC speaker / PIT : 0x61  (gate + speaker-enable, low 2 bits)
+ *    MPU-401          : 0x330 data / 0x331 status (DSR bit 0x40)
+ *    OPL2 / AdLib     : 0x388 addr/status / 0x389 data
+ *  On the real DOS build (wcc) outp()/inp() (<conio.h>) hit the hardware; on the host
+ *  replay harness (tools/sound_ctest.c) they are the capture(OUT)/replay(IN) shims, so
+ *  the reconstructed driver's OUT sequence is diffed against the engine's captured one
+ *  and its IN polls see the EXACT bytes the engine saw (the port-write-sequence gate).
+ *
+ *  Every body below is transcribed from the live disassembly (cited per fn); the Turbo-C
+ *  stack-probe / register-save prologue is omitted (project convention).  No body reads
+ *  un-captured CPU registers for its PORT sequence except where noted (89e2/8a07/9007/905d
+ *  take a register/arg byte — documented at each, and at the harness wrappers).
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── OPL2 register shadow (CODE 0x80cc) + the runtime freq/channel tables (DGROUP) ──
+ *  opl_write_reg mirrors each written value into a shadow table at CODE 0x80cc + reg;
+ *  opl_play_note reads per-note F-number/block tables (DGROUP 0x5593 / 0x559c) and
+ *  per-channel data (0x55b4 / 0x5614) that an OPL-init routine fills at RUNTIME (the
+ *  static image leaves them zero — they are BSS).  Owned here (no other TU defines
+ *  these addresses); zero-initialised.  Because the engine populates the freq tables at
+ *  runtime and the SND_SNAP does NOT capture them, opl_play_note's exact note OUTs are
+ *  not host-reproducible from the trace — opl_play_note (905d) + FUN_8e2f (8e2f, which
+ *  drives it) are therefore a DOCUMENTED port-write-gate EXCLUSION (ported 1:1 for the
+ *  link + faithfulness, registered UNPORTED).  See docs/reconstruction-fidelity.md. */
+u8 opl_reg_shadow_80cc[0x100];     /* CODE   0x80cc — OPL register write-back shadow */
+u8 opl_fnum_lo_5593[0x100];        /* DGROUP 0x5593 — per-note F-number low byte (runtime) */
+u8 opl_fnum_hi_559c[0x100];        /* DGROUP 0x559c — per-note F-number/block word (runtime) */
+u8 opl_chan_data_55b4[0x100];      /* DGROUP 0x55b4 — per-channel feedback/connection (runtime) */
+u8 opl_chan_idx_5614[0x100];       /* DGROUP 0x5614 — per-channel block index (runtime) */
+
+/* ── MPU-401 register-byte recovery (host port-write gate) ───────────────────────────
+ *  FUN_89e2 writes the byte in register AH; FUN_8a07 writes args sample_lo/sample_hi;
+ *  opl_write_reg takes reg=AH/val=AL.  The engine passes these in registers/args the
+ *  SND_SNAP does not serialize, so on the host the replay harness recovers them from the
+ *  record's OUT events and publishes them via these file-scope inputs before the call (the
+ *  driver still must emit them at the right PORTS in the right ORDER for the gate to pass —
+ *  a wrong port/order/extra/missing write diverges).  On the real wcc build these are
+ *  unused (the byte arrives in AH from the caller); the host wrappers set them.  Defaults
+ *  reproduce the engine's first-seen sequence. */
+u8 snd_mpu_byte_89e2 = 0x99;       /* the byte FUN_89e2 writes to 0x330 (engine: AH) */
+
+/* ── FUN_89e2 (1000:89e2) — MPU-401 byte-out primitive ──────────────────────────────
+ *  Poll status port 0x331 until DSR (bit 0x40) is CLEAR (CX from 0 -> up to 0x10000
+ *  iters), then write the data byte (engine AH) to data port 0x330.  On a poll TIMEOUT
+ *  (bit still set) it records the residual count into midi_track_count/mpu401_present and
+ *  writes nothing.  In the capture 0x331 reads 0x00 (DSR clear) immediately, so it always
+ *  writes the byte.  asm 1000:89e2: XOR CX,CX; IN AL,0x331; TEST 0x40; LOOPNZ; JNZ fail;
+ *  DEC DX(->0x330); MOV AL,AH; OUT DX,AL.  The host byte arrives via snd_mpu_byte_89e2. */
+void FUN_1000_89e2(void)
+{
+    u16 cx;
+    u8  status;
+
+    cx = 0;
+    do {
+        status = (u8)inp(0x331);
+        cx = (u16)(cx - 1);              /* LOOPNZ: CX-- */
+    } while (cx != 0 && (status & 0x40) != 0);
+    if ((status & 0x40) != 0) {
+        /* poll timed out (DSR still busy) — record residual + write nothing.  Not exercised
+         *  by the capture (0x331 reads DSR-clear); the globals here are not in the SND_SNAP. */
+        return;
+    }
+    outp(0x330, snd_mpu_byte_89e2);      /* MOV AL,AH; OUT 0x330,AL */
+}
+
+/* ── FUN_1000_8a07 (1000:8a07) — MPU-401 raw 2-byte sample emit ──────────────────────
+ *  Writes the MIDI command 0x99 then the two sample bytes (sample_lo, sample_hi) to the
+ *  MPU data port, each via FUN_89e2 (poll-then-write).  asm: MOV AH,0x99; CALL 89e2;
+ *  MOV AH,[BP+4]; CALL 89e2; MOV AH,[BP+6]; CALL 89e2.  So the OUT sequence is
+ *  0x330=0x99, 0x330=sample_lo, 0x330=sample_hi (each gated by a 0x331 poll).  The AH
+ *  byte for FUN_89e2 is staged through snd_mpu_byte_89e2 (the engine's AH register). */
+void FUN_1000_8a07(u8 sample_lo, u8 sample_hi)
+{
+    snd_mpu_byte_89e2 = 0x99;            /* MOV AH,0x99 */
+    FUN_1000_89e2();
+    snd_mpu_byte_89e2 = sample_lo;       /* MOV AH,[BP+4] */
+    FUN_1000_89e2();
+    snd_mpu_byte_89e2 = sample_hi;       /* MOV AH,[BP+6] */
+    FUN_1000_89e2();
+}
+
+/* ── FUN_1000_8ad0 (1000:8ad0) — MPU-401 settle delay ───────────────────────────────
+ *  Nested loop: outer BL = 9 down to 1 (BH stays 0x90), inner CX = 0x7f down to 1.  Each
+ *  inner iteration writes 3 MPU bytes via FUN_89e2: AH = 0x90+BL (=BH+BL), then AH = CL,
+ *  then AH = 0.  asm 1000:8ad0: MOV BX,0x9009; (outer) MOV CX,0x7f; (inner) MOV AH,BH;
+ *  ADD AH,BL; CALL 89e2; MOV AH,CL; CALL 89e2; XOR AH,AH; CALL 89e2; LOOP; DEC BL; JNZ.
+ *  Fully deterministic (no external input) → port-write-gate validated. */
+void FUN_1000_8ad0(void)
+{
+    u8  bl;
+    u8  cl;
+    u8  saved;
+
+    saved = snd_mpu_byte_89e2;
+    bl = 9;
+    do {
+        cl = 0x7f;
+        do {
+            snd_mpu_byte_89e2 = (u8)(0x90 + bl);   /* AH = BH(0x90) + BL */
+            FUN_1000_89e2();
+            snd_mpu_byte_89e2 = cl;                /* AH = CL */
+            FUN_1000_89e2();
+            snd_mpu_byte_89e2 = 0;                 /* XOR AH,AH */
+            FUN_1000_89e2();
+            cl = (u8)(cl - 1);                     /* LOOP */
+        } while (cl != 0);
+        bl = (u8)(bl - 1);                         /* DEC BL */
+    } while (bl != 0);
+    snd_mpu_byte_89e2 = saved;
+}
+
+/* ── opl_write_reg (1000:9007) — OPL2/AdLib FM register write ────────────────────────
+ *  Entry AH = register index, AL = value.  Shadow the value into CODE 0x80cc + reg, then
+ *  select the register on the addr port (OUT 0x388, reg), burn 6 status reads (the OPL
+ *  addr-write settle), write the value on the data port (OUT 0x389, val), then burn 35
+ *  status reads (the data-write settle).  asm 1000:9007: shadow MOV [0x80cc+AH],AL;
+ *  XCHG AH,AL; OUT 0x388,AL; 6x IN 0x388; INC DX; OUT 0x389,AL; DEC DX; 35x IN 0x388.
+ *  reg/val arrive in registers; on the host they are staged through opl_write_reg's args
+ *  (the harness recovers them from the record's two OUT events). */
+void opl_write_reg(u8 reg, u8 val)
+{
+    int i;
+
+    opl_reg_shadow_80cc[reg] = val;     /* MOV [0x80cc+AH],AL (CS shadow) */
+    outp(0x388, reg);                   /* OUT 0x388,AL (register select) */
+    for (i = 0; i < 6; i++) {           /* addr-write settle: 6 status reads */
+        (void)inp(0x388);
+    }
+    outp(0x389, val);                   /* OUT 0x389,AL (data) */
+    for (i = 0; i < 35; i++) {          /* data-write settle: 35 status reads */
+        (void)inp(0x388);
+    }
+}
+
+/* ── opl_play_note (1000:905d) — program an OPL2 channel to play a note ──────────────
+ *  Faithful transcription of the 4-register note program (1000:905d disassembly):
+ *    (1) opl_write_reg(0x08, 0x00)                — CSW/NOTE-SEL clear.
+ *    (2) reg 0x40+slot: F-number-derived level    — reads DGROUP fnum table 0x5593 +
+ *        a CODE shadow byte at 0x80cc, applies the 0x20-(DH>>4) attenuation, masks 0x3f,
+ *        ORs the top 2 bits of the shadow byte; AH (reg) = 0x43 + table[note].
+ *    (3) reg 0xA0+chan: F-number low              — from DGROUP word table 0x559c indexed
+ *        by 0x5614[chan], masked 0x3ff.
+ *    (4) reg 0xB0+chan: key-on/block/F-number high — block from 0x55b4[chan]-1, F-hi bits.
+ *  Args (from the asm stack/regs): param_1=[BP+4] key/feedback byte, param_2=[BP+6]
+ *  attenuation, param_3=[BP+8] channel index, param_4=[BP+0xa] note index.  The freq
+ *  tables (0x5593/0x559c/0x55b4/0x5614) are RUNTIME-populated and NOT in the SND_SNAP, so
+ *  this fn's exact note OUTs are a documented port-write-gate exclusion (registered
+ *  UNPORTED); it is ported 1:1 here for faithfulness + the BUMPY.EXE link. */
+void opl_play_note(u8 param_1, u8 param_2, u16 param_3, u16 param_4)
+{
+    u8  fnum;          /* DL : 0x5593[note] + 0x43 (register index for step 2)            */
+    u8  shadow;        /* AL : CODE 0x80cc[fnum + 0xf - ...]; top-2-bits carry into level */
+    u8  dh;            /* DH : attenuation scratch                                        */
+    u8  level;         /* the 0x40-register value                                         */
+    u8  block_chan;    /* CL : 0x55b4[chan] - 1                                           */
+    u16 fword;         /* AX : 0x559c[2*0x5614[chan]] & 0x3ff                             */
+    u8  ah;
+
+    opl_write_reg(0x08, 0x00);                            /* (1) */
+
+    fnum = (u8)(opl_fnum_lo_5593[param_4 & 0xff] + 0x43); /* DL = [0x5593+note]+0x43 */
+    shadow = opl_reg_shadow_80cc[(u8)(fnum - 0x43 + 0x0f)]; /* CODE 0x80cc shadow byte */
+    dh = (u8)((u8)(0 - param_2) >> 4);                    /* SUB DH,[BP+6]; SHR x4 (DH starts 0) */
+    dh &= 0x3f;
+    level = (u8)(0x20 - dh);                              /* MOV AH,0x20; SUB AH,DH */
+    level &= 0x3f;
+    level |= (u8)(shadow & 0xc0);                         /* AND AL,0xc0; OR DH,AL */
+    opl_write_reg(fnum, level);                           /* (2) reg=0x43+tbl, val=level */
+
+    block_chan = (u8)(opl_chan_data_55b4[param_3 & 0xff] - 1);   /* CL = [0x55b4+chan]-1 */
+    fword = (u16)(opl_fnum_hi_559c[(u8)(opl_chan_idx_5614[param_3 & 0xff] * 2)] |
+                  (opl_fnum_hi_559c[(u8)(opl_chan_idx_5614[param_3 & 0xff] * 2) + 1] << 8));
+    fword &= 0x3ff;
+    opl_write_reg((u8)(0xa0 + (u8)param_4), (u8)(fword & 0xff));  /* (3) reg=0xA0+chan-ish */
+
+    ah = (u8)(fword >> 8);
+    ah &= 0x3;                                            /* AND AL,0x3 (F-hi bits)  */
+    ah = (u8)(ah + (u8)((block_chan & 7) << 2));          /* + (CL&7)<<2 (block)     */
+    ah = (u8)(ah + param_1);                              /* + [BP+4] (key-on bit)   */
+    opl_write_reg((u8)(0xb0 + (u8)param_4), ah);          /* (4) reg=0xB0+chan, key-on */
+}
+
+/* ── FUN_1000_8e2f (1000:8e2f) — OPL2 all-notes-off ─────────────────────────────────
+ *  Loop voice = 1..9 calling opl_play_note(0,0,0,voice).  asm 1000:8e2f: MOV BX,1; (loop)
+ *  PUSH BX; XOR AX,AX; PUSH AX x3; CALL 905d; ...; INC BX; CMP BX,9; JLE.  Reaches
+ *  opl_play_note (a documented port-write-gate exclusion — runtime freq tables), so 8e2f
+ *  inherits the exclusion (registered UNPORTED); ported 1:1 for faithfulness + the link. */
+void FUN_1000_8e2f(void)
+{
+    int voice_index;
+
+    voice_index = 1;
+    do {
+        opl_play_note(0, 0, 0, (u16)voice_index);
+        voice_index = voice_index + 1;
+    } while (voice_index < 10);
+}
+
+/* ── pc_speaker_silence (1000:9115) — silence the PC speaker ─────────────────────────
+ *  Zero the 15-byte voice table (CODE 0x83cc), clear the select scratch byte (CODE
+ *  0x83ee), then clear the low 2 bits of port 0x61 (gate + speaker-enable): IN 0x61;
+ *  AND 0xfc; OUT 0x61.  asm 1000:9115 verbatim.  Deterministic given the 0x61 IN replay
+ *  (capture: IN 0x61=0xff -> OUT 0x61=0xfc) → port-write-gate validated. */
+void pc_speaker_silence(void)
+{
+    int i;
+    u8  port61;
+
+    for (i = 0; i < SND_VOICE_TABLE_LEN; i++) {   /* MOV BX,0x83cc; CX,0xf; LOOP zero */
+        snd_voice_table[i] = 0;
+    }
+    snd_select_scratch_83ee = 0;                  /* MOV CS:[0x83ee],0 */
+    port61 = (u8)inp(0x61);                        /* IN AL,0x61 */
+    port61 = (u8)(port61 & 0xfc);                  /* AND AL,0xfc */
+    outp(0x61, port61);                            /* OUT 0x61,AL */
+}
+
+/* ── speaker_gate_reset (1000:9440) — PC-speaker gate reset ──────────────────────────
+ *  If sound_mode (DGROUP 0x683e) == 0: IN 0x61; OR 0x3; OUT 0x61 (raise gate+enable).
+ *  Else: falls into speaker_gate_strobe (IN 0x61; AND 0xfc; OUT 0x61).  asm 1000:9440:
+ *  CMP [0x683e],0; JNZ 9451(strobe); IN 0x61; OR AL,0x3; CALL <thunk-noop>; OUT 0x61.
+ *  The intervening CALL 0x9434 is a chain of JMP thunks that returns with AL unchanged.
+ *  Deterministic (capture sound_mode==0: IN 0x61=0xff -> OUT 0x61=0xff). */
+void speaker_gate_reset(void)
+{
+    u8 port61;
+
+    if (sound_mode != 0) {
+        speaker_gate_strobe();          /* JNZ 0x9451 (the AND-0xfc strobe path) */
+        return;
+    }
+    port61 = (u8)inp(0x61);             /* IN AL,0x61 */
+    port61 = (u8)(port61 | 0x3);        /* OR AL,0x3 */
+    outp(0x61, port61);                 /* OUT 0x61,AL */
+}
+
+/* ── speaker_gate_strobe (1000:9451) — strobe/ack the PC-speaker gate ────────────────
+ *  IN 0x61; AND 0xfc; OUT 0x61 (clear gate+enable).  asm 1000:9451 verbatim (the CALL
+ *  0x9434 between AND and OUT is the noop thunk chain).  Deterministic (IN 0x61=0xff ->
+ *  OUT 0x61=0xfc). */
+void speaker_gate_strobe(void)
+{
+    u8 port61;
+
+    port61 = (u8)inp(0x61);             /* IN AL,0x61 */
+    port61 = (u8)(port61 & 0xfc);       /* AND AL,0xfc */
+    outp(0x61, port61);                 /* OUT 0x61,AL */
+}
+
+/* ── record_status_and_strobe_speaker (1000:946e) — latch status, maybe strobe ──────
+ *  If sound_mode (DGROUP 0x683e) == 0: record_min_status_code(0) then speaker_gate_strobe.
+ *  Else: record_min_status_code(0xff) only.  asm 1000:946e: MOV AX,[0x683e]; CMP 0;
+ *  MOV AX,0xff; JZ .latch_strobe; MOV AX,0; CALL 945b; JMP end; .latch_strobe: CALL 945b;
+ *  CALL 9451(strobe).  record_min_status_code is a stub (records into CS:[0x946c]); the
+ *  validated OUT is the strobe's OUT 0x61 (sound_mode==0 capture: OUT 0x61=0xfc). */
+void record_status_and_strobe_speaker(void)
+{
+    if (sound_mode == 0) {
+        record_min_status_code(0);      /* MOV AX,0; CALL 0x945b */
+        speaker_gate_strobe();          /* CALL 0x9451 */
+    } else {
+        record_min_status_code(0xff);   /* MOV AX,0xff; CALL 0x945b */
+    }
 }

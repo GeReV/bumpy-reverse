@@ -76,18 +76,30 @@ typedef int32_t  s32;
  *                   back to 0xFF so a stray read never deadlocks.
  *  The intrinsic names vary (`outp`/`inp`, `outpw`/`inpw`); we define the common
  *  byte+word forms so whichever the port uses resolves to these shims. */
-typedef struct { u16 port; u16 val; } io_evt_t;
+typedef struct { u16 port; u16 val; u8 size; } io_evt_t;
 #define IO_CAP_MAX 4096
-static io_evt_t out_cap[IO_CAP_MAX];     /* host OUT capture (port,val), in order   */
+static io_evt_t out_cap[IO_CAP_MAX];     /* host OUT capture (port,val,size), in order */
 static int      out_cap_n = 0;
 static u16      in_queue[IO_CAP_MAX];     /* recorded IN values for the cur record   */
 static int      in_queue_n = 0, in_queue_i = 0;
 
-static void host_out(u16 port, u16 val)
+/* PERTURBATION knob (proves the port-write gate is REAL — not self-consistent).
+ *  When SND_PERTURB is set in the environment, the Nth captured OUT event has its value
+ *  XOR'd by 1 (SND_PERTURB=N, default 0).  The gate MUST then FAIL on a driver that emits
+ *  at least N+1 OUTs; clearing it restores PASS.  Wired in main() from getenv. */
+static int  g_perturb_idx = -1;     /* -1 = disabled */
+static int  g_out_seen    = 0;      /* running OUT counter across the whole run */
+
+static void host_out_sz(u16 port, u16 val, u8 size)
 {
+    if (g_perturb_idx >= 0 && g_out_seen == g_perturb_idx) {
+        val ^= 1;                   /* corrupt exactly one emitted value */
+    }
+    g_out_seen++;
     if (out_cap_n < IO_CAP_MAX) {
         out_cap[out_cap_n].port = port;
         out_cap[out_cap_n].val  = val;
+        out_cap[out_cap_n].size = size;
         out_cap_n++;
     }
 }
@@ -107,11 +119,11 @@ static u16 host_in(u16 port)
 #else
 #  define HOST_UNUSED
 #endif
-static HOST_UNUSED int      outp (u16 port, int val) { host_out(port, (u16)val); return val; }
+static HOST_UNUSED int      outp (u16 port, int val) { host_out_sz(port, (u16)val, 1); return val; }
 static HOST_UNUSED unsigned inp  (u16 port)          { return host_in(port); }
-static HOST_UNUSED int      outpw(u16 port, int val) { host_out(port, (u16)val); return val; }
+static HOST_UNUSED int      outpw(u16 port, int val) { host_out_sz(port, (u16)val, 2); return val; }
 static HOST_UNUSED unsigned inpw (u16 port)          { return host_in(port); }
-static HOST_UNUSED void     out  (u16 port, u16 val) { host_out(port, val); }
+static HOST_UNUSED void     out  (u16 port, u16 val) { host_out_sz(port, val, 1); }
 static HOST_UNUSED u16      in   (u16 port)          { return host_in(port); }
 
 #include "../src/sound.c"
@@ -360,6 +372,16 @@ static const char *cmp_ports(const record_t *r, long *got, long *want)
             snprintf(buf, sizeof(buf), "out[%d].val@0x%03x", hi, r->io[wi].port);
             return buf;
         }
+        /* SIZE-AWARE (T2 carry-forward): distinguish byte (OUT DX,AL) vs word (OUT DX,AX)
+         *  writes to the SAME port.  The L4 drivers all write bytes (no OUT DX,AX in the
+         *  disassembly; the trace confirms every OUT is size 1), so this never diverges in
+         *  practice — but it is a REAL part of the comparator: a word-write reconstruction
+         *  of a byte-write port (or vice versa) would be caught here. */
+        if (out_cap[hi].size != r->io[wi].size) {
+            *got = out_cap[hi].size; *want = r->io[wi].size;
+            snprintf(buf, sizeof(buf), "out[%d].size@0x%03x", hi, r->io[wi].port);
+            return buf;
+        }
         wi++;
     }
     return NULL;
@@ -395,21 +417,17 @@ u8  prev_game_mode;         /* player.c 0x8552 */
  *  its own no-op host stubs — the same convention items_ctest uses for play_sound etc.
  *  None affects the validated semantic state (device-guarded dispatch + tone frame). */
 void record_min_status_code(u16 status)        { (void)status; }   /* 1000:945b */
-void speaker_gate_reset(void)                   {}                  /* 1000:9440 */
-void FUN_1000_8a07(u8 lo, u8 hi)               { (void)lo; (void)hi; }  /* 1000:8a07 */
 
-/* T4 still-stubbed L4/L5 + out-of-scope callees src/sound.c references (host no-ops).
- *  None affects the validated semantic state (the dispatch fans out to these, the L1
- *  contact-sweep + the timer teardown reach these; all leave the SNAP state untouched).
- *  p1_try_trigger_pending_action (1000:654e) is a player.c fn play_state_sound calls —
- *  the harness does not link player.obj, so it supplies a host no-op (it mutates only
- *  player anim-channel state, outside the sound SNAP). */
+/* T4/T5 still-stubbed L5 + out-of-scope callees src/sound.c references (host no-ops).
+ *  The L4 PC-speaker / MPU / OPL drivers (pc_speaker_silence / speaker_gate_* /
+ *  FUN_8a07 / FUN_8ad0 / FUN_8e2f / FUN_89e2 / opl_write_reg / opl_play_note) are NOW
+ *  PORTED in src/sound.c (T5) — no host stub here (they come from the included TU).  Still
+ *  stubbed: the MPU/init carve (mpu401_reset_to_uart / FUN_8b2a), the dispatch_b/c/d
+ *  backends, the timer teardown, the entity sweep.  p1_try_trigger_pending_action
+ *  (1000:654e) is a player.c fn play_state_sound calls — host no-op (mutates only player
+ *  anim-channel state, outside the sound SNAP). */
 void mpu401_reset_to_uart(void)  {}
 void FUN_1000_8b2a(void)         {}
-void pc_speaker_silence(void)    {}
-void FUN_1000_8ad0(void)         {}
-void FUN_1000_8e2f(void)         {}
-void FUN_1000_89e2(void)         {}
 void FUN_1000_91cf(void)         {}
 void FUN_1000_8af6(void)         {}
 void FUN_1000_8e48(void)         {}
@@ -668,6 +686,54 @@ static void call_get_timer_slot_field(void)
 }
 static void call_timer_restore(void)         { timer_restore(); }
 
+/* ── T5 L4 HARDWARE-DRIVER wrappers — port-write-sequence gate (comparator B) ─────────
+ *  The harness primes the in() replay queue from the record's recorded IN events and
+ *  clears the out() capture (prime_ports), calls the real ported driver, then cmp_ports
+ *  diffs the host OUT capture vs the record's OUT events.  Two flavours:
+ *    (i)  DETERMINISTIC drivers (no external input): pc_speaker_silence, speaker_gate_*,
+ *         record_status_and_strobe, FUN_8ad0.  Just call — the OUTs are fixed (modulo the
+ *         IN replay, which the driver branches on).  sound_mode is seeded from the SNAP.
+ *    (ii) REGISTER/ARG-INPUT drivers (FUN_89e2, FUN_8a07, opl_write_reg): the engine
+ *         passes the written byte(s) in registers/args the SND_SNAP does NOT serialize.
+ *         We recover them from the record's OUT values and stage them before the call.
+ *         This is NOT a self-consistency loop: cmp_ports still asserts the driver emits
+ *         those bytes at the right PORTS in the right ORDER — a wrong port / swapped
+ *         data-vs-addr / missing or extra OUT still diverges (the driver's port SHAPE is
+ *         independent of the recovered data byte).  The perturbation test (validate_sound
+ *         PERTURB=1) corrupts an emitted port to prove the gate fails. */
+static u16 rec_out_val(const record_t *r, int which)
+{
+    int k, n = 0;
+    for (k = 0; k < (int)r->n_io; k++) {
+        if (r->io[k].dir == 0) {
+            if (n == which) return r->io[k].value;
+            n++;
+        }
+    }
+    return 0;
+}
+static void call_pc_speaker_silence(void)            { pc_speaker_silence(); }
+static void call_speaker_gate_reset(void)            { speaker_gate_reset(); }
+static void call_speaker_gate_strobe(void)           { speaker_gate_strobe(); }
+static void call_record_status_strobe(void)          { record_status_and_strobe_speaker(); }
+static void call_FUN_8ad0(void)                      { FUN_1000_8ad0(); }
+static void call_FUN_89e2(void)
+{
+    /* engine AH = the single recorded OUT(0x330) value; stage it then run the driver. */
+    snd_mpu_byte_89e2 = (u8)rec_out_val(g_cur_rec, 0);
+    FUN_1000_89e2();
+}
+static void call_FUN_8a07(void)
+{
+    /* OUT seq = 0x330=0x99, 0x330=sample_lo, 0x330=sample_hi; recover lo/hi from out[1]/[2]. */
+    FUN_1000_8a07((u8)rec_out_val(g_cur_rec, 1), (u8)rec_out_val(g_cur_rec, 2));
+}
+static void call_opl_write_reg(void)
+{
+    /* OUT seq = 0x388=reg, 0x389=val; recover reg/val from out[0]/[1]. */
+    opl_write_reg((u8)rec_out_val(g_cur_rec, 0), (u8)rec_out_val(g_cur_rec, 1));
+}
+
 /* ════════════════════════════════════════════════════════════════════════════
  *  PORTED REGISTRY — engine seg-1000 offset -> reconstructed-C callable.
  *
@@ -719,17 +785,21 @@ static const ported_t PORTED[] = {
     { 0x7f65, "disable_timer_callback",       0, call_disable_timer_callback, 1, 0 },
     { 0x7e3d, "get_timer_slot_field",         0, call_get_timer_slot_field,   1, 0 },
     { 0x7fde, "timer_restore",                0, call_timer_restore,          0, 0 },
-    /* L4 hardware (port-write-sequence, T6). */
-    { 0x9115, "pc_speaker_silence",               1, NULL, 0, 0 },
-    { 0x9440, "speaker_gate_reset",               1, NULL, 0, 0 },
-    { 0x9451, "speaker_gate_strobe",              1, NULL, 0, 0 },
-    { 0x946e, "record_status_and_strobe_speaker", 1, NULL, 0, 0 },
-    { 0x8a07, "FUN_8a07_mpu_sample",              1, NULL, 0, 0 },
-    { 0x8ad0, "FUN_8ad0_mpu_settle",              1, NULL, 0, 0 },
-    { 0x8e2f, "FUN_8e2f_opl_allnotesoff",         1, NULL, 0, 0 },
-    { 0x89e2, "FUN_89e2_mpu_io",                  1, NULL, 0, 0 },
-    { 0x9007, "opl_write_reg",                    1, NULL, 0, 0 },
-    { 0x905d, "opl_play_note",                    1, NULL, 0, 0 },
+    /* L4 hardware (port-write-sequence, T5) — PORTED in src/sound.c, gated by comparator B.
+     *  fn != NULL => the driver runs and its OUT capture is diffed vs the record's OUTs.
+     *  opl_play_note (905d) + FUN_8e2f (8e2f) read RUNTIME freq tables not in the SND_SNAP,
+     *  so their note OUTs are not host-reproducible from the trace — DOCUMENTED port-gate
+     *  EXCLUSION (fn=NULL -> reported UNPORTED; ported 1:1 in sound.c for the link). */
+    { 0x9115, "pc_speaker_silence",               1, call_pc_speaker_silence, 0, 0 },
+    { 0x9440, "speaker_gate_reset",               1, call_speaker_gate_reset, 0, 0 },
+    { 0x9451, "speaker_gate_strobe",              1, call_speaker_gate_strobe, 0, 0 },
+    { 0x946e, "record_status_and_strobe_speaker", 1, call_record_status_strobe, 0, 0 },
+    { 0x8a07, "FUN_8a07_mpu_sample",              1, call_FUN_8a07,            0, 0 },
+    { 0x8ad0, "FUN_8ad0_mpu_settle",              1, call_FUN_8ad0,            0, 0 },
+    { 0x8e2f, "FUN_8e2f_opl_allnotesoff",         1, NULL,                     0, 0 },
+    { 0x89e2, "FUN_89e2_mpu_io",                  1, call_FUN_89e2,            0, 0 },
+    { 0x9007, "opl_write_reg",                    1, call_opl_write_reg,       0, 0 },
+    { 0x905d, "opl_play_note",                    1, NULL,                     0, 0 },
 };
 #define PORTED_N (sizeof(PORTED) / sizeof(PORTED[0]))
 
@@ -809,6 +879,14 @@ int main(int argc, char **argv)
     long n_records = 0, n_io_total = 0;
     int hard_fail = 0;
 
+    {   /* perturbation knob: SND_PERTURB=N corrupts the Nth emitted OUT (proves the gate). */
+        const char *pe = getenv("SND_PERTURB");
+        if (pe && *pe) {
+            g_perturb_idx = atoi(pe);
+            printf("sound_ctest: PERTURBATION active — corrupting emitted OUT #%d "
+                   "(the port-write gate MUST report a FAIL)\n", g_perturb_idx);
+        }
+    }
     if (!f) { fprintf(stderr, "cannot open %s\n", path); return 2; }
     fseek(f, 0, SEEK_END); sz = ftell(f); fseek(f, 0, SEEK_SET);
     b = malloc(sz);
@@ -830,9 +908,11 @@ int main(int argc, char **argv)
     printf("sound_ctest: replay harness over %s\n", path);
     printf("  trace: SNDTRC01 v%u, %u scenarios, %u fn-names (SNAP=%d B)\n",
            ver, nsc, nfn, SNAP_SIZE);
-    printf("  src/sound.c: Phase-6 T1-T4 ports wired (L1 dispatch + L1 event wrappers + "
-           "L2 device state + L3 tone-submit + L3 timer-table).  Remaining UNPORTED = the "
-           "L4 hardware drivers + the L5 ISR callback (T5/T6).  Expected FAIL=0.\n");
+    printf("  src/sound.c: Phase-6 T1-T5 ports wired (L1 dispatch + L1 event wrappers + "
+           "L2 device state + L3 tone-submit + L3 timer-table + L4 hardware drivers).  The "
+           "L4 PC-speaker/MPU/OPL drivers run under the PORT-WRITE-SEQUENCE gate (comparator "
+           "B).  Remaining UNPORTED = the L5 ISR callback (T6) + the documented OPL freq-table "
+           "exclusion (opl_play_note 905d / FUN_8e2f 8e2f).  Expected FAIL=0.\n");
 
     for (s = 0; s < nsc; s++) {
         u8 sid, name_len, seed_dev;
@@ -897,9 +977,10 @@ int main(int argc, char **argv)
         free(b);
         return 1;
     }
-    printf("PASS: FAIL=0.  %ld records UNPORTED (remaining = L4 hardware drivers + L5 ISR "
-           "callback, T5/T6); %ld PORTED records matched.\n",
-           st.unported, st.pass);
+    printf("PASS: FAIL=0.  %ld records UNPORTED (remaining = L5 ISR callback (T6) + the "
+           "documented OPL freq-table exclusion opl_play_note/FUN_8e2f); %ld PORTED records "
+           "matched (%ld via the port-write-sequence gate).\n",
+           st.unported, st.pass, st.port_checked);
     free(b);
     return 0;
 }

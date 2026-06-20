@@ -59,31 +59,23 @@
  *  fns are likewise reconstructed in sound.c (T4); their stubs are not (re)defined here. */
 
 /* ── Phase-6 T3/T4 still-stubbed sound callees (faithful-signature; for the link only) ──
- *  RECONSTRUCTION FIDELITY: these are reached by the ported sound pipeline + the T4
- *  L1/L2/L3 bodies but are NOT part of the validated semantic state (the tone param
- *  frame + device-guarded dispatch + the timer tables).  No-op / benign-default bodies so
- *  BUMPY.EXE links; their real ports land in Phase-6 T5/T6.
- *    record_min_status_code (1000:945b) — records a min status code.        → T5.
- *    speaker_gate_reset     (1000:9440) — PC-speaker gate reset (L4).       → T6.
- *    FUN_1000_8a07          (1000:8a07) — OPL/MPU raw two-byte sample emit.  → T6.
- *  FUN_1000_7df9 (1000:7df9) is NO LONGER stubbed — it is the L3 timer-slot writer
- *  set_timer_slot_raw, now RECONSTRUCTED in sound.c (T4). */
+ *  RECONSTRUCTION FIDELITY: these are reached by the ported sound pipeline but are NOT
+ *  part of the validated semantic state.  No-op body so BUMPY.EXE links.
+ *    record_min_status_code (1000:945b) — records a min status code into CS:[0x946c].
+ *  speaker_gate_reset (1000:9440) + FUN_1000_8a07 (1000:8a07) are NO LONGER stubbed —
+ *  they are L4 hardware drivers RECONSTRUCTED in sound.c (Phase-6 T5; dup-symbol once
+ *  sound.obj links).  FUN_1000_7df9 (set_timer_slot_raw) was un-stubbed in T4. */
 void record_min_status_code(u16 status)        { (void)status; }   /* 1000:945b */
-void speaker_gate_reset(void)                   {}                  /* 1000:9440 */
-void FUN_1000_8a07(u8 sample_lo, u8 sample_hi)  { (void)sample_lo; (void)sample_hi; }  /* 1000:8a07 */
 
-/* ── Phase-6 T4 still-stubbed L4/L5 + out-of-scope callees the T4 bodies reach ──────
+/* ── Phase-6 T4/T5 still-stubbed callees the sound bodies reach ──────────────────────
  *  RECONSTRUCTION FIDELITY: faithful-signature no-op stubs so BUMPY.EXE links.  The L4
- *  hardware drivers (MPU-401 / PC-speaker / OPL / timing primitive) + the dispatch_b/c/d
- *  backends + the timer teardown land in Phase-6 T5/T6.  FUN_1000_6183 is an out-of-scope
- *  entity-management sweep (→ entity subsystem), reached only from play_contact_sound for
- *  contact codes 0xe..0x11. */
-void mpu401_reset_to_uart(void)  {}   /* L4 MPU reset → T5  */
-void FUN_1000_8b2a(void)         {}   /* snddrv_init substep → T5 */
-void pc_speaker_silence(void)    {}   /* 1000:9115 L4 → T6 */
-void FUN_1000_8ad0(void)         {}   /* 1000:8ad0 L4 → T6 */
-void FUN_1000_8e2f(void)         {}   /* 1000:8e2f L4 → T6 */
-void FUN_1000_89e2(void)         {}   /* 1000:89e2 L4 timing primitive → T6 */
+ *  PC-speaker / MPU / OPL drivers are now RECONSTRUCTED in sound.c (T5; their stubs are
+ *  removed here to avoid dup symbols).  STILL stubbed (T6 / out-of-scope): the MPU/init
+ *  carve (mpu401_reset_to_uart 8a75 + FUN_8b2a), the dispatch_b/c/d backends, the timer
+ *  teardown FUN_7fef, and the entity sweep FUN_6183 (reached from play_contact_sound for
+ *  contact codes 0xe..0x11). */
+void mpu401_reset_to_uart(void)  {}   /* 1000:8a75 L4 MPU reset (carve → T6) */
+void FUN_1000_8b2a(void)         {}   /* 1000:8b2a snddrv_init substep (carve → T6) */
 void FUN_1000_91cf(void)         {}   /* 1000:91cf dispatch_b backend → T6 */
 void FUN_1000_8af6(void)         {}   /* 1000:8af6 dispatch_b backend → T6 */
 void FUN_1000_8e48(void)         {}   /* 1000:8e48 dispatch_b backend → T6 */

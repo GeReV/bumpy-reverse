@@ -141,4 +141,29 @@ int  disable_timer_callback(int channel);         /* 1000:7f65 — PORTED (T4) *
 int  get_timer_slot_field(int slot_index);        /* 1000:7e3d — PORTED (T4) */
 void timer_restore(void);                         /* 1000:7fde — PORTED (T4) */
 
+/* ── PORTED (Phase-6 T5 — L4 hardware backends; the port-write drivers) ──────────────
+ *  These issue the engine's real OUT/IN to 0x61 / 0x330-0x331 / 0x388-0x389.  Validated
+ *  by the port-write-sequence differential (tools/sound_ctest.c comparator B) where the
+ *  OUT sequence is deterministic or recoverable from the record; opl_play_note (905d) +
+ *  its driver FUN_8e2f (8e2f) read RUNTIME freq tables not in the SND_SNAP -> documented
+ *  port-gate exclusion (ported 1:1, registered UNPORTED). */
+void pc_speaker_silence(void);                    /* 1000:9115 — PORTED (T5) */
+void speaker_gate_reset(void);                    /* 1000:9440 — PORTED (T5) */
+void speaker_gate_strobe(void);                   /* 1000:9451 — PORTED (T5) */
+void record_status_and_strobe_speaker(void);      /* 1000:946e — PORTED (T5) */
+void FUN_1000_89e2(void);                         /* 1000:89e2 — PORTED (T5) MPU byte-out */
+void FUN_1000_8a07(u8 sample_lo, u8 sample_hi);   /* 1000:8a07 — PORTED (T5) MPU sample  */
+void FUN_1000_8ad0(void);                         /* 1000:8ad0 — PORTED (T5) MPU settle  */
+void FUN_1000_8e2f(void);                         /* 1000:8e2f — PORTED (T5) OPL all-off (excl) */
+void opl_write_reg(u8 reg, u8 val);               /* 1000:9007 — PORTED (T5) OPL reg write */
+void opl_play_note(u8 param_1, u8 param_2, u16 param_3, u16 param_4); /* 1000:905d (excl) */
+
+/* L4 hardware-backend state (owned in sound.c). */
+extern u8 opl_reg_shadow_80cc[0x100];   /* CODE   0x80cc — OPL register write-back shadow */
+extern u8 opl_fnum_lo_5593[0x100];      /* DGROUP 0x5593 — per-note F-number low (runtime) */
+extern u8 opl_fnum_hi_559c[0x100];      /* DGROUP 0x559c — per-note F-number word (runtime) */
+extern u8 opl_chan_data_55b4[0x100];    /* DGROUP 0x55b4 — per-channel data (runtime)       */
+extern u8 opl_chan_idx_5614[0x100];     /* DGROUP 0x5614 — per-channel block index (runtime) */
+extern u8 snd_mpu_byte_89e2;            /* the byte FUN_89e2 writes (engine AH; host-staged) */
+
 #endif /* SOUND_H */
