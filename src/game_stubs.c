@@ -256,7 +256,8 @@ void init_fullscreen_view_desc(u8 mode, u8 flag) { (void)mode; (void)flag; }
    for RENDER as entity.c entity_draw_p1/p2 with explicit args; these zero-arg
    game-loop entries are stubbed for linkability). */
 void draw_p1_sprite(void)            {}
-void draw_p2_sprite(void)            {}
+/* draw_p2_sprite (1000:1cea) — RECONSTRUCTED in player2.c (Phase-4 T5); stub
+   removed (dup-symbol once player2.obj links). */
 
 void apply_level_palette(void)       {}
 
@@ -280,12 +281,13 @@ void p1_advance_grid_history(void)   {}
 void step_anim_channels_a(void)      {}
 void step_anim_channels_b(void)      {}
 
-/* Player-view erase/restore/render (the engine's per-tick view present chain). */
+/* Player-view erase/restore/render (the engine's per-tick view present chain).
+   The P2 entries (erase_p2_view 1000:19a1, render_p2_view 1000:1c41) are
+   RECONSTRUCTED in player2.c (Phase-4 T5); their stubs are removed (dup-symbol
+   once player2.obj links). */
 void erase_p1_view(void)             {}
-void erase_p2_view(void)             {}
 void restore_bg_pending(void)        {}
 void render_p1_view(void)            {}
-void render_p2_view(void)            {}
 
 /* Anim-channel DRAW + ERASE (per-tick). */
 void draw_anim_channels_a(void)      {}
@@ -293,9 +295,9 @@ void draw_anim_channels_b(void)      {}
 void erase_anim_channels_a(void)     {}
 void erase_anim_channels_b(void)     {}
 
-/* P1/P2 bounding-box update. */
+/* P1/P2 bounding-box update.  update_p2_bbox (1000:50c0) is RECONSTRUCTED in
+   player2.c (Phase-4 T5); its stub is removed (dup-symbol once player2.obj links). */
 void update_p1_bbox(void)            {}
-void update_p2_bbox(void)            {}
 
 /* int8-tick timing wait (rotate timing flags + wait for the frame tick). */
 void rotate_timing_flags_and_wait(void) {}
@@ -310,8 +312,8 @@ void game_post_input_233a(void)      {}
 void handle_gameplay_input(void)     {}
 
 /* P2 tile move check (1000:4c99) — RECONSTRUCTED in player2.c (Phase-4 T3).
-   P1↔P2 collision (check_pvp_collision 1000:50fb) — DEFERRED → Phase-4 T5. */
-void check_pvp_collision(void)       {}
+   P1↔P2 collision (check_pvp_collision 1000:50fb) — RECONSTRUCTED in player2.c
+   (Phase-4 T5); its stub is removed (dup-symbol once player2.obj links). */
 
 /* ── Callee of p2_tile_move_check still stubbed after Phase-4 T4 ───────────────
  * Phase-4 T4 RECONSTRUCTED the P2 AI decision layer in player2.c, including

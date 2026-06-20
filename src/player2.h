@@ -85,6 +85,12 @@ extern s16 p2_grid_y;         /* DGROUP 0x855a — current grid row (history)   
 extern s16 p2_grid_x_prev;    /* DGROUP 0x928e — previous grid col (history)      */
 extern s16 p2_grid_y_prev;    /* DGROUP 0x9b94 — previous grid row (history)      */
 
+/* ── P2 render/view globals — OWNED BY player2.c (Phase-4 T5) ────────────────── */
+extern s16 p2_scroll_x;       /* DGROUP 0x9d34 — P2 view scroll X                 */
+extern s16 p2_scroll_y;       /* DGROUP 0x9d32 — P2 view scroll Y                 */
+extern u8 __far *p2_view;       /* DGROUP 0x8ec/0x8ee — render_player_view desc    */
+extern u8 __far *p2_erase_view; /* DGROUP 0x8e8/0x8ea — restore_bg_view desc       */
+
 /* ── AI rng-decision globals — OWNED BY player2.c ────────────────────────────── */
 extern u8  p2_ai_threshold;   /* DGROUP 0x7920 — rng_frame branch threshold       */
 extern u8  p2_dir_blocked_0;  /* DGROUP 0xa0e0 — AI dispatch dir-blocked flag 0   */
@@ -135,5 +141,8 @@ void p2_cell_move_left(void);         /* 1000:5059 — p2_cell -= 1 (col left)  
 void p2_cell_move_right(void);        /* 1000:506f — p2_cell += 1 (col right)      */
 void check_pvp_collision(void);       /* 1000:50fb — P1/P2 AABB overlap -> flag    */
 void draw_p2_sprite(void);            /* 1000:1cea — build P2 object descriptor    */
+void render_p2_view(void);            /* 1000:1c41 — P2 save-under view present     */
+void erase_p2_view(void);             /* 1000:19a1 — P2 prev-cell bg restore        */
+void update_p2_bbox(void);            /* 1000:50c0 — P2 AABB from pixel pos         */
 
 #endif /* PLAYER2_H */

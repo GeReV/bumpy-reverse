@@ -7,10 +7,12 @@
  * local/build/render/p2_trace.bin (magic "P2TRACE1", version 1 — layout frozen in
  * the tools/p2_oracle.py header §"TRACE LAYOUT" and local/build/p2_model.md).
  *
- * As of Phase-4 T4, src/player2.c reconstructs the move-state/trajectory group [T3]
- * AND the AI rng-decision group [T4]; check_pvp_collision + draw_p2_sprite remain
- * UNPORTED [T5].  The PORTED registry below maps each reconstructed fn to its C name;
- * PORTED records run the per-function differential, UNPORTED records are skipped.
+ * As of Phase-4 T5, src/player2.c reconstructs the move-state/trajectory group [T3],
+ * the AI rng-decision group [T4], AND the render/view + pvp group [T5]
+ * (check_pvp_collision sets pvp_collision_flag; draw_p2_sprite builds the P2 object
+ * descriptor — a REAL output gate, see §RENDER-DESCRIPTOR).  The PORTED registry below
+ * maps each reconstructed fn to its C name; PORTED records run the per-function
+ * differential, UNPORTED records are skipped.
  *
  * ── COMPARATORS ──────────────────────────────────────────────────────────────
  *   (A) PER-FUNCTION TRAJECTORY + AI DIFFERENTIAL (the gate).  For each record of a
@@ -116,6 +118,14 @@ u8  rng_frame;           /* player.c 0x79b3 — the AI rng-decision input       
 u8  game_mode;           /* game.c   0x792c */
 u8  physics_frozen;      /* player.c 0xa0ce */
 u8  current_level;       /* level.c  0x79b2 */
+
+/* Phase-4 T5: check_pvp_collision (1000:50fb) reads two more cross-module globals
+   and the audio leaf play_sound.  Host-provided here (the same convention as the
+   block above), since player2.c declares them extern and does not pull their owning
+   headers.  play_sound (1000:6e11) is the audio-subsystem leaf — a no-op stub. */
+u8  session_continue_flag;  /* game.c   0x856d */
+s16 sound_device_state;     /* player.c 0x689c */
+void play_sound(u8 sound_id) { (void)sound_id; }  /* 1000:6e11 — audio leaf stub */
 
 /* p2_dispatch_move_state_handler (the 0x870-table indirect call in p2_tile_move_check)
    is still a stub in game_stubs.c (deferred — not on any captured P2 path).
@@ -306,6 +316,53 @@ static void seed_sprite_obj(void)
     p2_sprite = sprite_obj;
 }
 
+/* ── T5 host backing for the P2 object descriptor (DGROUP 0x9b9e target) ──────────
+ *  draw_p2_sprite (1000:1cea) builds the P2 sprite object descriptor at the far ptr
+ *  p2_sprite (DGROUP 0x9b9e/0x9ba0): word @ +0 = p2_pixel_x, @ +2 = p2_pixel_y,
+ *  @ +4 = p2_frame_base + p2_move_anim (the frame index).  To make the captured
+ *  descriptor a REAL OUTPUT GATE (not a trace self-consistency check), the harness
+ *  points p2_sprite at this host buffer, seeds p2_frame_base, calls the RECONSTRUCTED
+ *  draw_p2_sprite, then compares the bytes IT WROTE here against the captured
+ *  descriptor r->desc (see cmp_descriptor).  p2_frame_base is not in P2SNAP, so it is
+ *  seeded from the captured descriptor's frame word (frame_base = desc.frame - anim);
+ *  draw_p2_sprite then recomputes frame = frame_base + anim and the round-trip must
+ *  reproduce desc.frame exactly — exercising the fn's actual frame arithmetic + field
+ *  writes, with px/py asserted directly against the captured descriptor. */
+/* ── T5 host backing for the P1/P2 AABBs (DGROUP 0x84c.. / 0x854..) ───────────────
+ *  check_pvp_collision (1000:50fb) tests the P1 bbox (0x84c/0x84e/0x850/0x852 =
+ *  x0,x1,y0,y1) against the P2 bbox (0x854/0x856/0x858/0x85a) and sets
+ *  pvp_collision_flag.  The bbox COORDINATES are not in P2SNAP (the snap records
+ *  px/py/grid/cell/state/.../pvp, not the AABB words), so — exactly as the harness
+ *  seeds the state-script / handler / coord tables from the captured scenario setup —
+ *  it seeds the bboxes here from the SAME fixed geometry the oracle wrote for the two
+ *  pvp scenarios (tools/p2_oracle.py scn_pvp): P1 = (50,70,50,70); P2 overlap =
+ *  (60,80,60,80) -> flag 1; P2 disjoint = (200,220,200,220) -> flag 0.  This drives
+ *  check_pvp_collision's separating-axis test 1:1 on real overlapping/disjoint boxes
+ *  (the flag output is the validated gate). */
+static void seed_pvp_bboxes(const char *scname)
+{
+    pvp_p1_x0 = 50; pvp_p1_x1 = 70; pvp_p1_y0 = 50; pvp_p1_y1 = 70;
+    if (strcmp(scname, "pvp_disjoint") == 0) {
+        pvp_p2_x0 = 200; pvp_p2_x1 = 220; pvp_p2_y0 = 200; pvp_p2_y1 = 220;
+    } else {
+        /* pvp_overlap (and any other pvp record) -> overlapping geometry */
+        pvp_p2_x0 = 60; pvp_p2_x1 = 80; pvp_p2_y0 = 60; pvp_p2_y1 = 80;
+    }
+}
+
+static u8 p2_obj_desc[0x20];
+static void seed_draw_descriptor(const record_t *r)
+{
+    memset(p2_obj_desc, 0, sizeof(p2_obj_desc));
+    p2_sprite = p2_obj_desc;            /* draw_p2_sprite writes here (0x9b9e target) */
+    /* Seed p2_frame_base so frame = frame_base + anim reproduces the captured word. */
+    if (r->desc_len >= 6) {
+        p2_frame_base = (u16)(rd16(r->desc + 4) - p2_move_anim);
+    } else {
+        p2_frame_base = 0;
+    }
+}
+
 /* Seed the per-state script table entry for `state` from the record's EXIT
    steps/facing, with its move-script header inside far_mem (so the MK_FP far ptr
    p2_set_move_state builds resolves to it).  Sets p2_state_script_tbl. */
@@ -407,42 +464,40 @@ static const char *cmp_exit(const snap_t *e, long *got, long *want)
     return NULL;
 }
 
-/* ── RENDER-DESCRIPTOR COMPARATOR (draw_p2_sprite) ───────────────────────────────
- *  The capture carries the EXIT bytes of the P2 object descriptor built at the
- *  0x9b9e far ptr (desc_len>0 only for draw_p2_sprite).  Per p2_model.md §Scenario
- *  14 the leading words are: x = p2_pixel_x, y = p2_pixel_y, frame = p2_frame_base
- *  + p2_move_anim.  When draw_p2_sprite is PORTED and writes a host-visible
- *  descriptor (T5), compare the produced descriptor against the captured one here.
+/* ── RENDER-DESCRIPTOR COMPARATOR (draw_p2_sprite) — REAL OUTPUT GATE (T5) ────────
+ *  draw_p2_sprite (1000:1cea) builds the P2 object descriptor at the 0x9b9e far ptr:
+ *    desc[+0] = p2_pixel_x   desc[+2] = p2_pixel_y   desc[+4] = p2_frame_base+anim.
+ *  The capture carries the EXIT bytes of that descriptor (desc_len>0 only for
+ *  draw_p2_sprite; per p2_model.md §Scenario 14).
  *
- *  NOTE(T5): p2_frame_base is NOT in P2SNAP (the capture records only px/py/anim of
- *  the descriptor inputs), so the frame word (= frame_base + anim) is only
- *  reproducible once T5 either (a) seeds p2_frame_base from a T1 capture addition,
- *  or (b) derives it from the captured descriptor itself (frame_base = desc.frame -
- *  anim).  Until then this comparator asserts the frame-base-INDEPENDENT words
- *  (x = p2_pixel_x, y = p2_pixel_y) against the captured descriptor and back-derives
- *  frame_base from the descriptor to assert the anim relationship — a format
- *  cross-check that the trace's descriptor head is (x, y, frame_base+anim), without
- *  referencing the (absent) draw_p2_sprite symbol. */
+ *  This comparator is now a GENUINE OUTPUT GATE on the reconstructed fn (not a trace
+ *  self-consistency check): run_per_function points p2_sprite at the host buffer
+ *  p2_obj_desc, seeds p2_frame_base, and CALLS the reconstructed draw_p2_sprite; this
+ *  then compares the bytes draw_p2_sprite ACTUALLY WROTE to p2_obj_desc (the 0x9b9e
+ *  target) against the captured descriptor r->desc, word for word over the three
+ *  descriptor head words (x, y, frame).  A divergence in the fn's field offsets or
+ *  its frame arithmetic (frame_base+anim) is caught here.  The blitter beneath the
+ *  wrapper is already plane-exact (24/24, validate_blit), so the gate is at the
+ *  descriptor level — no a000/a200 page re-litigation. */
 static const char *cmp_descriptor(const record_t *r, const snap_t *e,
                                   long *got, long *want)
 {
-    u16 want_x, want_y, d_x, d_y, d_frame, derived_base;
+    u16 w_x, w_y, w_frame, d_x, d_y, d_frame;
+    (void)e;
     if (r->desc_len < 6) return NULL;     /* nothing to compare */
-    /* expected descriptor head from the captured EXIT globals (frame-base free) */
-    want_x = (u16)e->px;
-    want_y = (u16)e->py;
-    d_x     = rd16(r->desc + 0);
-    d_y     = rd16(r->desc + 2);
-    d_frame = rd16(r->desc + 4);
-    /* back-derived frame_base (T5 seeds this directly): frame = frame_base + anim. */
-    derived_base = (u16)(d_frame - e->anim);
-    (void)derived_base;
+    /* WANT = the captured descriptor head (the engine's draw_p2_sprite output). */
+    w_x     = rd16(r->desc + 0);
+    w_y     = rd16(r->desc + 2);
+    w_frame = rd16(r->desc + 4);
+    /* GOT = what the RECONSTRUCTED draw_p2_sprite just wrote to p2_obj_desc (0x9b9e). */
+    d_x     = rd16(p2_obj_desc + 0);
+    d_y     = rd16(p2_obj_desc + 2);
+    d_frame = rd16(p2_obj_desc + 4);
 #define DFLD(name, lhs, rhs) do { if ((long)(lhs) != (long)(rhs)) { \
         *got = (long)(lhs); *want = (long)(rhs); return name; } } while (0)
-    DFLD("desc.x",       d_x,                          want_x);
-    DFLD("desc.y",       d_y,                          want_y);
-    /* frame relationship: desc.frame - anim must be a stable non-negative base. */
-    DFLD("desc.frame_ge_anim", (d_frame >= e->anim),   1);
+    DFLD("desc.x",     d_x,     w_x);
+    DFLD("desc.y",     d_y,     w_y);
+    DFLD("desc.frame", d_frame, w_frame);
 #undef DFLD
     return NULL;
 }
@@ -476,8 +531,11 @@ static const ported_t PORTED[] = {
     { FN_P2_AI_SELECT_A,       p2_ai_select_move_a },                   /* T4 */
     { FN_P2_AI_SELECT_B,       p2_ai_select_move_b },                   /* T4 */
     { FN_P2_AI_SELECT_RANDOM,  p2_ai_select_move_random },  /* T4 (prng — seed_ai_prng) */
-    { FN_CHECK_PVP_COLLISION,  NULL },   /* T5 */
-    { FN_DRAW_P2_SPRITE,       NULL },   /* T5 */
+    /* Phase-4 T5: the render/view wrappers + pvp collision are now reconstructed in
+       src/player2.c.  check_pvp_collision sets pvp_collision_flag (cmp_exit "pvp");
+       draw_p2_sprite builds the P2 object descriptor (cmp_descriptor — real gate). */
+    { FN_CHECK_PVP_COLLISION,  check_pvp_collision },         /* T5 */
+    { FN_DRAW_P2_SPRITE,       draw_p2_sprite },              /* T5 */
 };
 #define PORTED_N (sizeof(PORTED) / sizeof(PORTED[0]))
 
@@ -549,6 +607,15 @@ static int run_per_function(record_t *recs, long nrec, const char *scname,
                table (the cell-move handlers); seed it from the captured effect. */
             if (r->fn_addr == FN_P2_RUN_STATE_HANDLER)
                 seed_state_handler_tbl(r->ent.state);
+            /* draw_p2_sprite (T5): point p2_sprite at the host descriptor buffer +
+               seed p2_frame_base so the produced descriptor is a real output gate
+               (cmp_descriptor compares the bytes draw_p2_sprite writes vs r->desc). */
+            if (r->fn_addr == FN_DRAW_P2_SPRITE)
+                seed_draw_descriptor(r);
+            /* check_pvp_collision (T5): seed the P1/P2 AABBs from the scenario's
+               fixed geometry (the bbox coords are not in P2SNAP — see seed_pvp_bboxes). */
+            if (r->fn_addr == FN_CHECK_PVP_COLLISION)
+                seed_pvp_bboxes(scname);
 
             if (r->fn_addr == FN_P2_SET_MOVE_STATE) {
                 /* p2_set_move_state(state) — the cdecl arg is the LAUNCH state the
@@ -618,8 +685,9 @@ int main(int argc, char **argv)
     printf("p2_ctest: replay harness over %s\n", path);
     printf("  trace: P2TRACE1 v%u, %u scenarios, %u fn-names\n", ver, nsc, nfn);
     printf("  per-fn diff targets (host-callable): the move-state/trajectory group "
-           "[T3] AND the AI rng-decision group [T4] are reconstructed in "
-           "src/player2.c; check_pvp_collision + draw_p2_sprite remain UNPORTED [T5]\n");
+           "[T3], the AI rng-decision group [T4], AND the render/view + pvp group "
+           "[T5] (check_pvp_collision + draw_p2_sprite, the descriptor a real gate) "
+           "are reconstructed in src/player2.c\n");
 
     for (s = 0; s < nsc; s++) {
         u8 sid, name_len, seeded, level;
@@ -676,7 +744,8 @@ int main(int argc, char **argv)
     }
     printf("PASS: %ld PORTED records matched the capture (move-state/trajectory [T3] "
            "+ AI rng-decision [T4], incl. the seeded-prng AI-determinism of "
-           "p2_ai_select_move_random); %ld records UNPORTED (check_pvp_collision + "
-           "draw_p2_sprite — T5).\n", st.pass, st.unported);
+           "p2_ai_select_move_random; + render/view + pvp [T5]: check_pvp_collision "
+           "flag and the %ld draw_p2_sprite descriptor(s) as a real output gate); "
+           "%ld records UNPORTED.\n", st.pass, st.desc_checked, st.unported);
     return 0;
 }

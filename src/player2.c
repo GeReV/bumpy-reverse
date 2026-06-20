@@ -123,15 +123,27 @@ u8  p2_dir_blocked_2;    /* DGROUP 0xa0e2 — 4th dir flag (read by p2_tile_move
 u8  p2_dir_blocked_3;    /* DGROUP 0xa1b2 */
 
 /* ── P1/P2 pvp-collision globals — OWNED here ─────────────────────────────────── */
-u8  pvp_collision_flag;  /* DGROUP 0xa1aa */
-s16 pvp_p1_x0;           /* DGROUP 0x084c */
-s16 pvp_p1_x1;           /* DGROUP 0x084e */
-s16 pvp_p1_y0;           /* DGROUP 0x0850 */
-s16 pvp_p1_y1;           /* DGROUP 0x0852 */
-s16 pvp_p2_x0;           /* DGROUP 0x0854 */
-s16 pvp_p2_x1;           /* DGROUP 0x0856 */
-s16 pvp_p2_y0;           /* DGROUP 0x0858 */
-s16 pvp_p2_y1;           /* DGROUP 0x085a */
+u8  pvp_collision_flag;  /* DGROUP 0xa1aa (Ghidra players_colliding) */
+s16 pvp_p1_x0;           /* DGROUP 0x084c (Ghidra p1_bbox_left)   */
+s16 pvp_p1_x1;           /* DGROUP 0x084e (Ghidra p1_bbox_right)  */
+s16 pvp_p1_y0;           /* DGROUP 0x0850 (Ghidra p1_bbox_top)    */
+s16 pvp_p1_y1;           /* DGROUP 0x0852 (Ghidra p1_bbox_bottom) */
+s16 pvp_p2_x0;           /* DGROUP 0x0854 (Ghidra p2_bbox_left)   */
+s16 pvp_p2_x1;           /* DGROUP 0x0856 (Ghidra p2_bbox_right)  */
+s16 pvp_p2_y0;           /* DGROUP 0x0858 (Ghidra p2_bbox_top)    */
+s16 pvp_p2_y1;           /* DGROUP 0x085a (Ghidra p2_bbox_bottom) */
+
+/* ── P2 render/view globals — OWNED here (Phase-4 T5; no other TU names them) ──── */
+s16 p2_scroll_x;         /* DGROUP 0x9d34 — P2 view scroll X (render/erase view) */
+s16 p2_scroll_y;         /* DGROUP 0x9d32 — P2 view scroll Y (render/erase view) */
+
+/* P2 render/erase view-descriptor far pointers.  render_p2_view writes geometry
+   into the descriptor at 0x8ec/0x8ee and presents it; erase_p2_view writes the
+   previous-cell geometry into the descriptor at 0x8e8/0x8ea and restores under it.
+   The engine keeps each SPLIT as two DGROUP words (off,seg); here a single far
+   pointer carries it, the same convention as p2_sprite / p2_move_script above. */
+u8 __far *p2_view;       /* DGROUP 0x8ec/0x8ee — render_player_view descriptor */
+u8 __far *p2_erase_view; /* DGROUP 0x8e8/0x8ea — restore_bg_view descriptor    */
 
 /* ── cross-module globals the P2 fns read (owned elsewhere; extern only) ──────── */
 extern u8 __far *tilemap;     /* game.c 0xa0d8/0xa0da — level tilemap far pointer */
@@ -139,6 +151,14 @@ extern u8  rng_frame;         /* player.c 0x79b3 — the AI rng-decision input (
                                  selectors branch on it; select_move_random overwrites
                                  it with rand()).  Owned by player.c (player.h);
                                  declared here as the P2 AI layer is the heavy reader. */
+
+/* check_pvp_collision (1000:50fb) reads these cross-module globals (owned elsewhere;
+   extern only here — declaring their owning headers' symbol, NOT redefining). */
+extern u8  physics_frozen;        /* player.c 0xa0ce — physics-freeze gate          */
+extern u8  game_mode;             /* game.c   0x792c — '0'(0x30) gate               */
+extern u8  session_continue_flag; /* game.c   0x856d — round/session gate           */
+extern s16 sound_device_state;    /* player.c 0x689c — ==4 -> OPL/charger sound ids */
+extern void play_sound(u8 sound_id); /* 1000:6e11 — audio leaf (stubbed; → Phase 6) */
 
 /* ════════════════════════════════════════════════════════════════════════════
  *  CALLEES of p2_tile_move_check / the AI layer (Phase-4 T4)
@@ -732,5 +752,220 @@ void p2_cell_move_right(void)
 {
     p2_cell        = (s8)(p2_cell + 1);
     p2_set_cell_col = (u8)(p2_set_cell_col + 1);
+    return;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  P2 RENDER / VIEW WRAPPERS + PVP COLLISION — Phase-4 Task 5 (ported 1:1).
+ *
+ *  The three render/view fns (draw_p2_sprite, render_p2_view, erase_p2_view) are
+ *  THIN game-loop WRAPPERS: each builds/updates an engine descriptor object from the
+ *  current P2 state, then issues ONE present/blit call into the already-validated
+ *  Phase-0 render machinery.  The descriptor-BUILD (the field writes) is the part
+ *  these fns own and is reconstructed here 1:1 from the disassembly; the trailing
+ *  present/blit call is the leaf into the render core.
+ *
+ *  RECONSTRUCTION FIDELITY (the present/blit leaf calls).  The engine's render leaves
+ *  are FAR-POINTER calls taking the descriptor's (off,seg):
+ *      draw_p2_sprite  -> blit_sprite(0x795a, 0x203b)        (1000:942a)
+ *      render_p2_view  -> render_player_view(p2_view off,seg) (1000:93b8)
+ *      erase_p2_view   -> restore_bg_view(p2_erase_view off,seg)(1000:80bc)
+ *  Phase-0 reconstructed those render leaves as BEHAVIOR-FAITHFUL semantic
+ *  reconstructions driven by host WORK BUFFERS (planes/bank + a 3-arg signature; see
+ *  src/entity.c §entity_blit_object and src/bgi_overlay.h) — and `blit_sprite` itself
+ *  was inlined there into its three validated pipeline stages, so it has no callable
+ *  symbol.  Those game-loop wrappers do not hold the work-buffer render context, and
+ *  the Phase-0 core must NOT be modified to take the engine's far-ptr convention.
+ *  The present/blit LEAF is therefore modeled here as a faithful-signature stub
+ *  (p2_blit_sprite_leaf / p2_render_view_leaf / p2_restore_view_leaf) preserving the
+ *  call site 1:1; the OBSERVABLE output of draw_p2_sprite — the P2 object descriptor
+ *  bytes (x, y, frame) written at p2_sprite/0x9b9e — IS produced here and is the
+ *  validated gate (tools/p2_ctest.c §RENDER-DESCRIPTOR, against the plane-exact 24/24
+ *  blitter underneath).  render_p2_view/erase_p2_view's descriptor field-writes are
+ *  likewise reconstructed 1:1; their present leaf is the stub. */
+void p2_blit_sprite_leaf(u16 obj_off, u16 obj_seg);  /* blit_sprite 1000:942a — leaf  */
+void p2_render_view_leaf(u8 __far *view);            /* render_player_view 1000:93b8  */
+void p2_restore_view_leaf(u8 __far *view);           /* restore_bg_view   1000:80bc   */
+
+/*
+ * draw_p2_sprite — 1000:1cea
+ * --------------------------------------------------------------------------
+ * Build P2's sprite object descriptor at the far ptr p2_sprite (DGROUP 0x9b9e/0x9ba0)
+ * from the current P2 state, then blit it.  No-op when P2 is absent (p2_cell == -1).
+ *   obj[+0] (word) = p2_pixel_x
+ *   obj[+2] (word) = p2_pixel_y
+ *   obj[+4] (word) = p2_frame_base + p2_move_anim        (frame index)
+ *   blit_sprite(0x795a, 0x203b)                          (present leaf — see note)
+ *
+ * The field order/offsets are 1:1 with the asm (1000:1cfd LES BX,[0x9b9e];
+ * +4 = frame_base+anim, +0 = px, +2 = py; then PUSH DS; PUSH 0x795a; CALL 0x942a).
+ * This is the P2 analog of entity_draw_p1's obj field writes (src/entity.c).
+ */
+void draw_p2_sprite(void)
+{
+    u8 __far *obj;
+
+    obj = p2_sprite;
+    if (p2_cell != (s8)0xff) {
+        *(u16 __far *)(obj + 4) = (u16)(p2_frame_base + p2_move_anim); /* frame */
+        *(u16 __far *)(obj + 0) = (u16)p2_pixel_x;                     /* x     */
+        *(u16 __far *)(obj + 2) = (u16)p2_pixel_y;                     /* y     */
+        p2_blit_sprite_leaf(0x795a, 0x203b);                          /* present leaf */
+    }
+    return;
+}
+
+/*
+ * render_p2_view — 1000:1c41
+ * --------------------------------------------------------------------------
+ * P2 view-copy (save-under): compute the P2 scroll offsets from the P2 grid cell,
+ * write the view geometry into the render descriptor at p2_view (DGROUP 0x8ec/0x8ee),
+ * then present it via render_player_view.  No-op when P2 is absent (p2_cell == -1).
+ *   p2_scroll_x = (p2_grid_x > 0x10) ? 0x14 - p2_grid_x : 4
+ *   p2_scroll_y = (p2_grid_y > 0x15) ? 0x19 - p2_grid_y : 4
+ *   view[+6]  = p2_grid_x   view[+8]  = p2_grid_y
+ *   view[+1e] = p2_scroll_x view[+20] = p2_scroll_y
+ *   render_player_view(p2_view off, seg)                 (present leaf — see note)
+ *
+ * 1:1 with the asm (1000:1c54.. MOV [0x9d34],4 ; CMP [0x8558],0x10 ; ... ;
+ * LES BX,[0x8ec] ; ES:[BX+6/8/1e/20] writes ; PUSH [0x8ee],[0x8ec] ; CALL 0x93b8).
+ */
+void render_p2_view(void)
+{
+    u8 __far *view;
+
+    if (p2_cell != (s8)0xff) {
+        p2_scroll_x = 4;
+        if (p2_grid_x > 0x10) {
+            p2_scroll_x = (s16)(0x14 - p2_grid_x);
+        }
+        p2_scroll_y = 4;
+        if (p2_grid_y > 0x15) {
+            p2_scroll_y = (s16)(0x19 - p2_grid_y);
+        }
+
+        view = p2_view;
+        *(s16 __far *)(view + 0x06) = p2_grid_x;
+        *(s16 __far *)(view + 0x08) = p2_grid_y;
+        *(s16 __far *)(view + 0x1e) = p2_scroll_x;
+        *(s16 __far *)(view + 0x20) = p2_scroll_y;
+        p2_render_view_leaf(p2_view);                                /* present leaf */
+    }
+    return;
+}
+
+/*
+ * erase_p2_view — 1000:19a1
+ * --------------------------------------------------------------------------
+ * Restore the background under P2's PREVIOUS cell: write the previous-cell grid
+ * coords + the current scroll offsets into the erase descriptor at p2_erase_view
+ * (DGROUP 0x8e8/0x8ea), then restore via restore_bg_view.  No-op when P2 absent.
+ *   view[+14] = p2_grid_x_prev   view[+16] = p2_grid_y_prev
+ *   view[+1e] = p2_scroll_x      view[+20] = p2_scroll_y
+ *   restore_bg_view(p2_erase_view off, seg)              (present leaf — see note)
+ *
+ * 1:1 with the asm (1000:19b4 LES BX,[0x8e8] ; ES:[BX+14]=[0x928e] ;
+ * ES:[BX+16]=[0x9b94] ; ES:[BX+1e/20]=scroll ; PUSH [0x8ea],[0x8e8] ; CALL 0x80bc).
+ */
+void erase_p2_view(void)
+{
+    u8 __far *view;
+
+    if (p2_cell != (s8)0xff) {
+        view = p2_erase_view;
+        *(s16 __far *)(view + 0x14) = p2_grid_x_prev;
+        *(s16 __far *)(view + 0x16) = p2_grid_y_prev;
+        *(s16 __far *)(view + 0x1e) = p2_scroll_x;
+        *(s16 __far *)(view + 0x20) = p2_scroll_y;
+        p2_restore_view_leaf(p2_erase_view);                         /* restore leaf */
+    }
+    return;
+}
+
+/*
+ * update_p2_bbox — 1000:50c0
+ * --------------------------------------------------------------------------
+ * Recompute P2's AABB (DGROUP 0x854/0x856/0x858/0x85a) from the P2 pixel position,
+ * unless physics is frozen.  Half-open box: x in [px-5, px+6], y in [py-5, py+5].
+ *   p2_bbox_left   (0x854) = p2_pixel_x - 5   (asm ADD 0xfffb)
+ *   p2_bbox_right  (0x856) = p2_pixel_x + 6
+ *   p2_bbox_top    (0x858) = p2_pixel_y - 5   (asm ADD 0xfffb)
+ *   p2_bbox_bottom (0x85a) = p2_pixel_y + 5
+ * 1:1 with the asm (1000:50cc MOV AL,[0xa0ce] gate; the four ADD/MOV writes).
+ */
+void update_p2_bbox(void)
+{
+    if (physics_frozen == 0) {
+        pvp_p2_x0 = (s16)(p2_pixel_x - 5);   /* left   0x854 */
+        pvp_p2_x1 = (s16)(p2_pixel_x + 6);   /* right  0x856 */
+        pvp_p2_y0 = (s16)(p2_pixel_y - 5);   /* top    0x858 */
+        pvp_p2_y1 = (s16)(p2_pixel_y + 5);   /* bottom 0x85a */
+    }
+    return;
+}
+
+/*
+ * check_pvp_collision — 1000:50fb
+ * --------------------------------------------------------------------------
+ * P1<->P2 AABB overlap test: set pvp_collision_flag (DGROUP 0xa1aa) to 0/1.  Gated
+ * to active two-player play: P2 present (p2_cell != -1), not physics-frozen, not
+ * session-continue, and game_mode != '0' (0x30).  On overlap, play a contact sound
+ * (id 0x0d when sound_device_state==4, else 0x03).
+ *
+ * Separating-axis test (1:1 with the asm 1000:5127..; AABBs are p1 0x84c/0x84e/
+ * 0x850/0x852 = left/right/top/bottom, p2 0x854/0x856/0x858/0x85a likewise):
+ *   if p2_left  > p1_right  -> 0   (asm: AX=[0x854]; CMP AX,[0x84e]; JLE ...)
+ *   if p1_left  > p2_right  -> 0
+ *   if p2_top   > p1_bottom -> 0
+ *   if p1_top   > p2_bottom -> 0
+ *   else                    -> 1   (+ play_sound)
+ *
+ * RECONSTRUCTION FIDELITY (sound leaf): play_sound (1000:6e11) is the audio-subsystem
+ * leaf, stubbed project-wide (game_stubs.c / items.c convention; → Phase 6).  The
+ * collision-flag output — the validated gate — is produced 1:1 here.
+ */
+void check_pvp_collision(void)
+{
+    u8 sound_id;
+
+    if (p2_cell != (s8)0xff && physics_frozen == 0 &&
+        session_continue_flag == 0 && game_mode != 0x30) {
+        if (pvp_p1_x1 < pvp_p2_x0) {              /* p1_right < p2_left */
+            pvp_collision_flag = 0;
+        } else if (pvp_p2_x1 < pvp_p1_x0) {       /* p2_right < p1_left */
+            pvp_collision_flag = 0;
+        } else if (pvp_p1_y1 < pvp_p2_y0) {       /* p1_bottom < p2_top */
+            pvp_collision_flag = 0;
+        } else if (pvp_p2_y1 < pvp_p1_y0) {       /* p2_bottom < p1_top */
+            pvp_collision_flag = 0;
+        } else {
+            pvp_collision_flag = 1;
+            if (sound_device_state == 4) {
+                sound_id = 0x0d;
+            } else {
+                sound_id = 3;
+            }
+            play_sound(sound_id);                 /* 1000:6e11 (stub leaf — see note) */
+        }
+    }
+    return;
+}
+
+/* ── Present/blit leaf stubs — the render-core call sites (see the FIDELITY note at
+ *    the head of the T5 section).  Faithful-signature no-ops: they preserve the
+ *    wrapper call sites 1:1 without re-driving the Phase-0 work-buffer render core. */
+void p2_blit_sprite_leaf(u16 obj_off, u16 obj_seg)
+{
+    (void)obj_off; (void)obj_seg;
+    return;
+}
+void p2_render_view_leaf(u8 __far *view)
+{
+    (void)view;
+    return;
+}
+void p2_restore_view_leaf(u8 __far *view)
+{
+    (void)view;
     return;
 }
