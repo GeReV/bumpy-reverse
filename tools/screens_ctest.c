@@ -110,6 +110,13 @@ static int  g_perturb_num = 0;
  *  FAIL on a run_main_menu record. */
 static int  g_perturb_menu = 0;
 
+/* NAME perturbation knob (proves the name-entry / level-intro SEMANTIC gate is REAL).
+ *  When SCR_PERTURB_NAME=1 the comparator's EXPECTED highscore_name0[0] is bumped, so the
+ *  A-comparator MUST FAIL on a name-entry / level-intro record — confirming the scripted
+ *  input genuinely drives the name buffer + the screen-global SCRSNAP to the captured
+ *  EXIT (not a self-consistent no-op). */
+static int  g_perturb_name = 0;
+
 static void host_out_sz(u16 port, u16 val, u8 size)
 {
     if (g_perturb_idx >= 0 && g_out_seen == g_perturb_idx) {
@@ -192,6 +199,18 @@ void anim_render_leaf_80ac(u8 __far *view)
 }
 void anim_blit_sprite_leaf(u16 obj_off, u16 obj_seg) { (void)obj_off; (void)obj_seg; }
 
+/* ── MK_FP host model (mirrors tools/anim_chan_ctest.c / p2_ctest.c) ────────────────
+ *  The T5 highscore / name-entry / level-intro fns rebuild far pointers with
+ *  MK_FP(seg, off) at the use site — the table-row entry name far ptr
+ *  (highscore_entry_ptr), the 8-entry name-compare table (0x135c), the per-level name
+ *  table (0x1354).  Back MK_FP with a >256 KB linear "far memory" arena so any far ptr
+ *  the reconstruction builds lands in a valid host buffer (zero-init = the engine's
+ *  empty default name tables under the boot — captured snaps confirm zero scores / no
+ *  qualifying entry).  MK_FP(seg, off) -> far_mem + ((seg<<4) + off). */
+#define FAR_MEM_BYTES  (0x140000u)   /* > 1 MB linear, covers seg<<4 + off */
+static u8 far_mem[FAR_MEM_BYTES];
+#define MK_FP(seg, off) ((void *)(far_mem + (((u32)(u16)(seg) << 4) + (u16)(off))))
+
 #include "../src/screens.c"
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -239,13 +258,31 @@ HOST_UNUSED void present_frame(u8 page) { (void)page; }
 HOST_UNUSED void init_fullscreen_view_desc(u8 mode, u8 flag) { (void)mode; (void)flag; }
 HOST_UNUSED void wait_keypress(void) { }
 HOST_UNUSED void set_resource_table(u16 off, u16 seg) { (void)off; (void)seg; }
-HOST_UNUSED void show_highscore_screen(void) { }   /* T5 leaf */
+/* show_highscore_screen is now a REAL ported fn in screens.c (T5) — NOT a host leaf. */
 HOST_UNUSED void poll_input(void)
 {
     input_state = menu_input_next();       /* engine: AL = FUN_75a2(); input_state = AL */
     host_input_state_after = input_state;
 }
 HOST_UNUSED char fun_75a2_poll_action(u8 arg) { (void)arg; return (char)menu_input_next(); }
+
+/* ── T5 cross-module gameplay/render leaves + state level_intro_screen reaches ─────────
+ *  Owned by player/level/entity/input modules at the BUMPY.EXE link; the harness does
+ *  NOT link those objs, so it supplies host no-op stubs (their per-level move/render is a
+ *  separate subsystem — the front-end gate validates only the screen-global SCRSNAP).
+ *  run_n_frames is the engine's per-frame idle (game_stubs.c 1000:05e7). */
+HOST_UNUSED void run_n_frames(u8 n)            { (void)n; }
+HOST_UNUSED void render_p1_view(void)          { }
+HOST_UNUSED void draw_p1_sprite(void)          { }
+HOST_UNUSED void p1_update_grid_cell(void)     { }
+HOST_UNUSED void p1_advance_grid_history(void) { }
+HOST_UNUSED u8   get_key_state(u8 scancode)    { (void)scancode; return 0; }
+HOST_UNUSED u16  p1_pixel_x;        /* entity/level player state */
+HOST_UNUSED u16  p1_pixel_y;
+HOST_UNUSED u16  p1_start_x;
+HOST_UNUSED u16  p1_start_y;
+HOST_UNUSED u8   p1_move_anim;
+HOST_UNUSED u8   current_entity_index;
 
 /* ════════════════════════════════════════════════════════════════════════════
  *  Trace format (frozen — see tools/screens_oracle.py header §"TRACE LAYOUT").
@@ -396,9 +433,14 @@ static const char *cmp_semantic(const record_t *r, u16 ret, long *got, long *wan
     CHK(game_state_928d,      frame_abort_flag);
     CHK(palette_mode_word,    palette_mode);
     #undef CHK
-    if (memcmp(highscore_name_buf, ex->highscore_name0, 8) != 0) {
-        *got = highscore_name_buf[0]; *want = ex->highscore_name0[0];
-        return "highscore_name0";
+    {
+        u8 want_name0 = ex->highscore_name0[0];
+        if (g_perturb_name) want_name0 ^= 1;   /* corrupt the expected EXIT name byte */
+        if (highscore_name_buf[0] != want_name0 ||
+            memcmp(highscore_name_buf + 1, ex->highscore_name0 + 1, 7) != 0) {
+            *got = highscore_name_buf[0]; *want = want_name0;
+            return "highscore_name0";
+        }
     }
     if ((long)ret != (long)r->ret_val) {
         *got = ret; *want = r->ret_val;
@@ -768,7 +810,15 @@ void upload_vga_dac_palette(void);
 static void wrap_init_title_graphics(void)   { init_title_graphics(); }
 static void wrap_show_title_background(void)  { show_title_background(); }
 static void wrap_show_title_and_init(void)    { show_title_and_init(); }
-static void wrap_show_menu_select_screen(void){ show_menu_select_screen(); }
+static void wrap_show_menu_select_screen(void)
+{
+    /* show_menu_select_screen now calls the REAL enter_highscore_name (T5), which polls
+     *  FUN_75a2 — prime the captured input script so its name-entry loop terminates. */
+    const record_t *r = g_cur_rec;
+    menu_input_q = r->input; menu_input_n = r->n_input; menu_input_i = 0;
+    show_menu_select_screen();
+    menu_input_q = NULL; menu_input_n = menu_input_i = 0;
+}
 static void wrap_play_iris_wipe(void)         { play_iris_wipe_transition(); }
 static void wrap_upload_dac(void)             { upload_vga_dac_palette(); }
 
@@ -782,6 +832,70 @@ static void wrap_run_main_menu(void)
     menu_input_i = 0;
     g_ret = run_main_menu();   /* returns selected_item (the low byte = the AX low byte) */
     menu_input_q = NULL; menu_input_n = menu_input_i = 0;
+}
+
+/* ── T5 wrappers — highscore screens + name-entry + level-intro ─────────────────────
+ *  The name-entry / level-intro loops poll the engine's ONE input primitive FUN_75a2
+ *  (DIRECTLY for the name-entry SMs, via poll_input for level_intro), so each wrapper
+ *  primes the captured input script through the SAME menu_input_q FIFO (lockstep). */
+void show_highscore_screen(void);
+void render_highscore_table(void);
+void highscore_enter_name(u8 row);
+u8   enter_highscore_name(u8 col, u8 row);
+void level_intro_screen(void);
+void show_level_intro_screen(void);
+
+static void prime_input(const record_t *r)
+{
+    menu_input_q = r->input; menu_input_n = r->n_input; menu_input_i = 0;
+}
+static void unprime_input(void)
+{
+    menu_input_q = NULL; menu_input_n = menu_input_i = 0;
+}
+
+static void wrap_show_highscore_screen(void)
+{
+    prime_input(g_cur_rec);
+    show_highscore_screen();   /* B: builds the bg-view descriptor (render leaves stubbed) */
+    unprime_input();
+}
+static void wrap_render_highscore_table(void)
+{
+    prime_input(g_cur_rec);
+    render_highscore_table();  /* B: name glyphs + draw_number_sprites -> p1_sprite desc */
+    unprime_input();
+}
+static void wrap_highscore_enter_name(void)
+{
+    const record_t *r = g_cur_rec;
+    prime_input(r);
+    highscore_enter_name((u8)r->args[0]);   /* A: scripted input -> name buffer + SCRSNAP */
+    unprime_input();
+}
+static void wrap_enter_highscore_name(void)
+{
+    const record_t *r = g_cur_rec;
+    prime_input(r);
+    /* A: enter_highscore_name(col, row) returns the table-match index (captured ret). */
+    g_ret = enter_highscore_name((u8)r->args[0], (u8)r->args[1]);
+    unprime_input();
+}
+static void wrap_level_intro_screen(void)
+{
+    prime_input(g_cur_rec);
+    level_intro_screen();      /* A: the move loop runs to completion (gameplay stubbed) */
+    /* level_intro_screen returns void; the engine leaves AL = the last byte store
+     *  (timing_flag_accumulator = saved_timing_flag), captured as ret_val.  Publish that
+     *  AL leftover (the fn's actual AX) so the semantic gate's ret check is faithful. */
+    g_ret = (u8)timing_flag_accumulator;
+    unprime_input();
+}
+static void wrap_show_level_intro_screen(void)
+{
+    prime_input(g_cur_rec);
+    show_level_intro_screen(); /* B: level-name sprite-glyph rows -> p1_sprite descriptor */
+    unprime_input();
 }
 
 static const ported_t PORTED[] = {
@@ -799,14 +913,20 @@ static const ported_t PORTED[] = {
      *  (selected_item) + the p1_sprite[+2] cursor word (cursor_index*0x10+0x70). */
     { 0x35a5, "run_main_menu",          'M', wrap_run_main_menu },
     { 0x0f7a, "show_menu_select_screen",'P', wrap_show_menu_select_screen },
-    /* highscore (T4) — semantic (A) for name-entry, descriptor (B) for the table. */
-    { 0x5681, "show_highscore_screen",  'B', NULL },
-    { 0x57e1, "render_highscore_table", 'B', NULL },
-    { 0x5c87, "enter_highscore_name",   'A', NULL },
-    { 0x59d3, "highscore_enter_name",   'A', NULL },
-    /* level intro (T5) — semantic (A) / descriptor (B). */
-    { 0x3852, "level_intro_screen",     'A', NULL },
-    { 0x0d9d, "show_level_intro_screen",'B', NULL },
+    /* highscore (T5) — descriptor (B) for the table builds, semantic (A) for name-entry. */
+    { 0x5681, "show_highscore_screen",  'B', wrap_show_highscore_screen },
+    { 0x57e1, "render_highscore_table", 'B', wrap_render_highscore_table },
+    { 0x5c87, "enter_highscore_name",   'A', wrap_enter_highscore_name },
+    { 0x59d3, "highscore_enter_name",   'A', wrap_highscore_enter_name },
+    /* level intro (T5) — semantic (A) for the move loop; P (p1_sprite POSITION words) for
+     *  the sprite-glyph builder.  RECONSTRUCTION FIDELITY: like show_menu_select_screen,
+     *  the glyph FRAME word[2] = level-name char + 0x175 comes from the engine's DGROUP
+     *  level-name table (0x1354) the trace does NOT capture (fmemcpy'd / read at runtime),
+     *  so it is not a faithful gate — a documented final-glyph-content limit.  The
+     *  reconstructed structural output (the col-stepped + row-selected POSITION words) IS
+     *  gated.  The view-struct EXIT is the stubbed blit_sprite overlay's (not the builder's). */
+    { 0x3852, "level_intro_screen",     'A', wrap_level_intro_screen },
+    { 0x0d9d, "show_level_intro_screen",'P', wrap_show_level_intro_screen },
     /* transition / palette (T4) — iris-wipe descriptor sweep (B) + the DAC port-write
      *  gate (D) on the reconstructed VGA-DAC driver (see cmp_dac).  CARVE-OUT: the
      *  captured iris/standalone DAC writes are emitted by unmodelable BGI overlay code
@@ -929,6 +1049,12 @@ int main(int argc, char **argv)
             g_perturb_menu = atoi(pe);
             printf("screens_ctest: MENU PERTURBATION active — bumping the expected "
                    "selected_item (the run_main_menu cursor state-machine gate MUST FAIL)\n");
+        }
+        pe = getenv("SCR_PERTURB_NAME");
+        if (pe && *pe) {
+            g_perturb_name = atoi(pe);
+            printf("screens_ctest: NAME PERTURBATION active — corrupting the expected EXIT "
+                   "highscore_name0 (the name-entry / level-intro semantic gate MUST FAIL)\n");
         }
     }
     if (!f) { fprintf(stderr, "cannot open %s\n", path); return 2; }

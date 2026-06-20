@@ -139,4 +139,37 @@ void play_iris_wipe_transition(void);
  *  palette upload; under palette_mode==2 the standalone handler emits no DAC). */
 void upload_vga_dac_palette(void);
 
+/* ── PORTED (Phase-7 T5): highscore screens + name-entry + level-intro ───────────────
+ *  1:1 bodies in screens.c (addresses cited there); the matching game_stubs.c stubs are
+ *  removed.  Completes the front-end port. */
+
+/* show_highscore_screen (1000:5681): load+display the highscore background, build the
+ *  bg view, then render the highscore table. */
+void show_highscore_screen(void);
+
+/* render_highscore_table (1000:57e1): render the 7-entry highscore table (name glyphs +
+ *  scores via draw_number_sprites); insert+name-entry if the score qualifies, else wait. */
+void render_highscore_table(void);
+
+/* highscore_enter_name (1000:59d3): the interactive 8-char table-row name-entry state
+ *  machine (polls FUN_75a2; left/right cycle letters, prev/next move the cursor). */
+void highscore_enter_name(u8 row);
+
+/* enter_highscore_name (1000:5c87): the interactive 6-char menu-select name-entry state
+ *  machine; compares the typed name vs the 8-entry table and returns the matched index
+ *  + 2 (or 0).  Args: col (x), row (y). */
+u8 enter_highscore_name(u8 col, u8 row);
+
+/* draw_name_entry_cursor (1000:5fdb): position + draw the blinking name-entry cursor
+ *  sprite at (col,row) with glyph `frame`; the shared helper of both name-entry SMs. */
+u16 draw_name_entry_cursor(u8 col, u8 row, u16 frame, char do_blit);
+
+/* level_intro_screen (1000:3852): the per-level intro screen + interactive move loop
+ *  (load+decode the level border image, draw the HUD + Bumpy, then directions/fire/quit). */
+void level_intro_screen(void);
+
+/* show_level_intro_screen (1000:0d9d): display the fullscreen image + the current_level
+ *  name as sprite glyphs, then wait for the start input. */
+void show_level_intro_screen(void);
+
 #endif /* SCREENS_H */

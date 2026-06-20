@@ -153,6 +153,20 @@ extern u8 input_state;                      /* input.c 0x8244 */
 extern u8 current_level;                    /* level.c 0x79b2 */
 extern u8 menu_option2_setting;             /* game.c  0x79b5 */
 extern u8 frame_abort_flag;                 /* game.c  0x928d (DAT_203b_928d) */
+extern u16 score_lo;                        /* game.c  0xa0d4 */
+extern u16 score_hi;                        /* game.c  0xa0d6 */
+extern void run_n_frames(u8 n);             /* game_stubs.c 1000:05e7 */
+
+/* T5 forward declarations (the highscore / level-intro fns; their 1:1 bodies follow the
+   T5 block below).  Declared here so the T4 builders that call them (show_title_and_init,
+   show_menu_select_screen) see the correct prototypes. */
+void show_highscore_screen(void);           /* 1000:5681 (T5) */
+void render_highscore_table(void);          /* 1000:57e1 (T5) */
+void highscore_enter_name(u8 row);          /* 1000:59d3 (T5) */
+u8   enter_highscore_name(u8 col, u8 row);  /* 1000:5c87 (T5) */
+void level_intro_screen(void);              /* 1000:3852 (T5) */
+void show_level_intro_screen(void);         /* 1000:0d9d (T5) */
+u16  draw_name_entry_cursor(u8 col, u8 row, u16 frame, char do_blit); /* 1000:5fdb */
 
 /* render/text leaves (see header block).  FUN_80ac / blit_sprite are anim.c's
    faithful-signature stubs (the SAME engine fns); the font leaves are stubbed here. */
@@ -430,7 +444,6 @@ extern void init_fullscreen_view_desc(u8 mode, u8 flag);  /* game_stubs.c       
 extern void wait_keypress(void);                          /* game_stubs.c 1000:328f  */
 extern void poll_input(void);                             /* input.c    1000:1dde    */
 extern char fun_75a2_poll_action(u8 arg);                 /* FUN_1000_75a2 (input.c/stub) */
-extern void show_highscore_screen(void);                  /* game_stubs.c (T5)       */
 extern void set_resource_table(u16 off, u16 seg);         /* game_stubs.c            */
 
 /* ── unowned leaves (no other definition in the src tree) — faithful-signature stubs
@@ -447,7 +460,6 @@ void fun_7b4a_view_blit(u8 __far *view, u16 seg);         /* FUN_1000_7b4a (per-
 void fun_9410_set_sprite_table(u16 arg);                  /* FUN_1000_9410           */
 void play_intro_animation_loop(void);                     /* 1000:30dd (intro anim)  */
 void wait_50_frames(void);                                /* per-frame idle leaf     */
-u8   enter_highscore_name(void);                          /* 1000:5c87 (T5)          */
 void vga_dac_upload_from_buffer(u8 __far *img_buf);       /* mode-2 VGA-DAC handler   */
 
 int  open_resource(u16 res_idx, u16 mode) { (void)res_idx; (void)mode; return 0; }
@@ -464,7 +476,6 @@ void fun_7b4a_view_blit(u8 __far *view, u16 seg) { (void)view; (void)seg; }
 void fun_9410_set_sprite_table(u16 arg) { (void)arg; }
 void play_intro_animation_loop(void) { }
 void wait_50_frames(void) { }
-u8   enter_highscore_name(void) { return 0; }
 
 /* ── DAC palette-mode dispatch + the reconstructed VGA-DAC handler ────────────────── */
 
@@ -923,8 +934,11 @@ void show_menu_select_screen(void)
         anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
         col_pos = col_pos + 1;
     }
-    /* current_level = enter_highscore_name(); default 1 + pick the third row. */
-    current_level = enter_highscore_name();
+    /* current_level = enter_highscore_name(col=0xa, row=7); default 1 + pick the third
+       row.  Disasm 0f7a@112d: PUSH 7; PUSH 0xa; CALL 5c87 (C right-to-left → col=0xa,
+       row=7).  enter_highscore_name is now ported (T5); its captured return is the
+       table-match index. */
+    current_level = enter_highscore_name(0xa, 7);
     if (current_level == 0) {
         third_row = menu_select_row3b;
         current_level = 1;
@@ -947,5 +961,722 @@ void show_menu_select_screen(void)
         wait_50_frames();
     }
     fun_9410_set_sprite_table(0);
+    return;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  Phase-7 Task 5 — the highscore screens (incl. the interactive name-entry state
+ *  machine) + the per-level intro screen.  Completes the front-end port.
+ *
+ *  Ported 1:1 from the live Ghidra BumpyDecomp + raw disassembly (decompiled fresh
+ *  2026-06):
+ *    show_highscore_screen      1000:5681
+ *    render_highscore_table     1000:57e1
+ *    highscore_enter_name       1000:59d3   (the 8-char table-row name entry SM)
+ *    enter_highscore_name       1000:5c87   (the 6-char menu-select name entry SM)
+ *    draw_name_entry_cursor     1000:5fdb   (the shared cursor draw helper)
+ *    level_intro_screen         1000:3852   (the per-level intro + move loop)
+ *    show_level_intro_screen    1000:0d9d   (the level-name sprite-glyph screen)
+ *  The Turbo C stack-check prologue (`CMP [0x6b4c],SP; CALL ab83`) of each original
+ *  is the compiler-emitted stack probe — NOT game logic — intentionally OMITTED (the
+ *  documented player/items/anim/sound/T3/T4 convention).
+ *
+ *  ── NAME-ENTRY STATE MACHINES (the SEMANTIC gate) ──────────────────────────────
+ *  highscore_enter_name (59d3) and enter_highscore_name (5c87) are the interactive
+ *  text-input loops: each polls the engine's ONE input primitive FUN_1000_75a2
+ *  (DIRECTLY, not via poll_input), and on the action bits 1=left / 2=right (cycle the
+ *  current letter through 0x1ad..0x1cf) / 4=prev char / 8=next char / 0x10=done builds
+ *  the name buffer one cursor position at a time, drawing the blinking cursor via
+ *  draw_name_entry_cursor (5fdb).  The host replays the captured FUN_75a2 return stream
+ *  (the v3 input script) through fun_75a2_poll_action in FIFO lockstep — the engine's
+ *  real input path — so the cursor walk + name-buffer edits reproduce host-side.  The
+ *  validated SEMANTIC output is the screen-global SCRSNAP (incl. the 0x8f0 row-0 entry)
+ *  + the AX return (enter_highscore_name's table-match index / void AL leftover).
+ *    - highscore_enter_name (59d3): edits the 8-char name string the table row points
+ *      at (highscore_entry_ptr = 0x203b:(row*8+0x8f0); the string is at *that ptr).
+ *    - enter_highscore_name (5c87): edits a 6-char SS-LOCAL buffer (fmemcpy'd from
+ *      DGROUP 0x256a), then on 0x10 compares it against the 8-entry name table at
+ *      DGROUP 0x135c and returns the matched index + 2 (or 0).  RECONSTRUCTION
+ *      FIDELITY: the SS-local buffer is reconstructed as a module-static array so the
+ *      edit + compare run host-side; same bytes, same algorithm (the validated output
+ *      is the AX return, captured 0 = no match under the boot's empty name table).
+ *
+ *  ── level_intro_screen (3852) — gameplay leaves STUBBED ───────────────────────────
+ *  Loads + vec_decodes the per-level border image (resource current_level+7), installs
+ *  the level palette (palette_mode==1 path), iris-wipes in, draws the score HUD
+ *  (draw_number — T3) + Bumpy at his start pos, then runs an input-wait loop: the
+ *  direction bits dispatch to the p1_move_step_* gameplay steppers, fire (0x10) ->
+ *  intro_start_level (which begins the level), a quit key -> game_state=0xff.  The
+ *  gameplay/render leaves it calls (p1_move_step_*, render_p1_view, draw_p1_sprite,
+ *  draw_icon_row, play_anim_sequence, compute_move_descriptor_ptr, intro_start_level,
+ *  …) are RECONSTRUCTION-FIDELITY stubbed/extern (owned by player/level/entity modules
+ *  or stubbed here) — the per-level move physics is a separate subsystem; this screen's
+ *  faithful, validated output is the screen-global SCRSNAP (timing saved/restored,
+ *  input_state cleared, game_state, palette).  intro_start_level's stub returns 1 so the
+ *  fire branch exits the loop (it returns did_start=1 when the level starts).
+ *
+ *  ── SEEDED resource load / STUBBED render leaves (as T4) ──────────────────────────
+ *  open_resource / read_chunked / c_close / vec_decode are SEEDED faithful-signature
+ *  stubs (already defined in the T4 block); the decoded image is host-seeded.  The
+ *  per-screen builders' render-core leaves (restore_bg_view, FUN_7b93/7bca, present,
+ *  blit_sprite via anim_blit_sprite_leaf, FUN_7b4a) stay stubbed; their observable
+ *  output — the render_descriptor_ptr view struct + the p1_sprite descriptor — IS
+ *  produced here and is the validated DESCRIPTOR-LEVEL gate.
+ * ──────────────────────────────────────────────────────────────────────────────── */
+
+/* ── leaves / globals level_intro_screen reaches (owned elsewhere — extern; resolve at
+ *    the BUMPY.EXE link, host-defined in the ctest).  These are the gameplay/render
+ *    steppers + the player-state globals; NOT reconstructed here (separate subsystem). */
+extern void render_p1_view(void);                 /* game_stubs.c            */
+extern void draw_p1_sprite(void);                 /* game_stubs.c            */
+extern void p1_update_grid_cell(void);            /* game_stubs.c            */
+extern void p1_advance_grid_history(void);        /* game_stubs.c            */
+extern u8   get_key_state(u8 scancode);           /* input.c   1000:7ab4    */
+extern u16  p1_pixel_x;                            /* entity.c / level state  */
+extern u16  p1_pixel_y;                            /* "                       */
+extern u16  p1_start_x;                            /* level.c                 */
+extern u16  p1_start_y;                            /* level.c                 */
+extern u8   p1_move_anim;                          /* entity.c / level.c      */
+extern u8   current_entity_index;                  /* level.c   0x...         */
+
+/* ── unowned level-intro gameplay leaves / globals (no other src def) — faithful-
+ *    signature stubs reconstructed HERE so level_intro_screen's 1:1 call sites resolve.
+ *    RECONSTRUCTION FIDELITY: the per-level move/anim subsystem is not modelled by the
+ *    front-end gate; these preserve each call site without re-driving it. */
+void p1_move_step_up(void);
+void p1_move_step_down(void);
+void p1_move_step_left(void);
+void p1_move_step_right(void);
+void draw_icon_row(void);
+void play_anim_sequence(void);
+void compute_move_descriptor_ptr(void);
+u8   intro_start_level(void);
+
+void p1_move_step_up(void)            { }
+void p1_move_step_down(void)          { }
+void p1_move_step_left(void)          { }
+void p1_move_step_right(void)         { }
+void draw_icon_row(void)              { }
+void play_anim_sequence(void)         { }
+void compute_move_descriptor_ptr(void){ }
+/* intro_start_level (1000:3cf7) returns did_start (1 when the level begins); the fire
+   branch exits level_intro_screen's loop on its non-zero return.  Reconstructed as a
+   faithful-signature stub returning 1 (the per-level move-script execution it performs
+   is a separate gameplay subsystem, not the front-end screen build). */
+u8   intro_start_level(void)          { return 1; }
+
+/* level-intro saved/scratch globals (no other src TU defines them — owned here). */
+u8   saved_timing_flag;     /* DGROUP — saved timing_flag_accumulator across the intro  */
+u8   saved_entity_index;    /* DGROUP — saved current_entity_index across the intro     */
+
+/* the table-row entry far ptr render_highscore_table / highscore_enter_name use:
+ *  highscore_entry_ptr @ DGROUP 0x8574/0x8576 = far ptr -> the 8-byte entry at
+ *  0x203b:(row*8 + 0x8f0) = {u16 name_off, u16 name_seg, u16 score_lo, u16 score_hi}.
+ *  The disasm does LES BX,[0x8574]; LES BX,ES:[BX] (double indirection): the entry's
+ *  first two words are a far ptr to the name CHARS, rebuilt at the use site with
+ *  MK_FP(name_seg, name_off) — the project's _off/_seg far-pointer convention. */
+u16 __far *highscore_entry_ptr;   /* DGROUP 0x8574/0x8576 -> the 8-byte table entry */
+
+/* the placeholder name far ptr render_highscore_table stamps into a new qualifying entry
+ *  (DGROUP 0x0920/0x0922 = DAT_203b_0920/0922).  Owned here; harness-seeded. */
+u16 highscore_new_name_off;   /* DGROUP 0x0920 */
+u16 highscore_new_name_seg;   /* DGROUP 0x0922 */
+
+/* the 8-entry 6-char name table enter_highscore_name compares the typed name against
+ *  (DGROUP 0x135c, stride 4 = a far ptr per entry).  Owned here; harness-seeded (under
+ *  the boot it is the engine's default-initials table). */
+u16 highscore_name_table[8 * 2];   /* DGROUP 0x135c (8 × far ptr = off/seg pairs) */
+
+/* the per-screen palette patch source render_highscore_table / show_highscore_screen /
+ *  show_level_intro_screen copy when palette_mode==1 (DGROUP 0x71e — the same table the
+ *  T4 show_menu_select_screen uses).  Reuse dgroup_pal_patch_71e (defined in the T4
+ *  block).  Under the boot palette_mode==2 this whole path is skipped. */
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  draw_name_entry_cursor — 1000:5fdb
+ *  Position + draw the name-entry cursor sprite at (col,row) with glyph `frame`;
+ *  optionally blit; advance 8 frames.  Disasm 5fdb: view[+0x14]=row;
+ *  FUN_7b4a(view); p1[2]=frame; *p1=row<<4; p1[1]=col; if(do_blit) blit_sprite; run_n_frames(8).
+ * ════════════════════════════════════════════════════════════════════════════ */
+u16 draw_name_entry_cursor(u8 col, u8 row, u16 frame, char do_blit)
+{
+    u16 __far *p;
+
+    *(u16 __far *)(render_descriptor_ptr + 0x14) = (u16)row;
+    fun_7b4a_view_blit(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
+    p = (u16 __far *)p1_sprite;
+    p[2] = frame;
+    *(u16 __far *)p1_sprite = (u16)row << 4;
+    p[1] = (u16)col;
+    if (do_blit != '\0') {
+        anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
+    }
+    run_n_frames(8);
+    /* The original is void; the engine's caller reuses AX (= the frame value, the cursor
+       glyph just drawn) as `cur_letter` for the next iteration — modelled by returning
+       `frame`.  RECONSTRUCTION FIDELITY: the cursor glyph is a stubbed BGI-overlay blit;
+       only the returned frame (a non-game AX carry) feeds the next loop, which re-masks
+       its low byte — the validated output is the name buffer + the SCRSNAP, not this. */
+    return frame;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  highscore_enter_name — 1000:59d3
+ *  The interactive 8-char name-entry state machine for table row `row`.  Sets up the
+ *  name far ptr (highscore_entry_ptr -> 0x203b:(row*8+0x8f0)), seeds the first char to
+ *  'A', then loops: poll FUN_75a2; bit 1=left/2=right cycle the current letter through
+ *  0x1ad..0x1cf (wrapping the gap at 0x1d0 -> 0x1a3, mapping '.' 0x2e -> '[' 0x5b for
+ *  display); 4=prev char / 8=next char move the cursor (writing the chosen letter into
+ *  the name buffer); else blink the cursor; 0x10=done exits.  Disasm 59d3.
+ * ════════════════════════════════════════════════════════════════════════════ */
+void highscore_enter_name(u8 row)
+{
+    u16 letter_code;
+    u8  blink_counter;
+    u8  char_idx;
+    u8  input_flags;
+    u8 __far *name;
+
+    char_idx = 0;
+    /* highscore_entry_ptr -> the 8-byte entry at row*8+0x8f0; the name CHARS are at
+       MK_FP(entry[1], entry[0]) (the entry's name far ptr). */
+    highscore_entry_ptr = (u16 __far *)&highscore_name_buf[(u16)row * 8];
+    name = (u8 __far *)MK_FP(highscore_entry_ptr[1], highscore_entry_ptr[0]);
+    letter_code = 0x1b6;
+    name[0] = 0x41;                                  /* name[0] = 'A' */
+    *(u16 __far *)(render_descriptor_ptr + 0x14) = 0;
+    *(u16 __far *)(render_descriptor_ptr + 0x16) = (u16)row * 2 + 8;
+    blink_counter = 0;
+    draw_name_entry_cursor((u8)(row * 0x10 + 'A'), 0, letter_code, 1);
+    while ((input_flags = (u8)fun_75a2_poll_action(0)), (input_flags & 0x10) != 0x10) {
+        name = (u8 __far *)MK_FP(highscore_entry_ptr[1], highscore_entry_ptr[0]);
+        if (((input_flags & 1) == 0) || ((int)letter_code < 0x1ad)) {
+            if (((input_flags & 2) == 0) || (0x1cf < (int)letter_code)) {
+                if (((input_flags & 4) == 0) || (char_idx == 0)) {
+                    if (((input_flags & 8) == 0) || (6 < char_idx)) {
+                        blink_counter = blink_counter + 1;
+                        if ((blink_counter & 8) == 0) {
+                            anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
+                        } else {
+                            fun_7b4a_view_blit(render_descriptor_ptr,
+                                               SCREENS_DGROUP_RUNTIME_SEG);
+                        }
+                        run_n_frames(1);
+                    } else {                                  /* 8 = next char */
+                        if (letter_code == 0x1d0) {
+                            letter_code = 0x1a3;
+                        }
+                        letter_code = letter_code - 0x175;
+                        name[char_idx] = (u8)letter_code;
+                        char_idx = char_idx + 1;
+                        letter_code = (u16)name[char_idx];
+                        if (letter_code == 0x2e) {
+                            letter_code = 0x5b;
+                        }
+                        letter_code = letter_code + 0x175;
+                        anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
+                        draw_name_entry_cursor((u8)(row * 0x10 + 'A'), char_idx,
+                                               letter_code, 0);
+                    }
+                } else {                                      /* 4 = prev char */
+                    if (letter_code == 0x1d0) {
+                        letter_code = 0x1a3;
+                    }
+                    letter_code = letter_code - 0x175;
+                    name[char_idx] = (u8)letter_code;
+                    char_idx = char_idx - 1;
+                    letter_code = (u16)name[char_idx];
+                    if (letter_code == 0x2e) {
+                        letter_code = 0x5b;
+                    }
+                    letter_code = letter_code + 0x175;
+                    anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
+                    draw_name_entry_cursor((u8)(row * 0x10 + 'A'), char_idx,
+                                           letter_code, 0);
+                }
+            } else {                                          /* 2 = right (next letter) */
+                letter_code = letter_code + 1;
+                if (letter_code == 0x1d0) {
+                    letter_code = 0x1a3;
+                }
+                letter_code = letter_code - 0x175;
+                name[char_idx] = (u8)letter_code;
+                if (letter_code == 0x2e) {
+                    letter_code = 0x5b;
+                }
+                letter_code = letter_code + 0x175;
+                draw_name_entry_cursor((u8)(row * 0x10 + 'A'), char_idx,
+                                       letter_code, 1);
+            }
+        } else {                                              /* 1 = left (prev letter) */
+            letter_code = letter_code - 1;
+            if (letter_code == 0x1d0) {
+                letter_code = 0x1a3;
+            }
+            letter_code = letter_code - 0x175;
+            name[char_idx] = (u8)letter_code;
+            if (letter_code == 0x2e) {
+                letter_code = 0x5b;
+            }
+            letter_code = letter_code + 0x175;
+            draw_name_entry_cursor((u8)(row * 0x10 + 'A'), char_idx,
+                                   letter_code, 1);
+        }
+    }
+    anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
+    return;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  render_highscore_table — 1000:57e1
+ *  Render the 7-entry high-score table (name glyphs via blit_sprite + score via
+ *  draw_number_sprites, T3).  If the current score (score_hi:score_lo) qualifies, shift
+ *  the lower entries down, insert a placeholder ('AAAAAAAA' name + the score), and run
+ *  highscore_enter_name on the inserted row; otherwise wait for a keypress.  Disasm 57e1.
+ * ════════════════════════════════════════════════════════════════════════════ */
+void render_highscore_table(void)
+{
+    char qualified;
+    u8   insert_row;
+    u8   row_idx;
+    u8   shift_idx;
+    u8   char_col;
+    u8   name_char;
+    u16 __far *p;
+    u8 __far *name;
+
+    fun_9410_set_sprite_table(0);
+    qualified = '\0';
+    insert_row = 0;
+    for (row_idx = 0; row_idx < 7; row_idx = row_idx + 1) {
+        /* entry = highscore_name_buf[row*8]: {u16 name_off, u16 name_seg, u16 score_lo,
+           u16 score_hi}.  highscore_entry_ptr -> that entry; name chars = MK_FP(seg,off). */
+        highscore_entry_ptr = (u16 __far *)&highscore_name_buf[(u16)row_idx * 8];
+        if ((highscore_entry_ptr[3] <= score_hi) &&
+            (((highscore_entry_ptr[3] < score_hi) ||
+              (highscore_entry_ptr[2] < score_lo)) &&
+             (qualified == '\0'))) {
+            qualified = '\x01';
+            insert_row = row_idx;
+            /* shift the lower entries down (rows row_idx+1..6 <- row_idx..5). */
+            for (shift_idx = 6; row_idx < shift_idx; shift_idx = shift_idx - 1) {
+                u16 __far *dst = (u16 __far *)&highscore_name_buf[(u16)shift_idx * 8];
+                u16 __far *src = (u16 __far *)&highscore_name_buf[(u16)shift_idx * 8 - 8];
+                dst[0] = src[0];
+                dst[1] = src[1];
+                dst[2] = src[2];
+                dst[3] = src[3];
+            }
+            /* insert the placeholder name far ptr + 'A'×8 name + the score. */
+            highscore_entry_ptr[0] = highscore_new_name_off;
+            highscore_entry_ptr[1] = highscore_new_name_seg;
+            name = (u8 __far *)MK_FP(highscore_entry_ptr[1], highscore_entry_ptr[0]);
+            for (shift_idx = 0; shift_idx < 8; shift_idx = shift_idx + 1) {
+                name[shift_idx] = 0x41;
+            }
+            highscore_entry_ptr[2] = score_lo;
+            highscore_entry_ptr[3] = score_hi;
+        }
+        /* draw the 8 name glyphs for this row. */
+        ((u16 __far *)p1_sprite)[1] = (u16)row_idx * 0x10 + 0x41;
+        name = (u8 __far *)MK_FP(highscore_entry_ptr[1], highscore_entry_ptr[0]);
+        for (char_col = 0; char_col < 8; char_col = char_col + 1) {
+            p = (u16 __far *)p1_sprite;
+            name_char = name[char_col];
+            if (name_char == 0x2e) {
+                if ((qualified == '\0') || (insert_row != row_idx)) {
+                    name_char = 0x20;
+                } else {
+                    name_char = 0x5b;
+                }
+            }
+            p[2] = (u16)name_char + 0x175;
+            *p = (u16)char_col << 4;
+            if (name_char != 0x20) {
+                anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
+            }
+        }
+        /* draw the row's score via the digit-sprite formatter (T3). */
+        draw_number_sprites(highscore_entry_ptr[2], highscore_entry_ptr[3],
+                            '\a', 0xb0, (u16)row_idx * 0x10 + 0x41);
+    }
+    if (qualified == '\0') {
+        wait_keypress();
+    } else {
+        highscore_enter_name(insert_row);
+    }
+    fun_9410_set_sprite_table(1);
+    return;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  show_highscore_screen — 1000:5681
+ *  Load + vec_decode the high-score background resource (resource 3), optionally patch
+ *  the palette (palette_mode==1), iris-wipe in, build the 20×25 bg view, present, upload
+ *  the DAC, then render the highscore table (render_highscore_table).  Disasm 5681.
+ * ════════════════════════════════════════════════════════════════════════════ */
+void show_highscore_screen(void)
+{
+    int res_handle;
+    u32 decoded_len;
+    u8 __far *d;
+
+    set_resource_table(0x928, SCREENS_DGROUP_RUNTIME_SEG);
+    fullscreen_img_buf   = fullscreen_buf;
+    highscore_bg_buf_seg = fullscreen_buf_seg;
+    res_handle = open_resource(3, 4);
+    decoded_len = read_chunked(res_handle, fullscreen_img_buf, highscore_bg_buf_seg,
+                               0x094c, 0x094e);
+    c_close(res_handle);
+    vec_decode(fullscreen_img_buf, highscore_bg_buf_seg, decoded_len, 0x7d63, 0);
+    if (palette_mode == 1) {
+        patch_image_palette(dgroup_pal_patch_71e);
+    }
+    play_iris_wipe_transition();
+    d = render_descriptor_ptr;
+    *(u16 __far *)(d + 0x02) = fullscreen_img_buf + 99;
+    *(u16 __far *)(d + 0x04) = highscore_bg_buf_seg;
+    *(u16 __far *)(d + 0x06) = 0;
+    *(u16 __far *)(d + 0x08) = 0;
+    *(u16 __far *)(d + 0x0a) = 0x14;
+    *(u16 __far *)(d + 0x0c) = 0x19;
+    *(u16 __far *)(d + 0x0e) = 1;
+    *(u16 __far *)(d + 0x14) = 0;
+    *(u16 __far *)(d + 0x16) = 0;
+    *(u16 __far *)(d + 0x1c) = 0;
+    *(u16 __far *)(d + 0x1e) = 0x14;
+    *(u16 __far *)(d + 0x20) = 0x19;
+    restore_bg_view(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
+    fun_7b93_present_blank(fullscreen_buf, fullscreen_buf_seg, 0);
+    fun_7bca_flip(0);
+    present_frame(1);
+    upload_vga_dac_palette();
+    d = render_descriptor_ptr;
+    *(u16 __far *)(d + 0x0e) = 0;
+    *(u16 __far *)(d + 0x1e) = 1;
+    *(u16 __far *)(d + 0x20) = 2;
+    render_highscore_table();
+    return;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  enter_highscore_name — 1000:5c87
+ *  The interactive 6-char menu-select name-entry state machine.  fmemcpy a 6-char
+ *  SS-local buffer from DGROUP 0x256a (reconstructed as the module-static
+ *  enter_name_buf), seeds it to 'A', then loops polling FUN_75a2 (same letter-cycle /
+ *  cursor-move bits as highscore_enter_name, cursor max 5 here).  On 0x10=done it
+ *  compares the 6-char buffer against the 8-entry name table at DGROUP 0x135c and
+ *  returns the matched index + 2 (or 0).  Args: param_1=col (x), param_2=row (y).
+ *  Disasm 5c87 / 5fdb call layout.
+ * ════════════════════════════════════════════════════════════════════════════ */
+u8 enter_name_buf[6];   /* SS-local in the original; module-static here (RECON FIDELITY) */
+
+u8 enter_highscore_name(u8 col, u8 row)
+{
+    u16 cur_letter;
+    u8  blink_counter;
+    u8  matched_idx;
+    u8  cursor_pos;
+    u8  idx;
+    u8  input_flags;
+    u8 __far *name_buf;
+    char mismatch;
+
+    /* fmemcpy(0x203b:0x256a -> enter_name_buf, 4 words); reconstructed as the local copy.
+       cur_letter (BP-0x14) is the persistent letter/glyph-frame accumulator, init 0x1b6;
+       the cursor draws are void statements (the engine discards their AX). */
+    name_buf = (u8 __far *)enter_name_buf;
+    *(u16 __far *)(render_descriptor_ptr + 0x0e) = 0;
+    *(u16 __far *)(render_descriptor_ptr + 0x1c) = 0;
+    *(u16 __far *)(render_descriptor_ptr + 0x1e) = 1;
+    *(u16 __far *)(render_descriptor_ptr + 0x20) = 2;
+    blink_counter = 0;
+    cursor_pos = 0;
+    for (idx = 0; idx < 6; idx = idx + 1) {
+        name_buf[idx] = 0x41;
+    }
+    name_buf[0] = 0x41;
+    cur_letter = 0x1b6;
+    *(u16 __far *)(render_descriptor_ptr + 0x14) = (u16)row;
+    *(u16 __far *)(render_descriptor_ptr + 0x16) = (u16)col << 1;
+    draw_name_entry_cursor((u8)(col << 4), row, cur_letter, 1);
+    while (1) {
+        input_flags = (u8)fun_75a2_poll_action(0);
+        if ((input_flags & 0x10) == 0x10) {
+            break;
+        }
+        if (((input_flags & 1) == 0) || ((int)cur_letter < 0x1ad)) {
+            if (((input_flags & 2) == 0) || (0x1cf < (int)cur_letter)) {
+                if (((input_flags & 4) == 0) || (cursor_pos == 0)) {
+                    if (((input_flags & 8) == 0) || (4 < cursor_pos)) {
+                        blink_counter = blink_counter + 1;
+                        if ((blink_counter & 8) == 0) {
+                            anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
+                        } else {
+                            fun_7b4a_view_blit(render_descriptor_ptr,
+                                               SCREENS_DGROUP_RUNTIME_SEG);
+                        }
+                        run_n_frames(1);
+                    } else {                                  /* 8 = next char */
+                        if (cur_letter == 0x1d0) {
+                            cur_letter = 0x1a3;
+                        }
+                        cur_letter = cur_letter - 0x175;
+                        name_buf[cursor_pos] = (u8)cur_letter;
+                        cursor_pos = cursor_pos + 1;
+                        row = row + 1;
+                        cur_letter = (u16)name_buf[cursor_pos];
+                        if (cur_letter == 0x2e) {
+                            cur_letter = 0x5b;
+                        }
+                        cur_letter = cur_letter + 0x175;
+                        anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
+                        draw_name_entry_cursor((u8)(col << 4), row, cur_letter, 0);
+                    }
+                } else {                                      /* 4 = prev char */
+                    if (cur_letter == 0x1d0) {
+                        cur_letter = 0x1a3;
+                    }
+                    cur_letter = cur_letter - 0x175;
+                    name_buf[cursor_pos] = (u8)cur_letter;
+                    cursor_pos = cursor_pos - 1;
+                    row = row - 1;
+                    cur_letter = (u16)name_buf[cursor_pos];
+                    if (cur_letter == 0x2e) {
+                        cur_letter = 0x5b;
+                    }
+                    cur_letter = cur_letter + 0x175;
+                    anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
+                    draw_name_entry_cursor((u8)(col << 4), row, cur_letter, 0);
+                }
+            } else {                                          /* 2 = right (next letter) */
+                cur_letter = cur_letter + 1;
+                if (cur_letter == 0x1d0) {
+                    cur_letter = 0x1a3;
+                }
+                cur_letter = cur_letter - 0x175;
+                name_buf[cursor_pos] = (u8)cur_letter;
+                if (cur_letter == 0x2e) {
+                    cur_letter = 0x5b;
+                }
+                cur_letter = cur_letter + 0x175;
+                draw_name_entry_cursor((u8)(col << 4), row, cur_letter, 1);
+            }
+        } else {                                              /* 1 = left (prev letter) */
+            cur_letter = cur_letter - 1;
+            if (cur_letter == 0x1d0) {
+                cur_letter = 0x1a3;
+            }
+            cur_letter = cur_letter - 0x175;
+            name_buf[cursor_pos] = (u8)cur_letter;
+            if (cur_letter == 0x2e) {
+                cur_letter = 0x5b;
+            }
+            cur_letter = cur_letter + 0x175;
+            draw_name_entry_cursor((u8)(col << 4), row, cur_letter, 1);
+        }
+    }
+    anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
+    /* compare the 6-char buffer against the 8-entry name table at 0x135c. */
+    matched_idx = 0;
+    idx = 0;
+    while ((idx < 8) && (matched_idx == 0)) {
+        u8 __far *tbl = (u8 __far *)MK_FP(highscore_name_table[(u16)idx * 2 + 1],
+                                          highscore_name_table[(u16)idx * 2]);
+        mismatch = 0;
+        cursor_pos = 0;
+        while ((cursor_pos < 6) && (!mismatch)) {
+            if (name_buf[cursor_pos] != (char)tbl[cursor_pos]) {
+                mismatch = 1;
+            }
+            cursor_pos = cursor_pos + 1;
+        }
+        if (!mismatch) {
+            matched_idx = idx + 2;
+        }
+        idx = idx + 1;
+    }
+    return matched_idx;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  show_level_intro_screen — 1000:0d9d
+ *  Load + display the fullscreen image (resource 3), set the palette, render a name
+ *  string (SS-local fmemcpy'd) + the current_level name (DGROUP table 0x1354) as sprite
+ *  glyphs, then wait until input bit 0x10 (via FUN_75a2).  Disasm 0d9d.
+ *
+ *  RECONSTRUCTION FIDELITY: the row-1 name string + the per-level name table are engine
+ *  DGROUP data (fmemcpy'd into SS-locals / read from 0x1354); reconstructed as module
+ *  data the harness seeds.  The glyph blits write the p1_sprite descriptor (the gated
+ *  DESCRIPTOR-LEVEL output); the BGI overlay glyph pixels are the stubbed blit_sprite's.
+ * ════════════════════════════════════════════════════════════════════════════ */
+u8  intro_name_row[0xd];        /* row-1 name string (fmemcpy'd from DGROUP)            */
+u16 level_name_table[16 * 2];   /* DGROUP 0x1354 (per-level name far ptrs, stride 4)    */
+
+void show_level_intro_screen(void)
+{
+    int res_handle;
+    u8  glyph_ch;
+    u8  char_idx;
+    u8  col_pos;
+    u16 __far *p;
+    u8 __far *level_name;
+
+    set_resource_table(0x928, SCREENS_DGROUP_RUNTIME_SEG);
+    fun_9410_set_sprite_table(0);
+    fullscreen_img_buf   = fullscreen_buf;
+    highscore_bg_buf_seg = fullscreen_buf_seg;
+    res_handle = open_resource(3, 4);
+    read_chunked(res_handle, fullscreen_img_buf, highscore_bg_buf_seg, 99, 0);
+    c_close(res_handle);
+    if (palette_mode == 1) {
+        patch_image_palette(dgroup_pal_patch_71e);
+    }
+    play_iris_wipe_transition();
+    fun_7b93_present_blank(fullscreen_img_buf, highscore_bg_buf_seg, 0);
+    fun_7bca_flip(0);
+    upload_vga_dac_palette();
+    /* row 1 (13 glyphs) at y=0x50, starting col 4. */
+    col_pos = 4;
+    ((u16 __far *)p1_sprite)[1] = 0x50;
+    for (char_idx = 0; char_idx < 0xd; char_idx = char_idx + 1) {
+        p = (u16 __far *)p1_sprite;
+        glyph_ch = intro_name_row[char_idx];
+        p[2] = (u16)glyph_ch + 0x175;
+        *p = (u16)col_pos << 4;
+        if (glyph_ch != 0x20) {
+            anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
+        }
+        col_pos = col_pos + 1;
+    }
+    /* row 2 — the current_level name (6 glyphs) at y=0x70, starting col 7. */
+    col_pos = 7;
+    level_name = (u8 __far *)MK_FP(level_name_table[(u16)current_level * 2 + 1],
+                                   level_name_table[(u16)current_level * 2]);
+    ((u16 __far *)p1_sprite)[1] = 0x70;
+    for (char_idx = 0; char_idx < 6; char_idx = char_idx + 1) {
+        p = (u16 __far *)p1_sprite;
+        p[2] = (u16)level_name[char_idx] + 0x175;
+        *p = (u16)col_pos << 4;
+        anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
+        col_pos = col_pos + 1;
+    }
+    do {
+        glyph_ch = (u8)fun_75a2_poll_action(0);
+    } while ((glyph_ch & 0x10) == 0);
+    fun_9410_set_sprite_table(0);
+    set_resource_table(0x90, SCREENS_DGROUP_RUNTIME_SEG);
+    return;
+}
+
+/* the per-level border-image length table + palette table level_intro_screen reads
+ *  (DGROUP 0x974 length, 0x6e6 palette ptr — both indexed by current_level).  Owned
+ *  here; harness-seeded.  Under the boot palette_mode==2 the palette path is skipped. */
+u16 level_img_len_table[16 * 5];    /* DGROUP 0x974 (stride 10 = 5 words/level)         */
+u16 level_palette_ptr_table[16 * 2];/* DGROUP 0x6e6 (stride 4 = far ptr/level)          */
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  level_intro_screen — 1000:3852
+ *  The per-level intro screen + interactive move loop.  Loads + vec_decodes the level's
+ *  border image (resource current_level+7), installs the level palette (palette_mode==1),
+ *  iris-wipes in, draws the score HUD (draw_number — T3) + Bumpy at his start position,
+ *  then runs an input-wait loop: directions step Bumpy (p1_move_step_*), fire (0x10) ->
+ *  intro_start_level (begins the level), a quit key -> game_state=0xff.  Disasm 3852.
+ *  The gameplay/render leaves are STUBBED (separate subsystem); the validated output is
+ *  the screen-global SCRSNAP (timing saved/restored, input cleared, game_state, palette).
+ * ════════════════════════════════════════════════════════════════════════════ */
+void level_intro_screen(void)
+{
+    u8  quit_key;
+    int file_handle;
+    u32 bytes_read;
+    u8  palette_idx;
+    char done_flag;
+    u8 __far *d;
+    u8 __far *img;
+    u8 __far *pal;
+
+    done_flag = '\0';
+    saved_timing_flag = timing_flag_accumulator;
+    timing_flag_accumulator = 0;
+    input_state = 0;
+    set_resource_table(0x928, SCREENS_DGROUP_RUNTIME_SEG);
+    file_handle = open_resource(current_level + 7, 4);
+    bytes_read = read_chunked(file_handle, fullscreen_buf, fullscreen_buf_seg,
+                              level_img_len_table[(u16)current_level * 5],
+                              level_img_len_table[(u16)current_level * 5 + 1]);
+    c_close(file_handle);
+    vec_decode(fullscreen_buf, fullscreen_buf_seg, bytes_read, 0x7d63, 0);
+    if (palette_mode == 1) {
+        img = (u8 __far *)MK_FP(fullscreen_buf_seg, fullscreen_buf);
+        pal = (u8 __far *)MK_FP(level_palette_ptr_table[(u16)current_level * 2 + 1],
+                                level_palette_ptr_table[(u16)current_level * 2]);
+        for (palette_idx = 0; palette_idx < 0x10; palette_idx = palette_idx + 1) {
+            img[(u16)palette_idx + 0x23] = pal[palette_idx];
+        }
+    }
+    play_iris_wipe_transition();
+    d = render_descriptor_ptr;
+    *(u16 __far *)(d + 0x02) = fullscreen_buf + 99;
+    *(u16 __far *)(d + 0x04) = fullscreen_buf_seg;
+    *(u16 __far *)(d + 0x06) = 0;
+    *(u16 __far *)(d + 0x08) = 0;
+    *(u16 __far *)(d + 0x0a) = 0x14;
+    *(u16 __far *)(d + 0x0c) = 0x19;
+    *(u16 __far *)(d + 0x0e) = 1;
+    *(u16 __far *)(d + 0x14) = 0;
+    *(u16 __far *)(d + 0x16) = 0;
+    *(u16 __far *)(d + 0x1c) = 0;
+    *(u16 __far *)(d + 0x1e) = 0x14;
+    *(u16 __far *)(d + 0x20) = 0x19;
+    restore_bg_view(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
+    draw_number(score_lo, score_hi, '\a', 1, 8);
+    draw_icon_row();
+    play_anim_sequence();
+    current_entity_index = saved_entity_index;
+    fun_7b93_present_blank(fullscreen_buf, fullscreen_buf_seg, 0);
+    p1_pixel_x = p1_start_x;
+    p1_pixel_y = p1_start_y;
+    p1_move_anim = 0x21;
+    init_fullscreen_view_desc(1, 0);
+    draw_p1_sprite();
+    fun_7bca_flip(0);
+    present_frame(1);
+    upload_vga_dac_palette();
+    p1_update_grid_cell();
+    p1_advance_grid_history();
+    render_p1_view();
+    p1_advance_grid_history();
+    compute_move_descriptor_ptr();
+    while (done_flag == '\0') {
+        poll_input();
+        if ((input_state & 1) == 0) {
+            if ((input_state & 2) == 0) {
+                if ((input_state & 4) == 0) {
+                    if ((input_state & 8) == 0) {
+                        if ((input_state & 0x10) == 0) {
+                            quit_key = get_key_state(1);
+                            if (quit_key != '\0') {
+                                done_flag = -1;
+                                frame_abort_flag = 0xff;   /* DAT_203b_928d = 0xff */
+                            }
+                        } else {
+                            done_flag = (char)intro_start_level();
+                        }
+                    } else {
+                        p1_move_step_right();
+                    }
+                } else {
+                    p1_move_step_left();
+                }
+            } else {
+                p1_move_step_down();
+            }
+        } else {
+            p1_move_step_up();
+        }
+        input_state = 0;
+    }
+    timing_flag_accumulator = saved_timing_flag;
     return;
 }

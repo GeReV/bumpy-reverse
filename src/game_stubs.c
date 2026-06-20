@@ -275,11 +275,11 @@ void init_sprite_structs(void)   {}
    screens.c menu / state-machine loops call it through this symbol. */
 char fun_75a2_poll_action(u8 arg)    { (void)arg; return 0; }
 
-void show_highscore_screen(void)     {}   /* T5 (highscore) */
+/* show_highscore_screen (1000:5681), show_level_intro_screen (1000:0d9d),
+   level_intro_screen (1000:3852) — RECONSTRUCTED 1:1 in screens.c (Phase-7 T5); their
+   stubs are removed here (would be duplicate symbols once screens.obj links). */
 void show_text_screen(void)          {}
 void show_pause_screen(void)         {}
-void show_level_intro_screen(void)   {}   /* T5 (level intro) */
-void level_intro_screen(void)        {}   /* T5 (level intro) */
 
 /* p2_set_move_state (1000:4bc6) — RECONSTRUCTED in player2.c (Phase-4 T3); stub
    removed (would be a duplicate symbol once player2.obj links). */
