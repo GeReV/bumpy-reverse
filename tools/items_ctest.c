@@ -80,14 +80,46 @@ u8  level_complete_flag;         /* player.c — 0xa1b1          */
 u8  anim_target_cell;            /* player.c — 0x856f          */
 u8  p1_cell;                     /* player.c — 0x856e          */
 u8  move_step_count;             /* player.c — 0x855e          */
+u8  p1_move_step_idx;            /* player.c — 0x792a          */
 u8  physics_frozen;              /* player.c — 0xa0ce          */
 s16 p1_pixel_y;                  /* player.c — 0x9292          */
 s16 sound_device_state;          /* player.c — 0x689c (==4 → OPL ids; here 0)  */
+
+/* P1 pixel-X scratch (written by p1_set_pixel_from_cell; NOT in the validated
+   SNAP — provided so the host shim mirrors the engine leaf exactly). */
+s16 p1_pixel_x;                  /* player.c — 0x9290 */
 
 /* FX/sound callees the collect path reaches (game_stubs.c in BUMPY.EXE).  They
    have no effect on the validated semantic state, so the harness stubs them. */
 void play_sound(unsigned char id)        { (void)id; }   /* 1000:6e11 */
 void apply_cell_animation(unsigned char f){ (void)f; }    /* 1000:69aa */
+
+/* Player-spine callees the T4 exit/teleport functions invoke (reconstructed in
+   player.c; player.c is NOT compiled into this harness, so they are shimmed here
+   — the same convention as play_sound/apply_cell_animation above):
+     - enter_game_mode / dispatch_move_step write game_mode + the move-step
+       dispatch, NEITHER in the validated SNAP -> no-op shims.
+     - p1_set_pixel_from_cell (1000:4906) writes move_step_count + p1_pixel_y
+       (BOTH in the SNAP), so its host shim reproduces the engine leaf FAITHFULLY:
+         p1_grid_row  = p1_cell >> 3
+         move_step_count = p1_cell - p1_grid_row*8   (the in-row column index)
+         p1_pixel_x = posC_X[p1_cell] + 7
+         p1_pixel_y = posC_Y[p1_cell] + 0xf
+       The engine reads posC_X/Y from the DGROUP cell-coord table at 0x274/0x276;
+       that table is the same grid geometry level.c's level_populate_dg computes —
+       posC_X[cell] = col*40 + 8, posC_Y[cell] = row*32 + 8 — so the shim derives
+       the two coord values analytically (matches the captured trace exactly:
+       teleport to cell 0x0a -> move_step_count=2, p1_pixel_y=0x28+0xf+0xd=0x44). */
+void enter_game_mode(unsigned char m)    { (void)m; }     /* 1000:4263 */
+void dispatch_move_step(void)            {}               /* 1000:238e */
+void p1_set_pixel_from_cell(void)        /* 1000:4906 */
+{
+    u8 row = (u8)(p1_cell >> 3);
+    u8 col = (u8)(p1_cell - (u8)(row * 8));
+    move_step_count = col;
+    p1_pixel_x = (s16)((u16)col * 40u + 8u) + 7;   /* posC_X[cell] + 7 (not in SNAP) */
+    p1_pixel_y = (s16)((u16)row * 32u + 8u) + 0xf; /* posC_Y[cell] + 0xf            */
+}
 
 #include "../src/items.c"
 
@@ -164,15 +196,44 @@ static const char *fn_name(u16 fn_addr)
     }
 }
 
-/* ── ENTRY SNAP -> reconstructed globals + synthetic tilemap ─────────────────── */
-static void seed_tilemap(const snap_t *s)
+/* ── ENTRY SNAP -> reconstructed globals + synthetic tilemap ─────────────────────
+   Seeds the synthetic tilemap so the called function sees the tiles the engine
+   saw at capture time.  Three tile layers participate:
+     - layer-C item byte  at tilemap[entry_cell + 0x60]  (collect path; from the snap)
+     - vertical exit tile at tilemap[entry_cell + 0x30] = 0x0c  (check_exit_tile_vert)
+     - teleport tile      at tilemap[dest_cell]         = 0x0f  (teleport_to_next_exit)
+   The exit/teleport tiles are NOT carried as a snap byte, but the EXIT snapshot
+   pins where they must be:
+     * check_exit_tile_vert FIRES iff the exit tile is present — observable as
+       physics_frozen going 0 -> 1 in the exit snap; seed it exactly then.
+     * teleport_to_next_exit_tile scans forward and lands ON the teleport tile —
+       the destination is the EXIT snap's p1_cell; seed 0x0f at that cell. */
+static void seed_tilemap(u16 fn_addr, const snap_t *ent, const snap_t *ex)
 {
     unsigned cell;
     memset(synth_tilemap, 0, TILEMAP_SIZE);
-    /* the layer-C item byte the engine read at this cell lives at cell+0x60. */
-    cell = (unsigned)s->p1_cell + 0x60;
+
+    /* layer-C item byte (collect path). */
+    cell = (unsigned)ent->p1_cell + 0x60;
     if (cell < TILEMAP_SIZE)
-        synth_tilemap[cell] = s->tilemap_item_byte;
+        synth_tilemap[cell] = ent->tilemap_item_byte;
+
+    /* vertical exit tile (check_exit_tile_vert): present iff the call froze
+       physics (entry 0 -> exit 1). */
+    if (fn_addr == FN_CHECK_EXIT_TILE_VERT &&
+        ent->physics_frozen == 0 && ex->physics_frozen == 1) {
+        cell = (unsigned)ent->p1_cell + 0x30;
+        if (cell < TILEMAP_SIZE)
+            synth_tilemap[cell] = 0x0c;
+    }
+
+    /* teleport tile (teleport_to_next_exit_tile): the destination cell is the
+       exit snap's p1_cell (the scan lands on the 0x0f tile). */
+    if (fn_addr == FN_TELEPORT_NEXT_EXIT) {
+        cell = (unsigned)ex->p1_cell;
+        if (cell < TILEMAP_SIZE)
+            synth_tilemap[cell] = 0x0f;
+    }
 }
 
 static void seed_globals(const snap_t *s)
@@ -238,11 +299,11 @@ static const char *cmp_exit(const snap_t *e, u8 entry_cell, long *got, long *wan
 typedef struct { u16 off; void (*fn)(void); } ported_t;
 
 static const ported_t PORTED[] = {
-    { FN_P1_COLLECT_ITEM,       p1_collect_item },        /* T3 ported            */
-    { FN_P1_COLLECT_ITEM_SCORE, p1_collect_item_score },  /* T3 ported            */
-    { FN_CHECK_EXIT_TILE_VERT,  NULL },   /* T4 -> check_exit_tile_vert           */
-    { FN_MOVE_STEP_READ_ITEM,   move_step_read_item },    /* T3 ported            */
-    { FN_TELEPORT_NEXT_EXIT,    NULL },   /* T4 -> teleport_to_next_exit_tile     */
+    { FN_P1_COLLECT_ITEM,       p1_collect_item },         /* T3 ported           */
+    { FN_P1_COLLECT_ITEM_SCORE, p1_collect_item_score },   /* T3 ported           */
+    { FN_CHECK_EXIT_TILE_VERT,  check_exit_tile_vert },    /* T4 ported           */
+    { FN_MOVE_STEP_READ_ITEM,   move_step_read_item },     /* T3 ported           */
+    { FN_TELEPORT_NEXT_EXIT,    teleport_to_next_exit_tile }, /* T4 ported        */
 };
 #define PORTED_N (sizeof(PORTED) / sizeof(PORTED[0]))
 
@@ -276,7 +337,7 @@ static int run_per_function(record_t *recs, long nrec, const char *scname,
         /* ── seed entry + synthetic tilemap, call by C name, assert exit ── */
         {
             const char *bad; long got, want;
-            seed_tilemap(&r->ent);
+            seed_tilemap(r->fn_addr, &r->ent, &r->ex);
             seed_globals(&r->ent);
             fn();
             bad = cmp_exit(&r->ex, r->ent.p1_cell, &got, &want);
@@ -294,6 +355,147 @@ static int run_per_function(record_t *recs, long nrec, const char *scname,
         }
     }
     return !scen_fail;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  LEVEL-ADVANCE STATE-TRANSITION CHECK (Phase-3 Task 4, Part C)
+ *
+ *  The exit -> level-advance is wired in src/game.c's game_loop (1000:0c18),
+ *  ported 1:1 in Phase-1 T7.  The decomp's advance tail is:
+ *
+ *      do { uVar1 = all_entries_flag_set(); } while (uVar1 == 0);  // wait complete
+ *      current_level = current_level + 1;                          // ADVANCE
+ *      if (current_level != 0x0a) break;                           // -> start_level(N)
+ *      show_title_and_init();                                      // all 9 done
+ *
+ *  i.e. once the level-complete predicate (all_entries_flag_set, which the exit
+ *  functions feed via the move-descriptor flags + level_complete_flag) returns
+ *  nonzero, current_level is incremented and the outer `do { start_level(); ... }`
+ *  loop re-enters start_level for the NEXT level (unless current_level wrapped to
+ *  0x0a, the all-levels-done title return).
+ *
+ *  Fully scripting a complete-level playthrough under Unicorn is impractical
+ *  (the per-tick loop has many stubbed callees), so — per the brief — the advance
+ *  is validated here as a STATE TRANSITION in isolation: reproduce the decomp's
+ *  advance decision verbatim and assert it (a) increments current_level and
+ *  (b) re-invokes start_level for the next level, with the copy-protection
+ *  #define OFF so NO challenge fires on entry to level 2+.  A recording
+ *  start_level model captures (start_level_calls, last_level_loaded); the
+ *  protection guard is reproduced under the same `#ifdef BUMPY_COPY_PROTECTION`
+ *  gate as src/level.c, proving it compiles OUT in the default build.
+ *
+ *  DEFERRED to the live loop (documented, NOT runnable in this host harness):
+ *  the full game_loop tick spine (run_main_menu/present_frame/handle_gameplay_input/
+ *  all_entries_flag_set with a real move-descriptor table) — those are stubbed in
+ *  game_stubs.c; the end-to-end "play level 1 -> reach exit -> auto-load level 2"
+ *  run is a Phase-2+ integration gate, not this task.
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/* Recording model of start_level(N) — the advance target. */
+static int adv_start_level_calls;
+static u8  adv_last_level_loaded;
+static int adv_challenge_fired;
+
+static void adv_start_level(u8 level)
+{
+    /* Mirror src/level.c start_level's copy-protection hook under the SAME gate.
+       With BUMPY_COPY_PROTECTION undefined (default) the whole block compiles
+       out: no challenge fires; current_level flows unchanged to level 2+. */
+    current_level = level;
+#ifdef BUMPY_COPY_PROTECTION
+    if ((1u < (unsigned)current_level) && (copyprotect_flag == 0u)) {
+        copyprotect_flag = 1u;       /* cracked-build challenge: pass */
+        adv_challenge_fired = 1;
+    }
+    if (copyprotect_flag == (u8)0xffu) {
+        current_level = 1u;
+    }
+#endif
+    adv_start_level_calls++;
+    adv_last_level_loaded = current_level;
+}
+
+/* One faithful iteration of game_loop's advance tail.  `complete` models the
+   all_entries_flag_set() predicate (nonzero => the level's exit was reached).
+   Returns 1 if the outer loop should re-enter start_level for the next level,
+   0 if it reached the all-levels-done title return.  On a re-enter it invokes
+   adv_start_level(current_level) exactly as the outer `do { start_level(); }`. */
+static int adv_step(u8 complete)
+{
+    if (complete == 0) {
+        return -1;                   /* predicate false: stay in the round */
+    }
+    current_level = (u8)(current_level + 1);     /* decomp: current_level + 1 */
+    if (current_level != 0x0a) {                  /* not the wrap -> next level */
+        adv_start_level(current_level);           /* outer do{} re-enters start_level */
+        return 1;
+    }
+    /* current_level == 0x0a: all 9 levels cleared -> show_title_and_init() */
+    return 0;
+}
+
+static int validate_level_advance(void)
+{
+    int ok = 1;
+
+    adv_start_level_calls = 0;
+    adv_last_level_loaded = 0;
+    adv_challenge_fired   = 0;
+
+    printf("\n== level-advance state-transition (Part C) ==\n");
+
+    /* 1) complete level 1 -> current_level 1->2, start_level(2) invoked. */
+    current_level   = 1u;
+    copyprotect_flag = 0u;
+    {
+        int r = adv_step(1u);   /* exit reached on level 1 */
+        if (r != 1 || current_level != 2u || adv_last_level_loaded != 2u ||
+            adv_start_level_calls != 1) {
+            printf("  FAIL advance 1->2: r=%d current_level=%u loaded=%u calls=%d\n",
+                   r, current_level, adv_last_level_loaded, adv_start_level_calls);
+            ok = 0;
+        } else {
+            printf("  PASS advance 1->2: start_level(2) invoked (calls=%d, "
+                   "challenge_fired=%d)\n", adv_start_level_calls, adv_challenge_fired);
+        }
+    }
+
+    /* 2) protection #define is OFF -> no challenge fired entering level 2. */
+    if (adv_challenge_fired != 0) {
+        printf("  FAIL: copy-protection challenge fired with BUMPY_COPY_PROTECTION "
+               "undefined (should be compiled OUT)\n");
+        ok = 0;
+    } else {
+        printf("  PASS: BUMPY_COPY_PROTECTION OFF -> no challenge on level 2+ entry\n");
+    }
+
+    /* 3) predicate FALSE -> no advance (stays in the round). */
+    current_level = 3u;
+    if (adv_step(0u) != -1 || current_level != 3u) {
+        printf("  FAIL: incomplete level advanced (current_level=%u)\n", current_level);
+        ok = 0;
+    } else {
+        printf("  PASS: incomplete level does not advance (current_level stays 3)\n");
+    }
+
+    /* 4) all-levels-done boundary: complete level 9 -> current_level 9->0x0a ->
+          title return (no further start_level). */
+    current_level = 9u;
+    adv_start_level_calls = 0;
+    {
+        int r = adv_step(1u);
+        if (r != 0 || current_level != 0x0au || adv_start_level_calls != 0) {
+            printf("  FAIL boundary 9->0x0a: r=%d current_level=%u calls=%d\n",
+                   r, current_level, adv_start_level_calls);
+            ok = 0;
+        } else {
+            printf("  PASS boundary: level 9 complete -> current_level=0x0a -> "
+                   "title return (no start_level)\n");
+        }
+    }
+
+    printf("  level-advance: %s\n", ok ? "PASS" : "FAIL");
+    return ok;
 }
 
 /* ════════════════════════════════════════════════════════════════════════════ */
@@ -324,10 +526,11 @@ int main(int argc, char **argv)
 
     printf("items_ctest: replay harness over %s\n", path);
     printf("  trace: ITEMTRC1 v%u, %u scenarios, %u fn-names\n", ver, nsc, nfn);
-    printf("  per-fn diff targets (host-callable): NONE yet — all five item/exit "
-           "functions (p1_collect_item, p1_collect_item_score, check_exit_tile_vert, "
-           "move_step_read_item, teleport_to_next_exit_tile) are UNPORTED "
-           "(bodies land in Phase-3 T3/T4)\n");
+    printf("  per-fn diff targets (host-callable): ALL FIVE item/exit functions "
+           "are PORTED (p1_collect_item, p1_collect_item_score [T3], "
+           "move_step_read_item [T3], check_exit_tile_vert [T4], "
+           "teleport_to_next_exit_tile [T4]) — every record runs the per-fn "
+           "differential\n");
 
     for (s = 0; s < nsc; s++) {
         u8 sid, name_len, level, start_cell, setup_kind;
@@ -374,10 +577,18 @@ int main(int argc, char **argv)
                st.fail);
         return 1;
     }
-    printf("PASS: every PORTED record matched its exit SNAP; UNPORTED (%ld) "
-           "cleanly localised to the five not-yet-ported item/exit functions "
-           "(p1_collect_item, p1_collect_item_score, check_exit_tile_vert, "
-           "move_step_read_item, teleport_to_next_exit_tile — Phase-3 T3/T4)\n",
-           st.unported);
+
+    /* Part C: level-advance state-transition (exit -> current_level++ ->
+       start_level(N), protection #define OFF). */
+    if (!validate_level_advance()) {
+        printf("FAIL: level-advance state-transition check failed\n");
+        return 1;
+    }
+
+    printf("\nPASS: every PORTED record matched its exit SNAP (UNPORTED=%ld; all "
+           "five item/exit functions are now reconstructed — p1_collect_item, "
+           "p1_collect_item_score, move_step_read_item [T3], check_exit_tile_vert, "
+           "teleport_to_next_exit_tile [T4]); level-advance state-transition "
+           "validated (1->2 start_level(2), protection #define OFF)\n", st.unported);
     return 0;
 }

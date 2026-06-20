@@ -101,9 +101,14 @@ extern u8 current_entity_index; /* DGROUP:? — next entity slot index       */
    directory.  Then renders bg + entity layers and calls video_blit_planar. */
 void start_level(u8 world, u8 level);
 
-/* Stub for the copy-protection interactive challenge (1000:4015).
-   In the original, this displays a sprite quiz (levels > 1 only when the flag
-   is 0).  Level-1 boot path never reaches this call. */
-void copyprotect_challenge_stub(void);
+/* Copy-protection interactive challenge (1000:4015), gated by the compile-time
+   #ifdef BUMPY_COPY_PROTECTION (NOT defined in the default build).  In the
+   original, start_level calls this (levels > 1 only, when copyprotect_flag == 0)
+   to display a sprite-identification quiz; the shipped cracked build defeats it
+   (copyprotect_flag = 1 unconditional).  With the macro OFF the whole hook —
+   declaration and call — compiles out.  Faithful un-cracked body → Phase 7b. */
+#ifdef BUMPY_COPY_PROTECTION
+void copyprotect_challenge(void);
+#endif
 
 #endif /* LEVEL_H_INCLUDED */

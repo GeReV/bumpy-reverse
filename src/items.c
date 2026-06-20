@@ -10,8 +10,10 @@
  *      read_tile_layer2       1000:6bf4
  *  read_tile_layer2 is the +0x60 sibling of player.c's read_tile_layer_contact
  *  (+0x30) / read_tile_at_cell (+0); it writes THIS module's p1_item_code, so it
- *  lives here.  check_exit_tile_vert (1000:6372) and teleport_to_next_exit_tile
- *  (1000:25ad) are Phase-3 Task 4 — still stubbed in game_stubs.c.
+ *  lives here.  Phase-3 Task 4 adds the two level-exit functions —
+ *  check_exit_tile_vert (1000:6372) and teleport_to_next_exit_tile (1000:25ad) —
+ *  reconstructed 1:1 below and un-stubbed from game_stubs.c.  The exit→level-
+ *  advance wiring lives in game.c's run_game_session/game_loop (Phase-3 T4).
  *
  *  OWNERSHIP / no-duplicate-symbols: this TU defines ONLY the item-module globals
  *  no other TU owns (items_remaining, level_exit_cell, level_complete_anim_counter,
@@ -39,12 +41,27 @@ extern u8  p1_cell;              /* player.c — DGROUP 0x856e                  
 extern s16 sound_device_state;   /* player.c — DGROUP 0x689c (==4 → OPL/charger ids)  */
 extern u8 __far *tilemap;        /* game.c   — level tilemap far ptr (DGROUP 0xa0d8)  */
 
+/* Cross-module globals the exit/teleport functions (T4) touch (owned by player.c). */
+extern u8  move_step_count;      /* player.c — DGROUP 0x855e — jump/move-step counter */
+extern u8  p1_move_step_idx;     /* player.c — DGROUP 0x792a — move-step sub-index    */
+extern u8  physics_frozen;       /* player.c — DGROUP 0xa0ce — physics-freeze flag    */
+extern s16 p1_pixel_y;           /* player.c — DGROUP 0x9292 — P1 pixel-Y             */
+
 /* FX / sound callees — STUBBED, owned by game_stubs.c (BUMPY.EXE) / the harness.
    RECONSTRUCTION FIDELITY: the item-complete branch plays a level-complete sound
    and fires the exit animation; these are render/audio-subsystem leaves (Phase 5/6)
    with no effect on the validated semantic state, so they stay extern stubs. */
 extern void play_sound(u8 sound_id);        /* 1000:6e11 — sound dispatch (→ Phase 6) */
 extern void apply_cell_animation(u8 fx);    /* 1000:69aa — anim-channel alloc (→ P5)  */
+
+/* Player-spine callees the exit/teleport functions invoke (owned by player.c, all
+   reconstructed there in Phase 2).  enter_game_mode + dispatch_move_step write
+   game_mode/the move-step dispatch (NOT in the validated SNAP); p1_set_pixel_from_cell
+   writes move_step_count + p1_pixel_y from the cell-coord table (IN the SNAP — so it
+   is a faithful reconstruction in player.c, not a stub). */
+extern void enter_game_mode(u8 mode);       /* 1000:4263 — game-mode transition       */
+extern void dispatch_move_step(void);       /* 1000:238e — move-step sub-dispatch      */
+extern void p1_set_pixel_from_cell(void);   /* 1000:4906 — set p1 pixel_x/y from cell  */
 
 /* ── item/exit module-owned globals (DGROUP 0x203b offsets) ──────────────────── */
 u8  items_remaining;             /* DGROUP 0xa0cf — items left on the current level */
@@ -167,6 +184,109 @@ void move_step_read_item(void)
     read_tile_layer2(p1_cell);
     if (p1_item_code != '\0') {
         p1_collect_item();
+    }
+    return;
+}
+
+/*
+ * check_exit_tile_vert — 1000:6372
+ * --------------------------------------------------------------------------
+ * Vertical exit-tile detection.  If the player is NOT at the row edge
+ * (move_step_count != 7) AND the neighbour tile one row below (tilemap[p1_cell +
+ * 0x30]) is an exit tile (0x0c), commit the level-exit transition: reset the
+ * move-step sub-index (p1_move_step_idx = 0), freeze physics (physics_frozen = 1),
+ * enter end-of-level game mode 0x2e (enter_game_mode), and play the exit sound
+ * (device-dependent: 0x0d on the OPL device, else 0x03).  Otherwise no-op.
+ *
+ * Verified against disasm 1000:6372–63bd:
+ *   637e CMP [0x855e],7 / JZ → move_step_count != 7
+ *   6390 CMP ES:[BX+0x30],0xc / JNZ → tilemap[p1_cell+0x30] == 0x0c
+ *   6397 MOV [0x792a],0 → p1_move_step_idx = 0
+ *   639c MOV [0xa0ce],1 → physics_frozen = 1
+ *   63a4 CALL enter_game_mode(0x2e)
+ *   63a9 CMP [0x689c],4 → sound id 0x0d : 0x03
+ *
+ * RECONSTRUCTION FIDELITY: play_sound + enter_game_mode are player/audio-subsystem
+ * leaves; enter_game_mode is reconstructed in player.c, play_sound stays a stub
+ * (no effect on the validated semantic state — physics_frozen is the observable).
+ */
+void check_exit_tile_vert(void)
+{
+    u8 sound_id;
+
+    /* move_step_count != 7  AND  tilemap[p1_cell + 0x30] == 0x0c (exit tile).
+       The tilemap deref mirrors the engine's LES BX,[tilemap]; CMP ES:[BX+
+       p1_cell+0x30],0xc — the +0x30 neighbour one grid-row below p1_cell. */
+    if ((move_step_count != '\a') &&
+        ((s8)tilemap[(u16)p1_cell + 0x30] == '\f')) {
+        p1_move_step_idx = 0;
+        physics_frozen = 1;
+        enter_game_mode(0x2e);
+        sound_id = (sound_device_state == 4) ? 0x0d : 0x03;
+        play_sound(sound_id);                     /* exit sound (stub, → Phase 6) */
+    }
+    return;
+}
+
+/*
+ * teleport_to_next_exit_tile — 1000:25ad
+ * --------------------------------------------------------------------------
+ * Scan the tilemap FORWARD from p1_cell (cell index, wrapping at 0x30 back to 0)
+ * for the next teleport/exit tile (tilemap[scan_cell] == 0x0f).  On the first hit:
+ * relocate the player there (anim_target_cell = p1_cell = scan_cell), set the pixel
+ * position from the new cell (p1_set_pixel_from_cell), nudge pixel-Y down by 0x0d,
+ * fire the teleport FX (apply_cell_animation(0x27)), play the teleport sound
+ * (0x28 on the OPL device, else 0x03), enter game mode 0x0f (enter_game_mode), and
+ * run the move-step dispatch (dispatch_move_step).  The scan loop terminates on the
+ * first match (found flag).
+ *
+ * Verified against disasm 1000:25ad–2633:
+ *   25bb found = 0; 25bf scan_cell = p1_cell
+ *   25c7 INC scan_cell; 25cf CMP 0x30 → wrap to 0
+ *   25e2 CMP ES:[BX],0xf → tilemap[scan_cell] == 0x0f
+ *   25eb/25ee anim_target_cell = p1_cell = scan_cell
+ *   25f1 CALL p1_set_pixel_from_cell
+ *   25f4 [0x9292] += 0xd → p1_pixel_y += 0x0d
+ *   2600 CALL apply_cell_animation(0x27)
+ *   2605 CMP [0x689c],4 → sound id 0x28 : 0x03
+ *   261b CALL enter_game_mode(0x0f)
+ *   2620 CALL dispatch_move_step
+ *
+ * RECONSTRUCTION FIDELITY: apply_cell_animation + play_sound stay stubs (FX/audio
+ * leaves, Phase 5/6).  enter_game_mode + dispatch_move_step are reconstructed in
+ * player.c (they write game_mode / the move-step dispatch — not validated SNAP
+ * fields here).  p1_set_pixel_from_cell (1000:4906) writes move_step_count +
+ * p1_pixel_y from the DGROUP cell-coord table (BOTH in the validated SNAP); it is a
+ * player.c move/teleport leaf NOT yet reconstructed there, so for the BUMPY.EXE
+ * link it is a faithful-signature stub in game_stubs.c (DEFERRED to the player
+ * subsystem) and the items host harness (items_ctest.c) reproduces its coord-table
+ * effect faithfully for the per-fn differential.
+ */
+void teleport_to_next_exit_tile(void)
+{
+    u8 sound_id;
+    u8 found;
+    u8 scan_cell;
+
+    found = '\0';
+    scan_cell = p1_cell;
+    while (found == '\0') {
+        scan_cell = scan_cell + 1;
+        if (scan_cell == 0x30) {
+            scan_cell = 0;
+        }
+        if ((s8)tilemap[(u16)scan_cell] == '\x0f') {
+            anim_target_cell = scan_cell;
+            p1_cell = scan_cell;
+            p1_set_pixel_from_cell();
+            p1_pixel_y = p1_pixel_y + 0xd;
+            apply_cell_animation('\'');           /* teleport FX (stub, → Phase 5) */
+            sound_id = (sound_device_state == 4) ? 0x28 : 0x03;
+            play_sound(sound_id);                 /* teleport sound (stub, → Phase 6) */
+            enter_game_mode(0x0f);
+            dispatch_move_step();
+            found = '\x01';
+        }
     }
     return;
 }

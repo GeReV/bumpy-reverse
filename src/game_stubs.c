@@ -52,6 +52,14 @@ void play_sound(u8 sound_id)                { (void)sound_id; }  /* 1000:6e11 */
 void play_action_sound(void)                {}
 void apply_contact_action(u8 code)          { (void)code; }
 void play_walk_anim_default(void)           {}  /* 1000:4361 */
+/* p1_set_pixel_from_cell 1000:4906 — set p1_pixel_x/y + move_step_count from the
+   cell-coord table at DGROUP 0x274/0x276.  A player.c leaf (move/teleport spine)
+   not yet reconstructed there; items.c's teleport_to_next_exit_tile (Phase-3 T4)
+   calls it, so a faithful-signature stub satisfies the BUMPY.EXE link.  It writes
+   semantic state (move_step_count/p1_pixel_y), so the FULL port lands with the
+   player move-spine; the items host harness (items_ctest.c) reproduces its effect
+   faithfully for the per-fn differential.  DEFERRED (player subsystem). */
+void p1_set_pixel_from_cell(void)           {}  /* 1000:4906 */
 void step_walk_anim(u8 anim_base, u8 period, u16 frame_off, u16 frame_seg)
 { (void)anim_base; (void)period; (void)frame_off; (void)frame_seg; }  /* 1000:495c */
 void FUN_1000_4802(void)                    {}  /* handle_move_input pending==0x0f leaf */
@@ -64,7 +72,8 @@ void enter_mode_0b_jump_start(void)         {}  /* 1000:2470  idx 0x0a */
 void move_anim_step_to_mode0c(void)         {}  /* 1000:248e  idx 0x0b */
 void move_step_check_walkable(void)         {}  /* 1000:24d7  idx 0x0c */
 void move_step_dispatch_input(void)         {}  /* 1000:250a  idx 0x0d */
-void teleport_to_next_exit_tile(void)       {}  /* 1000:25ad  idx 0x0e */
+/* teleport_to_next_exit_tile (1000:25ad, idx 0x0e) is RECONSTRUCTED in items.c
+   (Phase-3 T4) — no longer stubbed here (would be a duplicate symbol). */
 /* FUN_1000_22b0 (idx 0x10/0x2c) + run_physics_settle_wrap (1000:22c1, idx 0x2d)
    are now RECONSTRUCTED in player.c (Phase 2, Task 4). */
 void p1_input_dispatch_bit10(void)          {}  /* 1000:4344  idx 0x1c */

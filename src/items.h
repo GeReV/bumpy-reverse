@@ -11,9 +11,10 @@
  *  (1000:6c95), move_step_read_item (1000:6627) — plus the tiny layer-C read
  *  leaf read_tile_layer2 (1000:6bf4) that move_step_read_item calls (the +0x60
  *  sibling of player.c's read_tile_layer_contact/read_tile_at_cell; it writes
- *  this module's p1_item_code, so it lives here).  check_exit_tile_vert
- *  (1000:6372) and teleport_to_next_exit_tile (1000:25ad) are Phase-3 Task 4 and
- *  remain stubbed (game_stubs.c).
+ *  this module's p1_item_code, so it lives here).  Phase-3 Task 4 adds the two
+ *  level-exit functions check_exit_tile_vert (1000:6372) and
+ *  teleport_to_next_exit_tile (1000:25ad) — now reconstructed in items.c
+ *  (un-stubbed from game_stubs.c).
  *
  *  SEMANTIC-STATE GLOBALS (resolved DGROUP 0x203b offsets — see
  *  local/build/items_model.md §"Resolved semantic-state DGROUP addresses"):
@@ -49,13 +50,14 @@ extern u8  p1_item_code;                /* DGROUP 0x79b8 — latched layer-C ite
 extern u8  sharp_item_counter;          /* DGROUP 0x791a — '#'-item pickup counter  */
 extern u8  collect_mode_2810;           /* DGROUP 0x2810 — p1_collect_item entry tag */
 
-/* ── the item/exit functions (T3 ported; check_exit_tile_vert is T4-stubbed) ──── */
+/* ── the item/exit functions (T3 + T4 ported into items.c) ───────────────────── */
 void p1_collect_item(void);             /* 1000:6c14 — collect + score + complete (T3)  */
 void p1_collect_item_score(void);       /* 1000:6c95 — award score for an item code (T3) */
 void move_step_read_item(void);         /* 1000:6627 — read layer-C item, maybe coll (T3)*/
 void read_tile_layer2(u8 cell);         /* 1000:6bf4 — p1_item_code = tilemap[cell+0x60] (T3) */
 void check_exit_tile_vert(void);        /* 1000:6372 — vertical exit-tile detection (T4) */
-/* teleport_to_next_exit_tile (1000:25ad) is declared in player.h (dispatch idx 0x0e)
-   and currently stubbed in game_stubs.c; not re-declared here to avoid duplication. */
+/* teleport_to_next_exit_tile (1000:25ad, dispatch idx 0x0e) is now reconstructed in
+   items.c (Phase-3 T4); its forward decl lives in player.h (move_step_dispatch_tbl
+   target).  Not re-declared here to avoid duplication. */
 
 #endif /* ITEMS_H */

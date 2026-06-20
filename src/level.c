@@ -523,17 +523,50 @@ static void render_level(void)
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
-   copyprotect_challenge_stub — dormant copy-protection stub.
+   copy-protection challenge — 1000:4015, gated by #ifdef BUMPY_COPY_PROTECTION.
+
+   RECONSTRUCTION FIDELITY (copy protection): start_level (1000:2d14) opens with a
+   copy-protection hook:
+
+       if (1 < current_level && copyprotect_flag == 0) copyprotect_challenge();
+       if (copyprotect_flag == -1)                     current_level = 1;
+
+   copyprotect_challenge() (1000:4015) is a sprite-identification quiz: it draws a
+   randomly-chosen Bumpy sprite, reads a number the player types, and — in the
+   ORIGINAL un-cracked build — compares it against copyprotect_answer_table[index],
+   setting copyprotect_flag = -1 on a MISMATCH (which the second guard above then
+   turns into a forced reset to level 1).  The shipped DOS English release is a
+   CRACKED build: copyprotect_challenge() sets `copyprotect_flag = 1` (pass)
+   UNCONDITIONALLY, before input is even read, and never compares — so the
+   challenge is defeated and copyprotect_flag is never written with -1 anywhere in
+   the binary.
+
+   The ENTIRE hook (both guards + the challenge body) is compiled behind
+   `#ifdef BUMPY_COPY_PROTECTION`, which is NOT defined in the default build.  With
+   it OFF the hook compiles OUT: level-advance to levels 2+ flows with no challenge,
+   exactly matching the cracked-build runtime behaviour (copyprotect_flag stays 0,
+   1 < current_level && copyprotect_flag == 0 would have fired the now-absent
+   challenge, and the -1 reset can never trigger because nothing writes -1).
+
+   The faithful FULL un-cracked challenge() body (the sprite quiz + answer compare)
+   is deferred to Phase 7b; defining BUMPY_COPY_PROTECTION switches the hook on and
+   reinstates the challenge call.  The placeholder body below is a faithful-STRUCTURE
+   stand-in for that future port: it carries the cracked-build invariant
+   (copyprotect_flag = 1 unconditional pass) so that, even with the macro ON, the
+   shipped build's defeated-protection semantics are reproduced until the Phase-7b
+   un-cracked body lands.
    ─────────────────────────────────────────────────────────────────────────── */
-void copyprotect_challenge_stub(void)
+#ifdef BUMPY_COPY_PROTECTION
+void copyprotect_challenge(void)
 {
-    /* STUB: the original (1000:4015) displays a sprite-identification quiz.
-       Only called when current_level > 1 AND copyprotect_flag == 0.
-       For level-1 boot this path is never reached.  Left unimplemented;
-       the cracked build had this logic bypassed anyway.
-       RECONSTRUCTION FIDELITY: the hook STRUCTURE is carried faithfully
-       (the guarded call in start_level) but the challenge body is DORMANT. */
+    /* Faithful-STRUCTURE placeholder for 1000:4015 (full body → Phase 7b).
+       The shipped (cracked) build sets copyprotect_flag = 1 unconditionally — the
+       "COPY PROTECTION DEFEATED HERE" point in the decomp — before reading input
+       and without comparing the answer.  We carry that single load-bearing effect;
+       the sprite-quiz draw/input/answer-compare machinery is the Phase-7b port. */
+    copyprotect_flag = 1u;
 }
+#endif /* BUMPY_COPY_PROTECTION */
 
 /* ────────────────────────────────────────────────────────────────────────────
    start_level — port of 1000:2d14.
@@ -567,17 +600,23 @@ void start_level(u8 world, u8 level)
         return;   /* out of memory; cannot continue */
     }
 
-    /* ── 1. Copy-protection guard (1000:2d14, decomp line 2177) ───────────
-       In the original: "if ((1 < current_level) && (copyprotect_flag == '\0'))
-         copyprotect_challenge();"
-       DORMANT at level 1: the condition (1 < 1) is FALSE, so it never fires.
-       copyprotect_challenge() is fully stubbed. */
+    /* ── 1. Copy-protection guard (1000:2d14, decomp lines 2176-2179) ─────
+       Original:
+         if ((1 < current_level) && (copyprotect_flag == 0)) copyprotect_challenge();
+         if (copyprotect_flag == -1)                         current_level = 1;
+       The WHOLE hook is gated by #ifdef BUMPY_COPY_PROTECTION (NOT defined by
+       default).  With it OFF the hook compiles OUT — level-advance to levels 2+
+       flows with no challenge, matching the cracked-build runtime (copyprotect_flag
+       stays 0; nothing ever writes -1, so the reset can never fire).  See the
+       copyprotect_challenge() note above; faithful un-cracked body → Phase 7b. */
+#ifdef BUMPY_COPY_PROTECTION
     if ((1u < (u16)current_level) && (copyprotect_flag == 0u)) {
-        copyprotect_challenge_stub();
+        copyprotect_challenge();
     }
     if (copyprotect_flag == (u8)0xffu) {  /* == -1 as byte */
         current_level = 1u;
     }
+#endif /* BUMPY_COPY_PROTECTION */
 
     /* ── 2. Move-descriptor / anim-coord table ptrs (STUBBED) ─────────────
        Original: read ptrs from code-seg table at 0x10c8..0x10cb / 0x10ec..0x10ef.
