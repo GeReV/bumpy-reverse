@@ -124,6 +124,41 @@ As of Phase-3 Task 4 (validate gate re-confirmed Phase-3 Task 5), the item/scori
 7. **Full reconstructed-engine-path level-advance validation** — the live `run_game_session` loop has stubbed callees (screen-transition fns, P2 step, etc.); a complete advance run through the reconstructed engine path requires those stubs to be un-stubbed (or a live loop replay harness). Deferred.
 8. **int8-synced end-to-end gate** — Unicorn capture granularity does not match the engine's physics-frame rate; a frame-accurate capture (DOSBox path) is needed. Deferred (unchanged from Phase 2).
 
+## Phase-4 module audit (two-player AI subsystem — `player2.c`)
+
+| Module / function set | Fidelity | Notes |
+|---|---|---|
+| **Move-state machine** (T3): `p2_set_move_state` (4bc6), `p2_step_scripted_move` (4c14), `p2_update_grid_cell` (4b4e), `p2_tile_move_check` (4c99), `p2_set_pixel_from_cell` (48a9), `p2_advance_grid_history` (13b2) | Transcription | Ported 1:1 from the live Ghidra decomp. P2 move-state machine mirrors P1's (player.c) in structure but operates on P2-specific globals (`p2_pixel_x` 0x79ba, `p2_pixel_y` 0x79bc, `p2_move_anim` 0x8560, `p2_cell` 0x8571). |
+| **AI decision layer** (T4): `p2_ai_dispatch_move` (4f4e), `p2_ai_select_move_a` (4f04), `p2_ai_select_move_b` (4f89), `p2_ai_select_move_random` (4fd3), `p2_choose_move_state1`, `p2_choose_move_state2`, `p2_pick_move_priority_a/b/c`, `p2_run_move_state_handler` (5003), `p2_cell_move_up/down/left/right` | Transcription | Ported 1:1 from the decomp. **AI determinism validated genuinely**: the rng-driven decisions in `p2_ai_select_move_random` call `rand()` (the reconstructed prng in `src/prng.c`) AND read `rng_frame`; the validate_p2 harness seeds the reconstructed prng state so `rand()` returns the same sequence as the engine — the determinism is real, not faked. `select_move_b` threshold logic and `select_move_random` modulo are reproduced 1:1 from the decomp. **Coverage note**: 3 of 4 cell-move handlers are direction-seeded; the 0x85c handler table is runtime data (populated at boot, not decompilable as a static literal), so only `state-2 → cell_move_down` is end-to-end capture-validated; `cell_move_up/left/right` are transcribed from the decomp and pass the per-fn differential but are not independently capture-validated. |
+| **Render / view + pvp** (T5): `draw_p2_sprite` (1cea), `render_p2_view` (1c41), `erase_p2_view` (19a1), `update_p2_bbox` (50c0), `check_pvp_collision` (50fb) | Mixed (transcription + faithful-signature stubs) | Ported 1:1 from the decomp. P2 draw validated at the **descriptor level** (the `draw_p2_sprite` descriptor fields: `p2_pixel_x`, `p2_pixel_y`, `p2_move_anim` match the capture; the underlying blitter is already plane-exact 24/24 from Phase 0). The blit/view leaf calls are **faithful-signature stubs**: `blit_sprite` is inlined in `entity.c` and not separately callable; `render_player_view` / `restore_bg_view` carry the 3-arg work-buffer signature matching the engine prototype but their sub-handlers 3–6 are stubbed (the Phase-0 `bgi_overlay.c` core is untouched). The frame-word in the draw descriptor is partially self-referential: `p2_frame_base` (0xa0de) was back-derived from the descriptor capture rather than read directly from the SNAP, so the x/y fields are full gates but the frame-word gate has limited independence. `check_pvp_collision` is validated: overlap/disjoint flag values match the capture (3/3 PvP records). |
+
+**Phase-4 deviations (all in-code RECONSTRUCTION FIDELITY notes present):**
+
+- `blit_sprite` leaf — inlined in `entity.c`, not separately callable; the P2 draw calls through the entity path (faithful-signature stub in `game_stubs.c` un-stubbed to `entity.c`).
+- `render_player_view` / `restore_bg_view` (3-arg work-buffer) — faithful-signature, but sub-handlers 3–6 are STUBBED and UNVALIDATED (Phase-0 `bgi_overlay.c` state; see that entry).
+- `apply_cell_animation` (69aa, anim-channel allocator) — extern stub throughout → Phase 5.
+- `play_sound` / `play_state_sound` (6e11/647e) — extern stubs → Phase 6.
+- 0x85c cell-move handler table — runtime data; only `state-2 → cell_move_down` is end-to-end capture-validated; remaining handlers (`cell_move_up/left/right`) are transcription-only.
+- `p2_frame_base` (0xa0de) back-derived from descriptor capture for the frame-word gate; x/y fields are independently gated.
+
+**Phase-4 validation method:** per-function semantic-state differential (seed entry snapshot + captured script/tilemap → call the reconstructed C fn → assert output fields vs the engine's exit snapshot) across 14 scenarios (P2 trajectory, move-state, AI rng-decision, AI selection branches, move-step, handler dispatch, PvP overlap/disjoint, P2 draw descriptor). 74 records; PASS=74, FAIL=0, UNPORTED=0, DESC_CHECKED=1.
+
+## Phase-4 status (two-player AI subsystem)
+
+As of Phase-4 Task 5 (validate gate re-confirmed Phase-4 Task 6), the complete P2 subsystem is **reconstructed and validated**:
+
+- **Reconstructed 1:1**: the P2 move-state machine (`p2_set_move_state`, `p2_step_scripted_move`, `p2_update_grid_cell`, `p2_tile_move_check`, `p2_set_pixel_from_cell`, `p2_advance_grid_history`), the AI decision layer (`p2_ai_dispatch_move`, `p2_ai_select_move_a/b/random`, `p2_choose_move_state1/2`, `p2_pick_move_priority_a/b/c`, `p2_run_move_state_handler`, `p2_cell_move_up/down/left/right`), and the render/view + PvP functions (`draw_p2_sprite`, `render_p2_view`, `erase_p2_view`, `update_p2_bbox`, `check_pvp_collision`) — all ported 1:1 from the live Ghidra decomp (verified via MCP + disasm).
+- **AI determinism genuine**: `p2_ai_select_move_random` uses the reconstructed `prng.c` rand(); seeding the reconstructed prng state reproduces the engine's rng-driven move decisions exactly.
+- **Gate re-confirmed (2026-06-20)**: `validate_p2` PASS=74 FAIL=0 UNPORTED=0 DESC_CHECKED=1; `validate_blit` 17/17 chain + 24/24 blits; `validate_composite` 54152 @ 53858 baseline; `validate_player` PASS; `validate_physics` PASS=16584 FAIL=0 UNPORTED=624; `validate_items` PASS=11 FAIL=0 UNPORTED=0; `BUMPY.EXE` links clean (211K, Open Watcom 16-bit DOS).
+
+**Deferred from Phase 4:**
+
+1. **Anim-channel / FX allocator** (`apply_cell_animation` 69aa) — Phase 5.
+2. **Sound** (`play_sound`, `play_state_sound`) — Phase 6.
+3. **`bgi_overlay.c` sub-handlers 3–6** (masked copy variants) — deferred from Phase 0; unchanged.
+4. **0x85c cell-move handler table end-to-end validation** — only `state-2 → cell_move_down` is capture-validated; the remaining handlers are transcribed from the decomp (per-fn differential passes) but lack independent capture validation.
+5. **int8-synced end-to-end gate** — the Unicorn capture granularity does not match the engine's physics-frame rate; a frame-accurate capture (DOSBox path) is needed before the full game loop can be replay-validated tick-for-tick. Deferred (unchanged from Phase 2/3).
+
 ## Phase-1 slice status (vertical slice — session → loop → modules)
 
 As of Phase-1 Task 7 the reconstructed `src/` tree forms a complete, **linkable**
