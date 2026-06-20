@@ -159,6 +159,100 @@ As of Phase-4 Task 5 (validate gate re-confirmed Phase-4 Task 6), the complete P
 4. **0x85c cell-move handler table end-to-end validation** — only `state-2 → cell_move_down` is capture-validated; the remaining handlers are transcribed from the decomp (per-fn differential passes) but lack independent capture validation.
 5. **int8-synced end-to-end gate** — the Unicorn capture granularity does not match the engine's physics-frame rate; a frame-accurate capture (DOSBox path) is needed before the full game loop can be replay-validated tick-for-tick. Deferred (unchanged from Phase 2/3).
 
+## Phase-5 module audit (anim-channel FX subsystem — `src/anim.c`)
+
+The complete anim-channel FX subsystem — the channel-A slot allocator, the A/B
+stream steppers, and the A/B overlay draw/erase — ported 1:1 from the live Ghidra
+decomp. Validation splits along the same line as the rest of `src/`: the allocator +
+steppers are gated at the **semantic-state** level (12-byte channel records + DGROUP
+scalars); the draw/erase functions are gated at the **view-descriptor** level over the
+already-plane-exact Phase-0 blitter (the BGI-overlay leaves stay faithful-signature
+stubs). The shared channel record is 12 bytes: `[0]`active `[1]`cell `[2..5]`stream-ptr
+(far) `[6]`frame-byte `[8..11]`data-ptr (far).
+
+| Module / function set | Fidelity | Notes |
+|---|---|---|
+| **Allocator** (T3): `apply_cell_animation` (69aa) | Transcription | Channel-A slot allocator. Two-scan free-slot search + the `0xFF`-restart control flow reproduced verbatim; per-action far-ptr tile-def table at DGROUP `0x2ede`/`0x2ee0` (`action*4`); stamps `tilemap[anim_target_cell]`. The A-table has a real **4th `0xFF`-terminator** entry at DGROUP `0x4c64` (3 active records + the terminator; engine-verified vs `BUMPY_unpacked.exe`). Validated at the semantic-state level (3 alloc scenarios + the A-lifecycle). |
+| **Steppers** (T3): `step_anim_channels_a` (14e4), `step_anim_channels_b` (15a1) | Transcription | A advances **3** channels, B advances **4**; each non-zero frame byte indexes the per-channel far frame table (A `0x3d6a`/`0x3d6c`, B `0x40a6`/`0x40a8`) for the far data ptr stored into the record's `[+8..+11]`. B is the 4-channel analogue of A (the decomp aliases the loops). Stream-ptr advance + data-ptr store are the captured-delta gate. Working scalars (`g_anim_stream_ptr` 0xa0be etc.) rebuilt at the use site (no hidden engine state). |
+| **Draw** (T4): `draw_anim_channels_a` (165e), `draw_anim_channels_b` (17c7) | Transcription | Per active (non-0, non-`0xFF`) slot, A builds two view descriptors + the `p1_sprite` blit descriptor (0x8884 far ptr → 0x792e pointee); B is the layer-B shadow/mask analogue (frame `+0xf1` bias, gridB/posB tables). Validated at the **view-descriptor + p1_sprite-pointee (0x792e) level** over the already-plane-exact blitter — a perturbation-proven real gate (work-buffer `+4` → 28 FAILs). The if/else bodies are ported verbatim. |
+| **Erase** (T4): `erase_anim_channels_a` (1a67), `erase_anim_channels_b` (1b2b) | Transcription | Restore each active cell's background via the CLEAR-view + work-buffer-ptr path (B is the layer-B analogue). Same descriptor-level gate as draw. |
+
+**Phase-5 deviations (all in-code RECONSTRUCTION FIDELITY notes present):**
+
+- **Channel-B populator deferred.** `spawn_and_draw_level_entities` (2a78) — the
+  level-entity spawn path that *fills* the channel-B slots — is NOT ported (a separate
+  entity-spawn concern). Channel B has no allocator of its own, so its step/draw/erase
+  are validated against **synthetic, harness-seeded** entry-records: the B function
+  *bodies* run 1:1 on the seed and the captured deltas (stream-ptr advance) are
+  genuine. This is a coverage caveat, not an integrity gap — analogous to the Phase-4
+  direction-seeded cell-move minor (the channel-A path *is* allocator-driven and
+  semantic-state validated end-to-end).
+- **BGI-overlay leaves stay faithful-signature stubs.** `restore_bg_view`,
+  `blit_sprite`, `render_player_view`, `FUN_1000_80ac` — the Phase-0 render core is
+  untouched; draw/erase are validated at the descriptor level over that already-
+  plane-exact core (see the `bgi_overlay.c` / Phase-0 entries).
+- **`draw_anim_channels_b` is gated at the EXIT/final state only.** Its `view1`
+  (0x8cc) is written multiple times with leaf calls between (a shadow/mask pre-pass);
+  the per-function gate captures the descriptor state at the function boundary, so the
+  intermediate pre-pass states are not independently checked. The `if`/`else` is ported
+  verbatim — a documented coverage limit, not a deviation in the port.
+- **DS-segment expression.** The view descriptors store the engine's *runtime* DS
+  (`0x114b`); the harness drives this via a runtime-seg override
+  (`ANIM_DGROUP_RUNTIME_SEG`), while the source default is the decomp's static-image
+  link-time literal (`0x203b`). The gate compares genuine engine-captured EXIT bytes —
+  proven real by removing the override (the gate then fails). The far-ptr SEG *data*
+  halves stay the static `0x203b`; only the DS *register* store is the runtime value.
+- **FX sound callees → Phase 6** (`play_sound` / `play_state_sound` 6e11/647e).
+
+**Phase-5 validation method:** per-function semantic-state differential (allocator +
+steppers: seed entry snapshot → call the reconstructed C fn → assert the 12-byte
+channel records + DGROUP scalars vs the engine's exit snapshot) **plus** a
+view-descriptor + `p1_sprite`-pointee differential for draw/erase (assert the descriptor
+bytes the engine actually wrote, over the plane-exact blitter). Engine ground truth
+captured by `tools/anim_oracle.py` (Unicorn instrumentation); 6 scenarios, 46 records.
+**Gate: `validate_anim` PASS=45 FAIL=0 UNPORTED=1 DESC_CHECKED=28** (the 1 UNPORTED is
+a single skeleton-coverage record, not a port gap; the descriptor gate is perturbation-
+proven). The B path's step/draw/erase run on synthetic-seeded records (B-populator
+deferred); the channel-A path is allocator-driven end-to-end.
+
+## Phase-5 status (anim-channel FX subsystem)
+
+As of Phase-5 Task 4 (validate gate re-confirmed Phase-5 Task 5), the complete
+anim-channel FX subsystem is **reconstructed and validated**:
+
+- **Reconstructed 1:1**: the channel-A slot allocator (`apply_cell_animation` 69aa),
+  both stream steppers (`step_anim_channels_a` 14e4 / `_b` 15a1), and both A/B overlay
+  draw + erase paths (`draw_anim_channels_a` 165e / `_b` 17c7,
+  `erase_anim_channels_a` 1a67 / `_b` 1b2b) — all ported 1:1 from the live Ghidra
+  decomp (verified via MCP + raw disasm). The 12-byte channel record, the A 4th
+  `0xFF`-terminator (DGROUP 0x4c64), and the per-channel far tables (0x2ede / 0x3d6a /
+  0x40a6) are engine-verified.
+- **Validation split**: allocator + steppers at the **semantic-state** level (channel
+  records + scalars); draw + erase at the **view-descriptor + p1_sprite-pointee**
+  level over the already-plane-exact Phase-0 blitter (perturbation-proven real gate).
+  Channel-B step/draw/erase run on **synthetic harness-seeded** entry-records (B has no
+  allocator) — the bodies run 1:1 and the deltas are genuine; the channel-A path is
+  allocator-driven and validated end-to-end.
+- **Gate re-confirmed (2026-06-20)**: `validate_anim` PASS=45 FAIL=0 UNPORTED=1
+  DESC_CHECKED=28. No-regression: `validate_blit` 17/17 anim + 17/17 chain + 24/24
+  blits; `validate_composite` 54152 @ 53858 baseline; `validate_player` PASS;
+  `validate_physics` PASS=16584 FAIL=0 UNPORTED=624; `validate_items` PASS=11 FAIL=0
+  UNPORTED=0; `validate_p2` PASS=74 FAIL=0 UNPORTED=0 DESC_CHECKED=1; `BUMPY.EXE` links
+  clean (212K, Open Watcom 16-bit DOS, `anim.obj` now in the link set).
+
+**Deferred from Phase 5:**
+
+1. **Channel-B populator / level-entity spawn** (`spawn_and_draw_level_entities` 2a78)
+   — the path that fills the channel-B slots; B's step/draw/erase are validated on
+   synthetic seeds until it lands. A separate entity-spawn concern.
+2. **Sound** (`play_sound`, `play_state_sound` 6e11/647e) — extern stubs → Phase 6.
+3. **BGI-overlay leaves / `bgi_overlay.c` sub-handlers 3–6** — Phase-0 render core
+   untouched; draw/erase validated at the descriptor level over it. Unchanged.
+4. **int8-synced end-to-end gate** — the Unicorn capture granularity does not match the
+   engine's physics-frame rate; a frame-accurate capture (DOSBox path) is needed before
+   the full game loop can be replay-validated tick-for-tick. Deferred (unchanged from
+   Phase 2/3/4).
+
 ## Phase-1 slice status (vertical slice — session → loop → modules)
 
 As of Phase-1 Task 7 the reconstructed `src/` tree forms a complete, **linkable**
