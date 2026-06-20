@@ -359,6 +359,115 @@ project-wide deferral (the Unicorn capture granularity does not match the engine
 physics-frame rate; a frame-accurate DOSBox-path capture is needed before the full game
 loop can be replay-validated tick-for-tick — unchanged from Phases 2/3/4/5).
 
+## Phase-7 module audit (front-end + in-game HUD — `src/screens.c`)
+
+The complete front-end subsystem — text/number formatters + in-game HUD, the
+title/menu/transition flow, the VGA-DAC palette upload, and the highscore + level-intro
+screens — ported 1:1 from the live Ghidra decomp + raw disassembly. Validation splits by
+comparator: the **semantic-state differential** gates the menu/title/highscore/intro
+state machines + the number format (seed entry SCRSNAP → call → assert the screen
+globals + AX return == exit SNAP); the **descriptor-level differential** gates the
+text/number/HUD builders + the screen draws (assert the bytes written into the host
+view-struct / `p1_sprite` descriptors == the captured exit descriptors); the
+**port-write-sequence differential** drives the reconstructed VGA-DAC writer over a
+seeded palette and asserts its `(port,value)` sequence. Gate: **`validate_screen_fns`
+PASS=884 FAIL=0 UNPORTED=0** (DESC_CHECKED=41, PORT_CHECKED=837 over 500 port-I/O events;
+note the `PORT_CHECKED` metric also counts the 0-emission consistency checks — see
+deviation (a)).
+
+| Module / function set | Fidelity | Notes |
+|---|---|---|
+| **Text/number + HUD** (T3): `draw_text_at` (07f0), `draw_number` (0816), `draw_number_sprites` (603d), `draw_hud_composite` (51d8) | Transcription | `draw_number` formats a native u32 in decimal by repeated ÷10/×10 modeling the engine's `crt_uldiv_32`/`crt_lmul_32` runtime calls, emits `"OVER FLOW"` when `width>=8`, then tail-calls `draw_text_at`. `draw_hud_composite` builds the 7-fill HUD via per-fill descriptors. **Descriptor-level gated** (`draw_hud_composite`'s 7 fills are checked per-fill against the oracle's hooked-leaf capture — perturbation-proven) + **number-format gated** (the formatted-buffer bytes for `draw_number`). The formatter scratch lives in the module-static `formatted_number_buf` (storage-class deviation — see (d)). |
+| **Title + menu + transition** (T4): `init_title_graphics` (2ef8), `show_title_background` (2fac), `show_title_and_init` (3ed4), `run_main_menu` (35a5), `show_menu_select_screen` (0f7a), `play_iris_wipe_transition` (3467) | Transcription | `run_main_menu` is the **4-option cursor state machine** (cursor up/down guards, option-2 cycles `menu_option2_setting` 0→1→2→0 instead of returning) — **semantic-state gated** via captured-input replay (perturbation-proven). `show_title_background`/`init_title_graphics`/`show_title_and_init` build the title + run the iris transition; `play_iris_wipe_transition`'s rectangle-wipe DESCRIPTOR stepping is reconstructed 1:1 and descriptor-gated (its render/DAC leaves are stubbed — see (e)). `show_menu_select_screen` is **position-only descriptor gated** — see (b). |
+| **DAC palette** (T4): `upload_vga_dac_palette` (9864) + the reconstructed `vga_dac_upload_from_buffer` | Transcription (dispatch) + **Behavior-faithful (static writer)** | `upload_vga_dac_palette` is a 1:1 thunk to `dispatch_by_palette_mode_2036` (2036:0000), which indirect-calls the handler the BGI driver registered at the runtime-populated overlay table `[palette_mode*2 + 0x6976]` (all-zero in the static image; handlers are dynamically-loaded BGI overlay code, NOT in the corpus). The reconstructed `vga_dac_upload_from_buffer` is the mode-2 VGA-DAC writer, reconstructed from the raw disassembly of the static DAC writer (image off `0xb204`): it reads the 16-colour 6-bit palette from the decoded-image buffer at `+0x33` and emits the canonical VGA-DAC sequence (`out 0x3c8,0`; 8×RGB→0x3c9; `out 0x3c8,0x10`; 8×RGB). **This static writer IS the DAC port-write gate** (driven standalone over a seeded palette, perturbation-proven). The DAC carve-out is deviation (a). |
+| **Highscore + level-intro** (T5): `show_highscore_screen` (5681), `render_highscore_table` (57e1), `highscore_enter_name` (59d3), `enter_highscore_name` (5c87), `draw_name_entry_cursor` (5fdb), `level_intro_screen` (3852), `show_level_intro_screen` (0d9d) | Transcription | The highscore display/name-entry flow + the level-intro screen. `enter_highscore_name` is the per-letter name-entry state machine (the `4=prev`/`8=next` cursor paths ported from RAW ASM — the Ghidra decompiler under-rendered them; see (f)); `draw_name_entry_cursor` is the shared cursor-draw helper. **Semantic-state gated** (the name row + the table-match AX return) + **descriptor gated** (the table/intro draws). `show_level_intro_screen` is **position-only descriptor gated** — see (b). The name buffer lives in the module-static `enter_name_buf` (storage-class deviation — see (d)). |
+
+**Phase-7 deviations (all accurate; stated plainly; in-code RECONSTRUCTION FIDELITY notes present):**
+
+- **(a) DAC carve-out — the runtime DAC path is NOT engine-port-trace-validated.** The
+  engine's RUNTIME DAC writes come from runtime-loaded **BGI-overlay code** that does NOT
+  execute under Unicorn (the `[palette_mode*2 + 0x6976]` handler table is runtime-populated
+  by BGI driver init; under the natural boot `palette_mode==2` the standalone-upload records
+  carry **0 captured DAC** — an engine fact surfaced by the T1 oracle). So
+  `upload_vga_dac_palette`'s records carry **0 OUT events** and are gated as a **no-emission
+  consistency check** (NOT a DAC validation); the `PORT_CHECKED` metric counts these
+  0-emission checks too. The **REAL** DAC gate is the reconstructed `vga_dac_upload_from_buffer`
+  (raw disasm of the static writer at image off `0xb204`, palette `@+0x33`, verified
+  byte-for-byte) run STANDALONE over a SEEDED palette and asserted vs the canonical VGA-DAC
+  hardware protocol sequence (an external standard, perturbation-proven). Plainly: the engine's
+  runtime DAC path is **not** port-trace-validated against the engine; the **static writer IS**
+  gated 1:1 + protocol-correct. (The 50-write DAC sequence the T1 oracle captured comes from the
+  iris-wipe's per-step view-blit — the stubbed BGI overlay `FUN_7b4a` — over its own faded
+  palette state, NOT reconstructable 1:1; the iris-wipe's descriptor RECT SWEEP is the
+  faithfully-reconstructed, validated part.) This is the self-modifying-blitter / L5-ISR class
+  carve-out (faithful to what the binary does, validated by inspection vs the asm + protocol,
+  not by an engine-runtime port differential).
+- **(b) Partial glyph gates (position-only).** `show_menu_select_screen` (0f7a) and
+  `show_level_intro_screen` (0d9d) are **position-only (P)** descriptor-gated: each row-2 glyph's
+  **FRAME word** derives from a runtime DGROUP table (the `0x1354` per-level-name table /
+  SS-local text fmemcpy'd from DGROUP) that the trace does NOT capture. The **position words ARE
+  gated**; the glyph-frame word is not.
+- **(c) `enter_highscore_name` name-buffer EDIT validated only indirectly.** Its return value
+  (`= table-match`) IS gated, but on the empty-boot capture the table is empty → the return is 0,
+  so the per-letter EDIT of the 6-char select buffer is **not byte-checked directly** (an
+  empty-boot-capture limit; the edit is validated via the return-path, not the buffer bytes).
+- **(d) Storage-class deviations.** `formatted_number_buf` (number formatter scratch) and
+  `enter_name_buf` (name-entry buffer) are **module-static** here vs the engine's **SS-local**
+  (stack-frame) arrays. A storage-class-only deviation; it is what ENABLES the semantic gates
+  (the host observes the buffer as a named global).
+- **(e) Resource-load seeded; render-core leaves stay faithful-signature stubs.**
+  `open_resource`/`read_chunked` (the INT 21h file-I/O path) stay **stubbed** — no INT 21h in the
+  harness; the decoded image buffer is **seeded** from the oracle's REAL engine load+decode. The
+  render-core leaves (`FUN_80ac`/`restore_bg_view`/`blit_sprite`/`present_frame`) stay
+  **faithful-signature stubs** (Phase-0 untouched; the descriptors are validated OVER them, i.e.
+  the builders write into the host view-struct the harness inspects). `wait_keypress` is seeded.
+- **(f) `vec_decode_planar` + name-entry RAW-ASM paths.** `vec_decode_planar` is already
+  reconstructed (in `level.c` / the `bvec` path), not re-ported here. The name-entry `4=prev` /
+  `8=next` cursor paths in `enter_highscore_name` were ported from RAW ASM because the Ghidra
+  decompiler under-rendered them.
+
+**Phase-7 validation method:** per-function differential with three comparators (semantic-state
+for the menu/title/highscore/intro state machines + the number format; descriptor-level for the
+text/number/HUD builders + the screen draws; port-write-sequence for the standalone VGA-DAC
+writer). Engine ground truth captured by `tools/screens_oracle.py` (Unicorn instrumentation with
+hooked render/leaf capture); 10 scenarios, 884 records. **Gate: `validate_screen_fns` PASS=884
+FAIL=0 UNPORTED=0** (DESC_CHECKED=41, PORT_CHECKED=837, 500 port-I/O events). The DAC carve-out
+(deviation (a)) is documented, not engine-runtime port-gated.
+
+## Phase-7 status (front-end + in-game HUD)
+
+As of Phase-7 Task 6, the complete front-end subsystem is **reconstructed**:
+
+- **Reconstructed 1:1** (live Ghidra decomp + raw disasm, verified via MCP): the text/number
+  formatters + in-game HUD (`draw_text_at` 07f0, `draw_number` 0816, `draw_number_sprites` 603d,
+  `draw_hud_composite` 51d8), the title/menu/transition flow (`init_title_graphics` 2ef8,
+  `show_title_background` 2fac, `show_title_and_init` 3ed4, `run_main_menu` 35a5,
+  `show_menu_select_screen` 0f7a, `play_iris_wipe_transition` 3467), the VGA-DAC upload
+  (`upload_vga_dac_palette` 9864 + the reconstructed `vga_dac_upload_from_buffer`), and the
+  highscore + level-intro screens (`show_highscore_screen` 5681, `render_highscore_table` 57e1,
+  `highscore_enter_name` 59d3, `enter_highscore_name` 5c87, `draw_name_entry_cursor` 5fdb,
+  `level_intro_screen` 3852, `show_level_intro_screen` 0d9d).
+- **Validation split**: **semantic** (the title/menu/highscore/intro STATE MACHINES + the number
+  format, perturbation-proven) + **descriptor-level** (the screen/HUD builds — full descriptors,
+  or position-only where the glyph-frame word is a runtime DGROUP table — deviation (b)) + **DAC**
+  (the static writer is protocol-gated 1:1; the runtime DAC path is a documented carve-out —
+  deviation (a), NOT engine-runtime port-trace-validated).
+- **Gate re-confirmed (2026-06-21)**: `validate_screen_fns` PASS=884 FAIL=0 UNPORTED=0
+  (DESC_CHECKED=41, PORT_CHECKED=837). No-regression across the full gate set: the SEPARATE,
+  pre-existing VEC pixel gate `validate_screens` still green (all 5 screens pixel-exact, untouched);
+  `validate_blit` 17/17 anim + 17/17 chain + 24/24 blits; `validate_composite` 54152 @ 53858
+  baseline; `validate_player` PASS; `validate_physics` PASS=16584 FAIL=0 UNPORTED=624;
+  `validate_items` PASS=11 FAIL=0 UNPORTED=0; `validate_p2` PASS=74 FAIL=0 UNPORTED=0
+  DESC_CHECKED=1; `validate_anim` PASS=45 FAIL=0 UNPORTED=1 DESC_CHECKED=28; `validate_sound`
+  PASS=4414 FAIL=0 UNPORTED=25; `BUMPY.EXE` links clean (Open Watcom 16-bit DOS, `screens.obj`
+  in the link set, no duplicate symbols).
+
+**Deferred from Phase 7:** none specific to the front-end — the complete subsystem
+(title/menu/transition + highscore + level-intro + in-game HUD/number) is reconstructed and
+validated (semantic + descriptor + the static DAC writer). The **int8-synced end-to-end gate**
+and the **copy-protection path** (kept behind `#define` OFF, Phase 7b) remain the project-wide
+deferrals (unchanged from Phases 2/3/4/5/6).
+
 ## Phase-1 slice status (vertical slice — session → loop → modules)
 
 As of Phase-1 Task 7 the reconstructed `src/` tree forms a complete, **linkable**
