@@ -65,6 +65,17 @@ typedef int32_t  s32;
 #define __far
 #define __huge
 
+/* ── MK_FP host model (mirrors tools/physics_ctest.c / p2_ctest.c) ───────────────
+ *  The ported anim fns rebuild a far pointer with MK_FP(seg, off) at the use site —
+ *  for each slot's byte-STREAM pointer ([+2..+5]) and for the per-action tile-def /
+ *  per-frame frame-data far ptrs.  Back MK_FP with a >256 KB linear "far memory"
+ *  shadow so those reconstructed pointers land in real host storage the harness can
+ *  pre-seed.  MK_FP(seg, off) -> far_mem + ((seg<<4) + off).  The captured far ptrs
+ *  reach ~0x271b0 (B stream seg 0x203b : off 0x6e00); size generously. */
+#define FAR_MEM_SIZE 0x40000UL
+static unsigned char far_mem[FAR_MEM_SIZE];
+#define MK_FP(seg, off) ((void *)(far_mem + (((u32)(seg) << 4) + (u16)(off))))
+
 /* Cross-module globals the anim fns read/write but that anim.c declares extern
    (owned elsewhere).  anim.c does not pull their owning headers, so the harness
    provides host definitions (mirroring the items_ctest / p2_ctest convention of
@@ -195,6 +206,10 @@ static void seed_globals(const snap_t *s)
     memcpy(anim_b_records, s->recs + A_SLOTS * REC_LEN, B_SLOTS * REC_LEN);
     for (i = 0; i < A_SLOTS; i++) anim_channels_a_tbl[i] = &anim_a_records[i];
     for (i = 0; i < B_SLOTS; i++) anim_channels_b_tbl[i] = &anim_b_records[i];
+    /* The A scan terminator (engine 0x4c64, active=0xFF) at index A_SLOTS: the
+       allocator's unbounded slot scan stops on it (steppers never index it). */
+    anim_a_terminator.active = 0xff;
+    anim_channels_a_tbl[A_SLOTS] = &anim_a_terminator;
     anim_target_cell      = s->anim_target_cell;
     g_anim_channel_idx    = s->g_anim_channel_idx;
     g_anim_cur_cmd_byte   = s->g_anim_cur_cmd_byte;
@@ -218,6 +233,111 @@ static void read_live_recs(u8 *out)
 {
     memcpy(out, anim_a_records, A_SLOTS * REC_LEN);
     memcpy(out + A_SLOTS * REC_LEN, anim_b_records, B_SLOTS * REC_LEN);
+}
+
+/* Field accessors on a flat 7*12 snap-record buffer (slot S, byte B). */
+static u8  rec_u8 (const u8 *recs, unsigned slot, unsigned b) { return recs[slot * REC_LEN + b]; }
+static u16 rec_u16(const u8 *recs, unsigned slot, unsigned b) { return rd16(recs + slot * REC_LEN + b); }
+
+/* ── ENGINE-DATA SEEDING (the far-ptr inputs the host cannot read from the engine) ─
+ *  Three reconstructed anim fns dereference engine DGROUP/level data the host trace
+ *  does NOT capture as raw memory: (a) the allocator's per-action tile-def far ptr,
+ *  (b) each stepper's per-frame far data ptr, and (c) each active slot's byte-STREAM
+ *  (read through MK_FP).  We reconstruct those inputs FROM THE CAPTURED EXIT RECORD
+ *  (the same seed-from-capture method physics_ctest uses for runtime move-scripts):
+ *  the engine's own output bytes are placed back where the reconstructed fn will read
+ *  them, so the ported control flow (slot scan, stream-ptr advance, 0xFF active-clear,
+ *  frame routing) is exercised genuinely.  The INDEPENDENT, non-seeded genuine signals
+ *  the comparator still checks: the claimed slot (scan), active-flag transitions,
+ *  cell, the stream-ptr +1 advance, and the tilemap stamp address. */
+
+/* (a) ALLOCATOR: build a host tile-def for `action` from the claimed slot's EXIT
+   record + the captured tilemap stamp, and point anim_a_tiledef_tbl[action*4] at it.
+   The claimed A slot is the one that goes active 0->1 (or whose cell becomes the
+   target) between entry and exit. */
+#define TILEDEF_SHADOW_SEG 0x2000      /* an unused far_mem region for the tile-def  */
+#define TILEDEF_SHADOW_OFF 0x0000
+static void seed_alloc_tiledef(const record_t *r, u8 action)
+{
+    unsigned slot, claimed = 0;
+    u8 *td;
+    u16 s_off = 0, s_seg = 0;
+    /* find the claimed A slot: active 0->1, else first whose [1]==target cell. */
+    for (slot = 0; slot < A_SLOTS; slot++) {
+        if (rec_u8(r->ent.recs, slot, 0) == 0 && rec_u8(r->ex.recs, slot, 0) == 1) {
+            claimed = slot; break;
+        }
+    }
+    if (slot == A_SLOTS) {
+        for (slot = 0; slot < A_SLOTS; slot++)
+            if (rec_u8(r->ex.recs, slot, 0) == 1 &&
+                rec_u8(r->ex.recs, slot, 1) == r->ex.anim_target_cell) { claimed = slot; break; }
+    }
+    s_off = rec_u16(r->ex.recs, claimed, 2);   /* exit stream ptr off (= tile_def[2..3]) */
+    s_seg = rec_u16(r->ex.recs, claimed, 4);   /* exit stream ptr seg (= tile_def[4..5]) */
+    td = (u8 *)MK_FP(TILEDEF_SHADOW_SEG, TILEDEF_SHADOW_OFF);
+    td[0] = r->tile_byte_x;                     /* tile_def[0] = the tilemap stamp byte   */
+    td[1] = 0;
+    td[2] = (u8)(s_off & 0xff); td[3] = (u8)(s_off >> 8);
+    td[4] = (u8)(s_seg & 0xff); td[5] = (u8)(s_seg >> 8);
+    /* anim_a_tiledef_tbl[action*4] = far ptr {off, seg} of the shadow tile-def. */
+    anim_a_tiledef_tbl[action * 4 + 0] = (u8)(TILEDEF_SHADOW_OFF & 0xff);
+    anim_a_tiledef_tbl[action * 4 + 1] = (u8)(TILEDEF_SHADOW_OFF >> 8);
+    anim_a_tiledef_tbl[action * 4 + 2] = (u8)(TILEDEF_SHADOW_SEG & 0xff);
+    anim_a_tiledef_tbl[action * 4 + 3] = (u8)(TILEDEF_SHADOW_SEG >> 8);
+}
+
+/* (b)+(c) STEPPER: for each ACTIVE entry slot of channel A (or B):
+ *  (c) place the stream byte the engine read (= the slot's EXIT frame byte [+6]) at
+ *      the entry stream ptr's MK_FP shadow address;
+ *  (b) if that byte is non-0/non-0xFF, the stepper does TWO levels of indirection:
+ *      it reads a far ptr from frame_tbl[byte*4], then reads two words AT that far
+ *      ptr and stores them into slot[+8..+11].  So we point frame_tbl[byte*4] at a
+ *      per-byte shadow frame-data record and write the slot's EXIT [+8..+11] words
+ *      there (slot[8]=*frame_data, slot[10]=*(frame_data+2)).
+ *  The frame-data shadow lives in a dedicated far_mem region, one 4-byte record per
+ *  frame byte (byte*4 offset), distinct from the stream-byte region. */
+#define FRAMEDATA_SHADOW_SEG 0x3000    /* far_mem region for per-frame data records   */
+static void seed_stepper_stream(const record_t *r, int is_b)
+{
+    unsigned base = is_b ? A_SLOTS : 0;
+    unsigned n    = is_b ? B_SLOTS : A_SLOTS;
+    u8 *frame_tbl = is_b ? anim_b_frame_tbl : anim_a_frame_tbl;
+    unsigned s;
+    for (s = 0; s < n; s++) {
+        unsigned slot = base + s;
+        if (rec_u8(r->ent.recs, slot, 0) == 0) continue;   /* only active slots step  */
+        {
+            u16 e_off = rec_u16(r->ent.recs, slot, 2);
+            u16 e_seg = rec_u16(r->ent.recs, slot, 4);
+            u8  byte  = rec_u8 (r->ex.recs,  slot, 6);      /* the byte the engine read */
+            u8 *p = (u8 *)MK_FP(e_seg, e_off);
+            *p = byte;
+            if (byte != 0 && byte != 0xff) {
+                u16 d_w0 = rec_u16(r->ex.recs, slot, 8);    /* slot[8]  = *frame_data    */
+                u16 d_w1 = rec_u16(r->ex.recs, slot, 10);   /* slot[10] = *(frame_data+2)*/
+                u16 fd_off = (u16)(byte * 4);               /* per-byte shadow record    */
+                u8 *fd = (u8 *)MK_FP(FRAMEDATA_SHADOW_SEG, fd_off);
+                fd[0] = (u8)(d_w0 & 0xff); fd[1] = (u8)(d_w0 >> 8);
+                fd[2] = (u8)(d_w1 & 0xff); fd[3] = (u8)(d_w1 >> 8);
+                /* frame_tbl[byte*4] = far ptr {off=fd_off, seg=FRAMEDATA_SHADOW_SEG}. */
+                frame_tbl[byte * 4 + 0] = (u8)(fd_off & 0xff);
+                frame_tbl[byte * 4 + 1] = (u8)(fd_off >> 8);
+                frame_tbl[byte * 4 + 2] = (u8)(FRAMEDATA_SHADOW_SEG & 0xff);
+                frame_tbl[byte * 4 + 3] = (u8)(FRAMEDATA_SHADOW_SEG >> 8);
+            }
+        }
+    }
+}
+
+/* Recover the action code from an alloc scenario name "alloc_action_XX" (XX hex). */
+static int recover_action(const char *scname, u8 *action_out)
+{
+    const char *p = strstr(scname, "alloc_action_");
+    if (!p) return 0;
+    p += strlen("alloc_action_");
+    *action_out = (u8)strtoul(p, NULL, 16);
+    return 1;
 }
 
 /* ── (A) SEMANTIC-STATE COMPARATOR — channel records + tilemap stamp ─────────────
@@ -289,9 +409,12 @@ static const char *cmp_descriptor(const record_t *r, long *got, long *want)
 typedef struct { u16 off; void (*fn)(void); } ported_t;
 
 static const ported_t PORTED[] = {
-    { FN_APPLY_CELL_ANIMATION, NULL },   /* T3 — channel-A allocator                */
-    { FN_STEP_ANIM_A,          NULL },   /* T3 — advance 3 A channels               */
-    { FN_STEP_ANIM_B,          NULL },   /* T3 — advance 4 B channels               */
+    /* T3 PORTED (anim.c bodies).  apply_cell_animation takes a cdecl action arg; it is
+       stored here as void(*)(void) and called with the recovered action in the run
+       loop (the registry is keyed on offset, the arg is handled at the call site). */
+    { FN_APPLY_CELL_ANIMATION, (void (*)(void))apply_cell_animation }, /* T3 alloc    */
+    { FN_STEP_ANIM_A,          (void (*)(void))step_anim_channels_a }, /* T3 step 3 A */
+    { FN_STEP_ANIM_B,          (void (*)(void))step_anim_channels_b }, /* T3 step 4 B */
     { FN_DRAW_ANIM_A,          NULL },   /* T4 — erase+blit+save-under (A)          */
     { FN_DRAW_ANIM_B,          NULL },   /* T4 — erase+blit+save-under (B)          */
     { FN_ERASE_ANIM_A,         NULL },   /* T4 — restore_bg_view current (A)        */
@@ -344,7 +467,7 @@ static int run_per_function(record_t *recs, long nrec, const char *scname,
             continue;
         }
 
-        /* ── PORTED: seed entry + tilemap, call, assert ──────────────────────── */
+        /* ── PORTED: seed entry + tilemap + engine-data, call, assert ────────── */
         {
             const char *bad; long got = 0, want = 0;
             seed_globals(&r->ent);
@@ -354,15 +477,23 @@ static int run_per_function(record_t *recs, long nrec, const char *scname,
                 p1_sprite = host_desc;       /* draw fns write the blit descriptor */
 
             if (r->fn_addr == FN_APPLY_CELL_ANIMATION) {
-                /* apply_cell_animation(action) — the cdecl action code.  The trace
-                   does not carry the action word directly; the future port recovers
-                   it from the scenario setup (the alloc scenarios fix it).  Until the
-                   fn is PORTED this branch is dead code (fn==NULL above), so a 0 arg
-                   is a safe placeholder the T3 port will replace with the recovered
-                   action. */
+                /* apply_cell_animation(action) — the cdecl action code.  Recovered
+                   from the scenario name ("alloc_action_XX"); seed the action's
+                   tile-def far ptr from the captured EXIT (stamp byte + claimed-slot
+                   stream ptr) so the reconstructed allocator's slot scan + tilemap
+                   stamp + stream-ptr copy run genuinely. */
                 void (*f1)(u8) = (void (*)(u8))fn;
-                f1(0);
+                u8 action = 0;
+                if (!recover_action(scname, &action)) {
+                    /* not an alloc scenario name — skip (no action to drive). */
+                    st->unported++;
+                    continue;
+                }
+                seed_alloc_tiledef(r, action);
+                f1(action);
             } else {
+                /* steppers: seed each active slot's stream byte + frame-data ptr. */
+                seed_stepper_stream(r, r->fn_addr == FN_STEP_ANIM_B);
                 fn();
             }
 

@@ -80,18 +80,26 @@ typedef struct anim_chan_rec {
     u16 data_seg;         /* +10 frame-data ptr (far seg)                         */
 } anim_chan_rec;
 
-/* ── slot tables — OWNED BY anim.c (far-ptr tables; each entry -> a record) ────── */
-extern anim_chan_rec __far *anim_channels_a_tbl[ANIM_A_SLOTS]; /* DGROUP 0x4c70/0x4c72 */
-extern anim_chan_rec __far *anim_channels_b_tbl[ANIM_B_SLOTS]; /* DGROUP 0x4cbc/0x4cbe */
+/* ── slot tables — OWNED BY anim.c (far-ptr tables; each entry -> a record) ──────
+   A table = ANIM_A_SLOTS+1 entries: 3 usable slots + a 0xFF-terminator record
+   (engine 0x4c64) the allocator scan stops on (see anim.c). */
+extern anim_chan_rec __far *anim_channels_a_tbl[ANIM_A_SLOTS + 1]; /* DGROUP 0x4c70/0x4c72 */
+extern anim_chan_rec __far *anim_channels_b_tbl[ANIM_B_SLOTS];     /* DGROUP 0x4cbc/0x4cbe */
 
-/* The records the slot tables point at (one fixed record per slot). */
+/* The records the slot tables point at (one fixed record per slot) + the A
+   scan-terminator record (active=0xFF) the allocator stops on. */
 extern anim_chan_rec anim_a_records[ANIM_A_SLOTS];
 extern anim_chan_rec anim_b_records[ANIM_B_SLOTS];
+extern anim_chan_rec anim_a_terminator;
 
-/* ── per-action / per-frame far-ptr tables — OWNED BY anim.c ─────────────────── */
-extern u8 __far *anim_a_tiledef_tbl;  /* DGROUP 0x2ede/0x2ee0 — action*4 -> tile-def */
-extern u8 __far *anim_a_frame_tbl;    /* DGROUP 0x3d6a/0x3d6c — cmd*4   -> frame data */
-extern u8 __far *anim_b_frame_tbl;    /* DGROUP 0x40a6/0x40a8 — frame*4 -> frame data */
+/* ── per-action / per-frame far-ptr tables — OWNED BY anim.c ─────────────────────
+   Tables of 4-byte FAR POINTERS (off-half @ N*4+0, seg-half @ N*4+2), indexed by
+   action/cmd/frame byte; an entry's far ptr is rebuilt with MK_FP(seg, off) at the
+   use site (same byte-blob representation as player.c's mode_script_tbl). */
+#define ANIM_FARPTR_TBL_LEN  (256 * 4)
+extern u8 anim_a_tiledef_tbl[ANIM_FARPTR_TBL_LEN]; /* DGROUP 0x2ede/0x2ee0 action*4 */
+extern u8 anim_a_frame_tbl[ANIM_FARPTR_TBL_LEN];   /* DGROUP 0x3d6a/0x3d6c cmd*4     */
+extern u8 anim_b_frame_tbl[ANIM_FARPTR_TBL_LEN];   /* DGROUP 0x40a6/0x40a8 frame*4   */
 
 /* ── grid-coord / pos tables — OWNED BY anim.c (draw/erase A/B) ──────────────── */
 extern u8 __far *anim_a_grid_tbl;     /* DGROUP 0x32be/0x32c0 — cell*4 grid-coord (A) */

@@ -43,9 +43,10 @@
  * (1) The 2 landing leaves past cell-resolution are RECONSTRUCTED in player.c
  *     (Phase 2, Task 3); the move-step substates + their two delegates
  *     p1_exec_pending_action (465e) / move_down_step (253f) are RECONSTRUCTED in
- *     player.c (Phase 2, Task 4).  Only the anim-channel/FX allocator
- *     apply_cell_animation (69aa) remains a stub here (→ Phase 5/6). */
-void apply_cell_animation(u8 fx_code)       { (void)fx_code; }  /* 1000:69aa */
+ *     player.c (Phase 2, Task 4).  The anim-channel/FX allocator
+ *     apply_cell_animation (69aa) is RECONSTRUCTED in anim.c (Phase 5, Task 3);
+ *     its stub is removed (dup-symbol once anim.obj links). */
+/* apply_cell_animation (1000:69aa) — RECONSTRUCTED in anim.c (Phase-5 T3). */
 
 /* (2) Sound / anim helper leaves the move handlers call. */
 void play_sound(u8 sound_id)                { (void)sound_id; }  /* 1000:6e11 */
@@ -277,9 +278,9 @@ void p1_advance_grid_history(void)   {}
 
 /* p2_step_scripted_move (1000:4c14) — RECONSTRUCTED in player2.c (Phase-4 T3). */
 
-/* Anim-channel STEP (advance) — distinct from the entity.c draw side. */
-void step_anim_channels_a(void)      {}
-void step_anim_channels_b(void)      {}
+/* Anim-channel STEP (advance) — RECONSTRUCTED in anim.c (Phase-5 T3:
+   step_anim_channels_a 1000:14e4, step_anim_channels_b 1000:15a1); their stubs are
+   removed (dup-symbol once anim.obj links). */
 
 /* Player-view erase/restore/render (the engine's per-tick view present chain).
    The P2 entries (erase_p2_view 1000:19a1, render_p2_view 1000:1c41) are
