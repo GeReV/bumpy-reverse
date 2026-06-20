@@ -53,22 +53,48 @@
  *  here (dup-symbol once sound.obj links).  play_sound_effect (6e30) +
  *  schedule_timer_callback_a/b/c (9488/9502/956d) are also reconstructed in sound.c (T3);
  *  the deeper callees they reach are stubbed below for the BUMPY.EXE link (deferred T4/T5). */
-void play_action_sound(void)                {}
+/* play_action_sound (1000:63be) — RECONSTRUCTED in sound.c (Phase-6 T4); stub removed
+ *  (dup-symbol once sound.obj's T4 bodies link).  The other L1 event wrappers
+ *  (play_contact/exit/pickup/event/state_sound) + the L2 device fns + the L3 timer-table
+ *  fns are likewise reconstructed in sound.c (T4); their stubs are not (re)defined here. */
 
-/* ── Phase-6 T3 still-stubbed sound callees (faithful-signature; for the link only) ──
- *  RECONSTRUCTION FIDELITY: these are reached by the T3-ported sound pipeline
- *  (play_sound_effect / schedule_timer_callback_a/b/c) but are NOT part of the
- *  validated semantic state (the tone param frame + device-guarded dispatch).  No-op /
- *  benign-default bodies so BUMPY.EXE links; their real ports land in Phase-6 T4/T5.
- *    record_min_status_code (1000:945b) — records a min status code from a packed
- *        flags word; the validated frame does not depend on it.            → T4/T5.
- *    FUN_1000_7df9          (1000:7df9) — the PIT/timer scheduler.          → T4.
- *    speaker_gate_reset     (1000:9440) — PC-speaker gate reset (L4).       → T5.
- *    FUN_1000_8a07          (1000:8a07) — OPL/MPU raw two-byte sample emit.  → T5. */
+/* ── Phase-6 T3/T4 still-stubbed sound callees (faithful-signature; for the link only) ──
+ *  RECONSTRUCTION FIDELITY: these are reached by the ported sound pipeline + the T4
+ *  L1/L2/L3 bodies but are NOT part of the validated semantic state (the tone param
+ *  frame + device-guarded dispatch + the timer tables).  No-op / benign-default bodies so
+ *  BUMPY.EXE links; their real ports land in Phase-6 T5/T6.
+ *    record_min_status_code (1000:945b) — records a min status code.        → T5.
+ *    speaker_gate_reset     (1000:9440) — PC-speaker gate reset (L4).       → T6.
+ *    FUN_1000_8a07          (1000:8a07) — OPL/MPU raw two-byte sample emit.  → T6.
+ *  FUN_1000_7df9 (1000:7df9) is NO LONGER stubbed — it is the L3 timer-slot writer
+ *  set_timer_slot_raw, now RECONSTRUCTED in sound.c (T4). */
 void record_min_status_code(u16 status)        { (void)status; }   /* 1000:945b */
-void FUN_1000_7df9(void)                        {}                  /* 1000:7df9 */
 void speaker_gate_reset(void)                   {}                  /* 1000:9440 */
 void FUN_1000_8a07(u8 sample_lo, u8 sample_hi)  { (void)sample_lo; (void)sample_hi; }  /* 1000:8a07 */
+
+/* ── Phase-6 T4 still-stubbed L4/L5 + out-of-scope callees the T4 bodies reach ──────
+ *  RECONSTRUCTION FIDELITY: faithful-signature no-op stubs so BUMPY.EXE links.  The L4
+ *  hardware drivers (MPU-401 / PC-speaker / OPL / timing primitive) + the dispatch_b/c/d
+ *  backends + the timer teardown land in Phase-6 T5/T6.  FUN_1000_6183 is an out-of-scope
+ *  entity-management sweep (→ entity subsystem), reached only from play_contact_sound for
+ *  contact codes 0xe..0x11. */
+void mpu401_reset_to_uart(void)  {}   /* L4 MPU reset → T5  */
+void FUN_1000_8b2a(void)         {}   /* snddrv_init substep → T5 */
+void pc_speaker_silence(void)    {}   /* 1000:9115 L4 → T6 */
+void FUN_1000_8ad0(void)         {}   /* 1000:8ad0 L4 → T6 */
+void FUN_1000_8e2f(void)         {}   /* 1000:8e2f L4 → T6 */
+void FUN_1000_89e2(void)         {}   /* 1000:89e2 L4 timing primitive → T6 */
+void FUN_1000_91cf(void)         {}   /* 1000:91cf dispatch_b backend → T6 */
+void FUN_1000_8af6(void)         {}   /* 1000:8af6 dispatch_b backend → T6 */
+void FUN_1000_8e48(void)         {}   /* 1000:8e48 dispatch_b backend → T6 */
+void FUN_1000_91d7(void)         {}   /* 1000:91d7 dispatch_c backend → T6 */
+void FUN_1000_8b04(void)         {}   /* 1000:8b04 dispatch_c backend → T6 */
+void FUN_1000_8e50(void)         {}   /* 1000:8e50 dispatch_c backend → T6 */
+void FUN_1000_91df(void)         {}   /* 1000:91df dispatch_d backend → T6 */
+void FUN_1000_8b0d(void)         {}   /* 1000:8b0d dispatch_d backend → T6 */
+void FUN_1000_8e58(void)         {}   /* 1000:8e58 dispatch_d backend → T6 */
+void FUN_1000_7fef(void)         {}   /* 1000:7fef timer teardown/restore → T5/T6 */
+void FUN_1000_6183(void)         {}   /* 1000:6183 out-of-scope entity sweep (→ entity) */
 void apply_contact_action(u8 code)          { (void)code; }
 void play_walk_anim_default(void)           {}  /* 1000:4361 */
 /* p1_set_pixel_from_cell 1000:4906 — set p1_pixel_x/y + move_step_count from the
@@ -216,10 +242,8 @@ void init_view_anim_descriptors(void)
 {
 }
 
-/* sound_select_device 1000:6de3 — detect + select sound device. */
-void sound_select_device(void)
-{
-}
+/* sound_select_device 1000:6de3 — RECONSTRUCTED in sound.c (Phase-6 T4); stub removed
+ *  (dup-symbol once sound.obj's T4 bodies link). */
 
 
 /* ── C. reset_game_state (1000:0bf9) callees ────────────────────────────────── */

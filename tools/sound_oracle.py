@@ -262,9 +262,20 @@ EFFECT_TONE_TABLE: Dict[int, str] = {
 # Trace format constants
 # ---------------------------------------------------------------------------
 TRACE_MAGIC: bytes = b"SNDTRC01"
-TRACE_VERSION: int = 1
+# version 2 (Phase-6 T4): the SND_SNAP gains the two L3 timer tables (the 0x549c slot
+# table the set_timer_slot/get_timer_slot_field path writes/reads, and the 0x5516 cb
+# table arm_timer_callback/disable_timer_callback install into) so the L3 timer-table
+# install/disable is observable in the semantic-state differential.  v1 had only the
+# device/driver scalars + the tone param frame + the timer-cb far ptr.
+TRACE_VERSION: int = 2
+# L3 timer tables captured into the SND_SNAP (Phase-6 T4).
+OFF_TIMER_SLOT_TABLE: int = 0x549c    # DGROUP — set_timer_slot_raw / get_timer_slot_field
+TIMER_SLOT_TABLE_LEN: int = 0x40      # covers channels 0..3 at (idx+2)*8+0x549c
+TIMER_CB_TABLE_LEN: int = 0x20        # 0x5516 — channels 0..3 at channel*8 (8 B each)
 # SND_SNAP: 5 words + 4 bytes + 10 param-frame words + 2 timer-cb words
-SND_SNAP_FMT: str = "<hHHHHBBBB" + "H" * PARAM_FRAME_WORDS + "HH"
+#           + the 0x549c slot table (0x40 B) + the 0x5516 cb table (0x20 B).
+SND_SNAP_FMT: str = ("<hHHHHBBBB" + "H" * PARAM_FRAME_WORDS + "HH"
+                     + "%dB" % TIMER_SLOT_TABLE_LEN + "%dB" % TIMER_CB_TABLE_LEN)
 SND_SNAP_SIZE: int = struct.calcsize(SND_SNAP_FMT)
 
 # ---------------------------------------------------------------------------
@@ -333,6 +344,104 @@ SCENARIOS: List[Scenario] = [
         (0x9440, []),    # speaker_gate_reset
         (0x9451, []),    # speaker_gate_strobe
         (0x946e, []),    # record_status_and_strobe_speaker
+    ]),
+]
+
+# ---------------------------------------------------------------------------
+# Phase-6 T4 SEEDING scenarios.  Several T4-scoped fns are NOT reached by scenarios
+# 1–5 (the play_exit/pickup/contact/event L1 wrappers; the L2 snddrv_dispatch_a/b/c/d +
+# snd_busy_delay; the L3 timer helpers set_timer_slot/arm_timer_callback/
+# disable_timer_callback/get_timer_slot_field/timer_restore).  To validate them under the
+# semantic-state differential we SEED each via the existing call_near() direct-invocation
+# harness with a chosen entry state, exactly as Phase-4 T4 extended p2_oracle.  Documented
+# in local/build/sound_model.md.
+#
+# A direct call here is a 3-tuple (fn_off, args, preseed) where preseed is a list of
+# (space, size, off, value): space 'dg' (DGROUP off) or 'code' (CODE seg off, e.g.
+# snddrv_mode @ CODE 0x85b3); size 1 or 2 bytes.  Seeds are applied right before the call.
+#
+# arm_timer_callback (7f2b) + set_timer_slot (7de8) take a FAR callback pushed as two
+# stack words (off, then seg).  We push a CODE-segment far cb (off=0x9631, seg=code_seg —
+# the live runtime CODE base) so the captured cb_seg is the relocated base the comparator
+# already accounts for via seg_to_trace.
+#   call_near pushes args in REVERSE, so [arg0, arg1, off, seg] puts arg0 at [BP+4].
+#   set_timer_slot(channel, value, cb_off, cb_seg):  [BP+4]=channel [BP+6]=value [BP+8..]=far cb
+#   arm_timer_callback(channel, reload, cb_off, cb_seg): same stack shape.
+# (cb seg is filled at run time from code_seg in run_seed_scenario, see the SEED marker.)
+# ---------------------------------------------------------------------------
+SEED_FAR_CB_OFF = 0x9631   # a real CODE-seg far-cb offset (the schedule_a callback)
+
+T4_SEED_SCENARIOS = [
+    # 6: L1 event wrappers not reached by gameplay.  Seed device + the index global, then
+    #    direct-call.  std device (0) and OPL device (4) both, so both LUT halves run.
+    (6, "t4_l1_wrappers", [
+        # play_exit_sound (6305): device-only (id 3 std / 0xd OPL).
+        (0x6305, [], [('dg', 2, OFF_SOUND_DEVICE_STATE, 0)]),
+        (0x6305, [], [('dg', 2, OFF_SOUND_DEVICE_STATE, 4)]),
+        # play_pickup_sound (645d): id 0xb std / 0x2c OPL.
+        (0x645d, [], [('dg', 2, OFF_SOUND_DEVICE_STATE, 0)]),
+        (0x645d, [], [('dg', 2, OFF_SOUND_DEVICE_STATE, 4)]),
+        # play_event_sound_64c1: id 0xe std / 0x21 OPL.
+        (0x64c1, [], [('dg', 2, OFF_SOUND_DEVICE_STATE, 0)]),
+        (0x64c1, [], [('dg', 2, OFF_SOUND_DEVICE_STATE, 4)]),
+        # play_contact_sound (640c): LUT[p1_contact_code]; pick code 1 (std->0xc), code 8
+        #   (std->0xe, also runs FUN_6183 — stubbed), and code 0 (->0, no play).
+        (0x640c, [], [('dg', 2, OFF_SOUND_DEVICE_STATE, 0), ('dg', 1, OFF_P1_CONTACT_CODE, 1)]),
+        (0x640c, [], [('dg', 2, OFF_SOUND_DEVICE_STATE, 0), ('dg', 1, OFF_P1_CONTACT_CODE, 8)]),
+        (0x640c, [], [('dg', 2, OFF_SOUND_DEVICE_STATE, 4), ('dg', 1, OFF_P1_CONTACT_CODE, 1)]),
+        (0x640c, [], [('dg', 2, OFF_SOUND_DEVICE_STATE, 0), ('dg', 1, OFF_P1_CONTACT_CODE, 0)]),
+        # play_state_sound_79b9 (647e): LUT[tile_below_player] -> play_sound, then the
+        #   player tail p1_try_trigger_pending_action.  Seed input_state=0 so that tail is
+        #   INERT (its `input_state & 0x11` guard fails -> no anim/nested sound), isolating
+        #   the LUT->play_sound cascade for the differential.  Cover std + OPL, tbp 1 & 7
+        #   (std LUT -> 0xb / 0x9) and tbp 0 (-> 0, no play).
+        (0x647e, [], [('dg', 2, OFF_SOUND_DEVICE_STATE, 0), ('dg', 1, OFF_TILE_BELOW_PLAYER, 1),
+                      ('dg', 1, OFF_INPUT_STATE, 0)]),
+        (0x647e, [], [('dg', 2, OFF_SOUND_DEVICE_STATE, 0), ('dg', 1, OFF_TILE_BELOW_PLAYER, 7),
+                      ('dg', 1, OFF_INPUT_STATE, 0)]),
+        (0x647e, [], [('dg', 2, OFF_SOUND_DEVICE_STATE, 4), ('dg', 1, OFF_TILE_BELOW_PLAYER, 1),
+                      ('dg', 1, OFF_INPUT_STATE, 0)]),
+        (0x647e, [], [('dg', 2, OFF_SOUND_DEVICE_STATE, 0), ('dg', 1, OFF_TILE_BELOW_PLAYER, 0),
+                      ('dg', 1, OFF_INPUT_STATE, 0)]),
+    ]),
+    # 7: L2 dispatch fan-out + snd_busy_delay.  Seed snddrv_mode (CODE 0x85b3) to each of
+    #    the 3 backend selectors (0/1/4); the backends are STUBBED so no port-I/O, and the
+    #    validated state (snddrv_mode etc.) is unchanged by the dispatch.
+    #    NOTE: the L4 backends loop over real hardware (FUN_8ad0 settle / FUN_8e2f OPL
+    #    all-notes-off run thousands of nested L4 calls).  Those nested L4 records are
+    #    UNPORTED (validated never) and only bloat the trace, so we seed each dispatch
+    #    fan-out with mode=0 (the cheapest backend, pc_speaker_silence ~2 events) which
+    #    fully validates the dispatch record's semantic state (unchanged by any branch),
+    #    plus dispatch_a once at mode=1/mode=4 for port branch coverage.
+    (7, "t4_l2_dispatch", [
+        (0x85b5, [], [('code', 2, COFF_SNDDRV_MODE, 0)]),   # dispatch_a -> pc_speaker_silence
+        (0x85b5, [], [('code', 2, COFF_SNDDRV_MODE, 1)]),   # dispatch_a -> FUN_8e2f (coverage)
+        (0x85b5, [], [('code', 2, COFF_SNDDRV_MODE, 4)]),   # dispatch_a -> FUN_8ad0 (coverage)
+        (0x85db, [], [('code', 2, COFF_SNDDRV_MODE, 0)]),   # dispatch_b
+        (0x8600, [], [('code', 2, COFF_SNDDRV_MODE, 0)]),   # dispatch_c
+        (0x8626, [], [('code', 2, COFF_SNDDRV_MODE, 0)]),   # dispatch_d
+        # snd_busy_delay (872e): naked asm, count=CX (seeded small in run_seed_scenario).
+        #   Its FUN_89e2 callee is STUBBED on the host (no port-I/O) and it mutates no
+        #   validated state — captured as a no-op-on-state record.
+        (0x872e, [], []),
+    ]),
+    # 8: L3 timer-table mgmt — arm/disable on the 0x5516 cb table, set/get on the 0x549c
+    #    slot table, timer_restore (-> FUN_7fef stub).  These write/read the timer tables
+    #    now captured in the SND_SNAP.  Far cb pushed as (off, seg=code_seg) — SEED marker.
+    (8, "t4_l3_timer_table", [
+        # arm_timer_callback(channel=1, reload=0x1f4, cb=SEED_FAR_CB_OFF:code_seg)
+        (0x7f2b, [1, 0x1f4, SEED_FAR_CB_OFF, "CODE_SEG"], []),
+        (0x7f2b, [3, 0x10,  SEED_FAR_CB_OFF, "CODE_SEG"], []),
+        # disable_timer_callback(channel=1) -> 0xffff in the cb table.
+        (0x7f65, [1], []),
+        # set_timer_slot(channel=2, value=0x100, cb=SEED_FAR_CB_OFF:code_seg)
+        (0x7de8, [2, 0x100, SEED_FAR_CB_OFF, "CODE_SEG"], []),
+        # set_timer_slot(channel=0, value=0x1f4 (=500, OUT OF RANGE) -> returns 0, no write)
+        (0x7de8, [0, 0x1f4, SEED_FAR_CB_OFF, "CODE_SEG"], []),
+        # get_timer_slot_field(slot_index=2) -> read back the value set above (return only).
+        (0x7e3d, [2], []),
+        # timer_restore (7fde) -> FUN_7fef stub (no state change).
+        (0x7fde, [], []),
     ]),
 ]
 
@@ -695,12 +804,18 @@ def main() -> None:
     def crd_u16(off: int) -> int:
         return struct.unpack("<H", bytes(uc.mem_read(CODE_LIN + off, 2)))[0]
 
+    def dg_block(off: int, n: int) -> bytes:
+        return bytes(uc.mem_read(DG_LIN + off, n))
+
     def snap() -> bytes:
         # CODE-segment param frame: 9 words (0x9788..0x9798) + the byte 0x979a as a word.
         frame = []
         for i in range(PARAM_FRAME_WORDS - 1):
             frame.append(crd_u16(COFF_PARAM_FRAME + i * 2))
         frame.append(crd8(COFF_PARAM_FRAME + 0x12))   # 0x979a (single byte -> low byte)
+        # L3 timer tables (DGROUP): the 0x549c slot table + the 0x5516 cb table (T4).
+        slot_tbl = dg_block(OFF_TIMER_SLOT_TABLE, TIMER_SLOT_TABLE_LEN)
+        cb_tbl = dg_block(OFF_TIMER_CB_TABLE, TIMER_CB_TABLE_LEN)
         return struct.pack(
             SND_SNAP_FMT,
             rd_s16(OFF_SOUND_DEVICE_STATE),
@@ -711,10 +826,13 @@ def main() -> None:
             rd8(OFF_P1_PENDING_ACTION),
             rd8(OFF_PREV_GAME_MODE),
             rd8(OFF_P1_CONTACT_CODE),
-            0,
+            rd8(OFF_TILE_BELOW_PLAYER),    # the former 'pad' byte now carries the
+                                           # play_state_sound_79b9 LUT index (T4).
             *frame,
             crd_u16(COFF_TIMER_CB_OFF),
-            crd_u16(COFF_TIMER_CB_SEG))
+            crd_u16(COFF_TIMER_CB_SEG),
+            *slot_tbl,
+            *cb_tbl)
 
     # ---------------------------------------------------------------------------
     # Sound-function hooks (entry + exit via dynamic return-address hook)
@@ -881,7 +999,7 @@ def main() -> None:
     LANDING_LIN = CODE_LIN + LANDING_OFF      # ret addr: NOP here (exit hook fires)
     STOP_LIN = LANDING_LIN + 1                # `until` stop at the HLT
 
-    def call_near(fn_off: int, args: List[int]) -> None:
+    def call_near(fn_off: int, args: List[int], cx: Optional[int] = None) -> None:
         saved = bytes(uc.mem_read(LANDING_LIN, 2))
         uc.mem_write(LANDING_LIN, b"\x90\xF4")   # NOP ; HLT
         ss = uc.reg_read(UC_X86_REG_SS) & 0xFFFF
@@ -895,6 +1013,10 @@ def main() -> None:
         uc.reg_write(UC_X86_REG_DS, DS_SOUND)
         uc.reg_write(UC_X86_REG_CS, code_seg)
         uc.reg_write(UC_X86_REG_IP, fn_off)
+        if cx is not None:
+            # snd_busy_delay (872e) is a naked asm routine: its delay count is CX.  Seed it
+            # SMALL so the FUN_89e2 busy loop does not run 64K iterations (trace bloat).
+            uc.reg_write(UC_X86_REG_CX, cx & 0xFFFF)
         try:
             uc.emu_start(CODE_LIN + fn_off, STOP_LIN, count=20_000_000)
         except UcError as e:
@@ -934,6 +1056,29 @@ def main() -> None:
         capturing["on"] = False
         return list(cur_records)
 
+    # ---------------------------------------------------------------------------
+    # Phase-6 T4 seeding-scenario runner (preseed globals -> call_near -> capture).
+    # ---------------------------------------------------------------------------
+    def apply_preseed(preseed) -> None:
+        for (space, size, off, val) in preseed:
+            base = DG_LIN if space == "dg" else CODE_LIN
+            uc.mem_write(base + off, struct.pack("<H" if size == 2 else "<B",
+                                                 val & (0xFFFF if size == 2 else 0xFF)))
+
+    def run_seed_scenario(sc_id: int, name: str, calls) -> List[bytes]:
+        cur_records.clear()
+        capturing["on"] = True
+        for (fn_off, args, preseed) in calls:
+            apply_preseed(preseed)
+            # resolve the "CODE_SEG" placeholder in a far-cb arg to the live runtime base.
+            real_args = [code_seg if a == "CODE_SEG" else a for a in args]
+            # snd_busy_delay (872e) takes its count in CX — seed small (3) to bound the
+            # naked-asm busy loop (else uninitialised CX -> ~64K FUN_89e2 calls, trace bloat).
+            cx = 3 if fn_off == 0x872e else None
+            call_near(fn_off, real_args, cx=cx)
+        capturing["on"] = False
+        return list(cur_records)
+
     scenario_blobs: List[Tuple[Scenario, List[bytes]]] = []
     for sc in SCENARIOS:
         sc_id, name, seed_dev, ticks, direct = sc
@@ -945,6 +1090,15 @@ def main() -> None:
         print("[sound_oracle]   %d records, %d total port-I/O events" % (len(recs), n_io),
               flush=True)
         scenario_blobs.append((sc, recs))
+
+    # Phase-6 T4 seeding scenarios (6,7,8) — seed each unreached T4 fn via call_near.
+    for (sc_id, name, calls) in T4_SEED_SCENARIOS:
+        restore_boot_state()
+        print("[sound_oracle] === SEED scenario %d (%s) ===" % (sc_id, name), flush=True)
+        recs = run_seed_scenario(sc_id, name, calls)
+        print("[sound_oracle]   %d records (seeded T4 fns)" % len(recs), flush=True)
+        # synthetic 5-tuple scenario shell so the writer/round-trip handle it uniformly.
+        scenario_blobs.append(((sc_id, name, None, [], []), recs))
 
     # ---------------------------------------------------------------------------
     # Write the frozen trace

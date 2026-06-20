@@ -71,6 +71,27 @@ extern u8  snd_timer_cb_table[SND_TIMER_CB_TABLE_LEN];   /* DGROUP 0x5516 */
 #define SND_VOICE_TABLE_LEN 15
 extern u8  snd_voice_table[SND_VOICE_TABLE_LEN];         /* CODE 0x83cc */
 
+/* timer-SLOT table (DGROUP 0x549c) used by set_timer_slot_raw / get_timer_slot_field.
+ *  The engine indexes it as (channel+2)*8 + 0x549c; the host model is BASED at 0x549c so
+ *  the same offset arithmetic indexes it 1:1.  Sized to cover channels 0..3
+ *  ((3+2)*8+8 = 0x30) — round up to 0x40.  (T4) */
+#define SND_TIMER_SLOT_TABLE_LEN 0x40
+extern u8  snd_timer_slot_table[SND_TIMER_SLOT_TABLE_LEN];   /* DGROUP 0x549c */
+
+/* L2 device-state extras (T4) — not captured in the SND_SNAP (so not in the semantic
+ *  differential); owned here for the faithful bodies + the link. */
+extern u8  snd_init_substep_5584;     /* DGROUP 0x5584 — snddrv_init substep flag */
+extern u8  snd_select_scratch_83ee;   /* CODE   0x83ee — select-from-mask reset scratch */
+extern u16 snd_select_scratch_83ef;   /* CODE   0x83ef — select-from-mask reset scratch */
+
+/* L1 event-wrapper LUTs (DGROUP) — exact image bytes; defined in sound.c (T4). */
+extern u8 action_sound_lut_opl_260e[0x30];   /* DGROUP 0x260e */
+extern u8 action_sound_lut_std_263e[0x30];   /* DGROUP 0x263e */
+extern u8 state_sound_lut_opl_26ce[0x30];    /* DGROUP 0x26ce */
+extern u8 state_sound_lut_std_26fe[0x30];    /* DGROUP 0x26fe */
+extern u8 contact_sound_lut_opl_276e[0x30];  /* DGROUP 0x276e */
+extern u8 contact_sound_lut_std_278e[0x30];  /* DGROUP 0x278e */
+
 /* ── EXTERN — owned elsewhere (see sound.c ownership block for grep evidence) ────
  *  sound_device_state (player.c 0x689c) — the L1 dispatch selector;
  *  the LUT-index globals p1_pending_action / p1_contact_code / tile_below_player /
@@ -93,7 +114,31 @@ u16  schedule_timer_callback_b(u16 param_1, u16 param_2, u16 param_3, u16 param_
                                          /* 1000:9502 — PORTED (T3) */
 u16  schedule_timer_callback_c(u16 param_1, u16 param_2);
                                          /* 1000:956d — PORTED (T3) */
-void play_action_sound(void);            /* 1000:63be */
-void sound_select_device(void);          /* 1000:6de3 */
+/* PORTED (Phase-6 T4 — L1 event wrappers): each reads a per-device LUT -> sound id ->
+ *  play_sound.  PORTED in sound.c. */
+void play_action_sound(void);            /* 1000:63be — PORTED (T4) */
+void play_contact_sound(void);           /* 1000:640c — PORTED (T4) */
+void play_exit_sound(void);              /* 1000:6305 — PORTED (T4) */
+void play_pickup_sound(void);            /* 1000:645d — PORTED (T4) */
+void play_event_sound_64c1(void);        /* 1000:64c1 — PORTED (T4) */
+void play_state_sound_79b9(void);        /* 1000:647e — PORTED (T4) */
+
+/* PORTED (Phase-6 T4 — L2 device state machine). */
+void sound_select_device(void);                  /* 1000:6de3 — PORTED (T4) */
+u16  snddrv_init(void);                           /* 1000:88e5 — PORTED (T4) */
+int  select_sound_device_from_mask(u16 mask);     /* 1000:891e — PORTED (T4) */
+void snddrv_dispatch_a(void);                     /* 1000:85b5 — PORTED (T4) */
+u16  snddrv_dispatch_b(void);                     /* 1000:85db — PORTED (T4) */
+void snddrv_dispatch_c(void);                     /* 1000:8600 — PORTED (T4) */
+void snddrv_dispatch_d(void);                     /* 1000:8626 — PORTED (T4) */
+void snd_busy_delay(u16 count);                   /* 1000:872e — PORTED (T4) */
+
+/* PORTED (Phase-6 T4 — L3 timer-table management). */
+int  set_timer_slot_raw(int channel, int value, u16 cb_off, u16 cb_seg);  /* 1000:7df9 */
+int  set_timer_slot(int channel, int value, u16 cb_off, u16 cb_seg);      /* 1000:7de8 */
+int  arm_timer_callback(int channel, int reload, u16 cb_off, u16 cb_seg); /* 1000:7f2b */
+int  disable_timer_callback(int channel);         /* 1000:7f65 — PORTED (T4) */
+int  get_timer_slot_field(int slot_index);        /* 1000:7e3d — PORTED (T4) */
+void timer_restore(void);                         /* 1000:7fde — PORTED (T4) */
 
 #endif /* SOUND_H */
