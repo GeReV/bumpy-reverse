@@ -22,7 +22,7 @@ SPR_OBJS = bsprite.obj bsprite_buf.obj sprite.obj dosio.obj
 #   support modules — dosio/prng/globals
 #   buffer modules  — bvec_buf1/bvec_buf2 (large __far buffers for VEC decode arena + planar buf)
 BUMPY_OBJS = main.obj game.obj game_stubs.obj &
-             level.obj input.obj player.obj player2.obj items.obj anim.obj &
+             level.obj input.obj player.obj player2.obj items.obj anim.obj sound.obj &
              vec.obj op12.obj video.obj &
              sprite.obj sprite_anim.obj sprite_chain.obj sprite_blit.obj &
              bg_render.obj entity.obj bgi_overlay.obj &
