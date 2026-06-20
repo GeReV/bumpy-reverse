@@ -60,6 +60,19 @@ typedef int16_t  s16;
 typedef int32_t  s32;
 #define __far
 #define __huge
+/* MK_FP host model (mirrors tools/player_ctest.c): a >1 MB linear "far memory"
+   shadow indexed by the real-mode linear address (seg<<4 + off).  player2.c's
+   p2_set_move_state builds a far pointer from the per-state script table via
+   MK_FP(seg, off) and dereferences it; backing MK_FP with this shadow makes those
+   reads land in valid host memory.  far_ptr()/far_lin() convert between a host
+   pointer into far_mem and its (seg,off) — used by the table seeders below. */
+static unsigned char far_mem[0x110000];
+#define MK_FP(seg, off) ((void *)(far_mem + (((u32)(seg) << 4) + (u16)(off))))
+/* A region inside far_mem the seeders use for the synthetic state-script table +
+   its per-state headers (kept clear of low/zero offsets).  Encoded at seg:off so
+   MK_FP round-trips: linear L -> (seg=L>>4, off=L&0xf). */
+static u16 far_seg_of(unsigned long lin) { return (u16)((lin >> 4) & 0xffffu); }
+static u16 far_off_of(unsigned long lin) { return (u16)(lin & 0xfu); }
 
 /* ── PRNG state + step — OWNED BY src/prng.c (globals.c defines the state). ──────
  *  player2.c does NOT reference these, but the AI fn p2_ai_select_move_random calls
@@ -90,6 +103,15 @@ u8  rng_frame;           /* player.c 0x79b3 — the AI rng-decision input       
 u8  game_mode;           /* game.c   0x792c */
 u8  physics_frozen;      /* player.c 0xa0ce */
 u8  current_level;       /* level.c  0x79b2 */
+
+/* P2 AI/dispatch callees of p2_tile_move_check that are NOT yet reconstructed
+   (faithful-signature stubs in game_stubs.c for the BUMPY.EXE link → Phase-4 T4).
+   game_stubs.c is not compiled into this harness, so they are shimmed here (the
+   same convention items_ctest/player_ctest use for cross-module callees).  No
+   captured record exercises p2_tile_move_check, so these are link-only. */
+void p2_run_move_state_handler(void)      {}  /* 1000:5003 → T4 */
+void p2_ai_select_move_random(void)       {}  /* 1000:4fd3 → T4 */
+void p2_dispatch_move_state_handler(void) {}  /* DGROUP 0x870[state] → T4 */
 
 #include "../src/player2.c"
 
@@ -214,9 +236,79 @@ static void seed_script(const record_t *r)
                                                         : (unsigned)sizeof(script_buf);
         memcpy(script_buf, r->script, n);
     }
-    /* T3 EXTENSION POINT: when p2_move_script (far ptr @0xa0ba) is a reconstructed
-       global, point it here, e.g.  p2_move_script = (u16 __far *)script_buf;
-       (the skeleton does not yet declare it, so this is a documented hook). */
+    /* T3: p2_move_script (the [anim,dx,dy] far ptr @0xa0ba) is now a reconstructed
+       global — point it at the captured ENTRY move-script bytes so
+       p2_step_scripted_move reads the same stream the engine read. */
+    p2_move_script = (u16 *)script_buf;
+}
+
+/* ── T3 host backing for the DGROUP-shadow tables/pointers the move-state fns read ─
+ *  The reconstructed P2 move-state fns reach four DGROUP-resident regions through
+ *  the far-shadow pointers player2.c declares (the OW-build convention, since the
+ *  host DGROUP layout is uncontrolled — see src/player2.c RECONSTRUCTION FIDELITY
+ *  notes).  The harness backs each with a synthetic window seeded from the engine
+ *  grid geometry / the captured record:
+ *    - p2_cell_coord_tbl (DGROUP 0x274): posC cell->pixel table, X=col*40+8,
+ *      Y=row*32+8 per cell (the same geometry level.c's level_populate_dg writes;
+ *      matches the trace: cell 0x22 -> px 88+7=95, py 136+7=143).
+ *    - p2_sprite (DGROUP 0x9b9e): sprite object; p2_update_grid_cell reads the
+ *      origin words at +0x14 / +0x16.  The captured trajectory has origin (0,0)
+ *      (cell 0x22 px=95 -> gcol=((95-0)>>4)-1=4; py=143 -> grow=(143-0)>>3=17), so
+ *      the synthetic object's origin words are 0.
+ *    - p2_state_script_tbl (DGROUP 0x2520): per-state script table; entry[state] is
+ *      a far ptr to a header {steps, facing, move_script_off, move_script_seg}.  The
+ *      harness seeds the launch state's entry from the record's EXIT steps/facing
+ *      (the engine table contents are level data, not this fn's logic — seeding them
+ *      verifies p2_set_move_state's table index/deref/field-copy 1:1, exactly as
+ *      seed_script seeds the move-script bytes p2_step_scripted_move consumes).
+ *    - p2_move_script: pointed at script_buf by seed_script above. */
+#define COORD_CELLS 0x30
+static s16 coord_tbl[COORD_CELLS * 2];        /* [cell] -> (X @ +0, Y @ +2) */
+static u8  sprite_obj[0x20];                  /* P2 sprite object (origin @ +0x14/+0x16) */
+static u8  state_tbl[16 * 4];                 /* per-state 4-byte far-ptr entries */
+/* The per-state script HEADERS live inside far_mem so the (off,seg) words player2.c
+   feeds to MK_FP round-trip to them; STATE_HDR_LIN is a clear linear base. */
+#define STATE_HDR_LIN  0x40000u
+
+static void seed_coord_tbl(void)
+{
+    unsigned cell, row, col;
+    for (cell = 0; cell < COORD_CELLS; cell++) {
+        row = cell >> 3;
+        col = cell - row * 8;
+        coord_tbl[cell * 2 + 0] = (s16)(col * 40u + 8u);   /* posC_X[cell] */
+        coord_tbl[cell * 2 + 1] = (s16)(row * 32u + 8u);   /* posC_Y[cell] */
+    }
+    /* p2_cell_coord_tbl is dereffed as a plain (far-erased) native pointer. */
+    p2_cell_coord_tbl = (u8 *)coord_tbl;
+}
+
+static void seed_sprite_obj(void)
+{
+    memset(sprite_obj, 0, sizeof(sprite_obj));
+    /* origin words at +0x14 (x) / +0x16 (y) = (0,0) per the captured trajectory. */
+    p2_sprite = sprite_obj;
+}
+
+/* Seed the per-state script table entry for `state` from the record's EXIT
+   steps/facing, with its move-script header inside far_mem (so the MK_FP far ptr
+   p2_set_move_state builds resolves to it).  Sets p2_state_script_tbl. */
+static void seed_state_script_tbl(u8 state, u8 steps, u8 facing)
+{
+    unsigned long hdr_lin = STATE_HDR_LIN + (unsigned long)state * 8u;
+    unsigned char *hdr = far_mem + hdr_lin;
+    u16 hdr_off = far_off_of(hdr_lin), hdr_seg = far_seg_of(hdr_lin);
+    /* move_script far ptr (off,seg) -> script_buf is not in the validated outputs of
+       set_move_state, but seed it consistently (the script_buf linear addr is not in
+       far_mem; p2_set_move_state stores the ptr without dereferencing it). */
+    if (state >= 16) state = 15;
+    hdr[0] = steps;
+    hdr[1] = facing;
+    hdr[2] = 0; hdr[3] = 0; hdr[4] = 0; hdr[5] = 0;       /* move_script off/seg (unused) */
+    /* table entry[state] : far ptr (off @ +0, seg @ +2) -> hdr inside far_mem. */
+    state_tbl[state * 4 + 0] = (u8)(hdr_off & 0xff); state_tbl[state * 4 + 1] = (u8)(hdr_off >> 8);
+    state_tbl[state * 4 + 2] = (u8)(hdr_seg & 0xff); state_tbl[state * 4 + 3] = (u8)(hdr_seg >> 8);
+    p2_state_script_tbl = state_tbl;
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -333,11 +425,13 @@ static const char *cmp_descriptor(const record_t *r, const snap_t *e,
 typedef struct { u16 off; void (*fn)(void); } ported_t;
 
 static const ported_t PORTED[] = {
-    { FN_P2_SET_MOVE_STATE,    NULL },   /* T3 */
-    { FN_P2_STEP_SCRIPTED,     NULL },   /* T3 */
-    { FN_P2_UPDATE_GRID_CELL,  NULL },   /* T3 */
-    { FN_P2_SET_PIXEL,         NULL },   /* T3 */
-    { FN_P2_RUN_STATE_HANDLER, NULL },   /* T3 */
+    /* Phase-4 T3: the six move-state/trajectory fns are now reconstructed in
+       src/player2.c (compiled into this harness via the #include above). */
+    { FN_P2_SET_MOVE_STATE,    (void (*)(void))p2_set_move_state },   /* T3 */
+    { FN_P2_STEP_SCRIPTED,     (void (*)(void))p2_step_scripted_move },/* T3 */
+    { FN_P2_UPDATE_GRID_CELL,  p2_update_grid_cell },                 /* T3 */
+    { FN_P2_SET_PIXEL,         p2_set_pixel_from_cell },              /* T3 */
+    { FN_P2_RUN_STATE_HANDLER, NULL },   /* T4 (AI move-state handler dispatch) */
     { FN_P2_AI_DISPATCH,       NULL },   /* T4 */
     { FN_P2_AI_SELECT_A,       NULL },   /* T4 */
     { FN_P2_AI_SELECT_B,       NULL },   /* T4 */
@@ -396,13 +490,21 @@ static int run_per_function(record_t *recs, long nrec, const char *scname,
             const char *bad; long got, want;
             seed_globals(&r->ent);
             seed_script(r);
+            seed_coord_tbl();              /* p2_cell_coord_tbl (set_pixel_from_cell) */
+            seed_sprite_obj();             /* p2_sprite (update_grid_cell origin) */
             if (fn_is_ai_random(r->fn_addr))
                 seed_ai_prng(&r->ent);     /* AI-determinism hook (T4 TODO) */
 
             if (r->fn_addr == FN_P2_SET_MOVE_STATE) {
-                /* p2_set_move_state(state) — cdecl arg is the launch state (the
-                   EXIT move_state the record establishes). */
+                /* p2_set_move_state(state) — the cdecl arg is the LAUNCH state the
+                   record establishes (= its EXIT move_state; the engine call
+                   p2_set_move_state(p2_move_state) passes the state being entered,
+                   which the fn then stores and whose script header it loads).  Seed
+                   the per-state script table entry for that launch state from the
+                   record's EXIT steps/facing so the table-load path is exercised 1:1
+                   (the table CONTENTS are engine level-data, not this fn's logic). */
                 void (*f1)(u8) = (void (*)(u8))fn;
+                seed_state_script_tbl(r->ex.state, r->ex.steps_left, r->ex.facing);
                 f1(r->ex.state);
             } else {
                 fn();

@@ -75,11 +75,20 @@ extern s16 p2_grid_col;       /* DGROUP 0xa0ca — P2 grid column (clamp 0..0x12
 extern s16 p2_grid_row;       /* DGROUP 0xa0cc — P2 grid row (clamp 0..0x16)      */
 extern u8  p2_set_cell_col;   /* DGROUP 0x8564 — cell->pixel column scratch       */
 extern u8  p2_set_cell_row;   /* DGROUP 0x8565 — cell->pixel row scratch          */
+extern u16 __far *p2_move_script;  /* DGROUP 0xa0ba/0xa0bc — [anim,dx,dy] script ptr */
+extern u8  __far *p2_sprite;       /* DGROUP 0x9b9e/0x9ba0 — P2 sprite obj ptr     */
+extern u8  __far *p2_state_script_tbl;/* DGROUP 0x2520/0x2522 — per-state script tbl*/
+extern u8  __far *p2_cell_coord_tbl;/* DGROUP 0x0274 — posC cell->pixel coord table */
+extern s16 p2_grid_x;         /* DGROUP 0x8558 — current grid col (history)       */
+extern s16 p2_grid_y;         /* DGROUP 0x855a — current grid row (history)       */
+extern s16 p2_grid_x_prev;    /* DGROUP 0x928e — previous grid col (history)      */
+extern s16 p2_grid_y_prev;    /* DGROUP 0x9b94 — previous grid row (history)      */
 
 /* ── AI rng-decision globals — OWNED BY player2.c ────────────────────────────── */
 extern u8  p2_ai_threshold;   /* DGROUP 0x7920 — rng_frame branch threshold       */
 extern u8  p2_dir_blocked_0;  /* DGROUP 0xa0e0 — AI dispatch dir-blocked flag 0   */
 extern u8  p2_dir_blocked_1;  /* DGROUP 0xa0e1 — AI dispatch dir-blocked flag 1   */
+extern u8  p2_dir_blocked_2;  /* DGROUP 0xa0e2 — dir-blocked flag 2 (tile check)  */
 extern u8  p2_dir_blocked_3;  /* DGROUP 0xa1b2 — AI dispatch dir-blocked flag 3   */
 
 /* ── P1/P2 pvp-collision globals — OWNED BY player2.c ────────────────────────── */
@@ -104,9 +113,11 @@ extern u8  p2_move_state;     /* game.c   0x8562 — P2 move-state              
  *  Engine seg-1000 offsets are noted for the harness's per-fn registry.
  * ════════════════════════════════════════════════════════════════════════════ */
 void p2_set_move_state(u8 state);     /* 1000:4bc6 — load script/steps/facing      */
-void p2_step_scripted_move(void);     /* 1000:4c14 — advance P2 pixel along script */
+u8   p2_step_scripted_move(void);     /* 1000:4c14 — advance P2 pixel along script */
 void p2_update_grid_cell(void);       /* 1000:4b4e — P2 pixel -> grid col/row      */
+void p2_tile_move_check(void);        /* 1000:4c99 — tile-move/collision check     */
 void p2_set_pixel_from_cell(void);    /* 1000:48a9 — p2_cell -> P2 pixel x/y       */
+void p2_advance_grid_history(void);   /* 1000:13b2 — slide P2 grid-cell history    */
 void p2_ai_dispatch_move(void);       /* 1000:4f4e — AI dispatch on dir-blocked    */
 void p2_ai_select_move_a(void);       /* 1000:4f04 — AI rng-branch -> state 1/2/3  */
 void p2_ai_select_move_b(void);       /* 1000:4f89 — AI rng-branch -> state 1/2/4  */

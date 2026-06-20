@@ -246,8 +246,8 @@ void show_level_intro_screen(void)   {}
 void level_intro_screen(void)        {}
 void play_iris_wipe_transition(void) {}
 
-/* p2_set_move_state — set P2 launch/move state. */
-void p2_set_move_state(u8 state)     { (void)state; }
+/* p2_set_move_state (1000:4bc6) — RECONSTRUCTED in player2.c (Phase-4 T3); stub
+   removed (would be a duplicate symbol once player2.obj links). */
 
 /* init_fullscreen_view_desc — set up the fullscreen view descriptor (mode,flag). */
 void init_fullscreen_view_desc(u8 mode, u8 flag) { (void)mode; (void)flag; }
@@ -268,14 +268,13 @@ void run_n_frames(u8 n)              { (void)n; }
 
 void wait_keypress(void)             {}
 
-/* Grid-cell + grid-history updates. */
+/* Grid-cell + grid-history updates.  The P2 entries (p2_update_grid_cell 1000:4b4e,
+   p2_advance_grid_history 1000:13b2) are RECONSTRUCTED in player2.c (Phase-4 T3);
+   their stubs are removed (dup-symbol once player2.obj links). */
 void p1_update_grid_cell(void)       {}
-void p2_update_grid_cell(void)       {}
 void p1_advance_grid_history(void)   {}
-void p2_advance_grid_history(void)   {}
 
-/* P2 scripted move step (P2 counterpart of p1_step_scripted_move; DEFERRED). */
-void p2_step_scripted_move(void)     {}
+/* p2_step_scripted_move (1000:4c14) — RECONSTRUCTED in player2.c (Phase-4 T3). */
 
 /* Anim-channel STEP (advance) — distinct from the entity.c draw side. */
 void step_anim_channels_a(void)      {}
@@ -310,9 +309,26 @@ void game_post_input_233a(void)      {}
    physics-settle — lands with the player subsystem in Phase 2). */
 void handle_gameplay_input(void)     {}
 
-/* P2 tile move check + P1↔P2 collision. */
-void p2_tile_move_check(void)        {}
+/* P2 tile move check (1000:4c99) — RECONSTRUCTED in player2.c (Phase-4 T3).
+   P1↔P2 collision (check_pvp_collision 1000:50fb) — DEFERRED → Phase-4 T5. */
 void check_pvp_collision(void)       {}
+
+/* ── Phase-4 T3 callees of p2_tile_move_check — faithful-signature stubs ───────
+ * p2_tile_move_check (now reconstructed in player2.c) dispatches into three P2
+ * AI move-state callees that are NOT yet reconstructed (→ Phase-4 T4):
+ *   - p2_run_move_state_handler (1000:5003): per-state cell-move handler dispatch
+ *     (routes p2_move_state through the near-ptr handler table at DGROUP 0x85c).
+ *   - p2_ai_select_move_random (1000:4fd3): picks a fresh random move-state when
+ *     all four directions are blocked (calls rand()/prng_step).
+ *   - p2_dispatch_move_state_handler: models the engine's indirect call through the
+ *     per-state move-state handler table at DGROUP 0x870 (the handler bytes are
+ *     T4 data); kept as a stub so the indirect-call site in p2_tile_move_check is
+ *     preserved 1:1 without inventing the deferred table.
+ * RECONSTRUCTION FIDELITY: faithful-signature no-op stubs so player2.obj links;
+ * none are reached on the harness's captured P2 paths.  → Phase-4 T4. */
+void p2_run_move_state_handler(void)      {}  /* 1000:5003 */
+void p2_ai_select_move_random(void)       {}  /* 1000:4fd3 */
+void p2_dispatch_move_state_handler(void) {}  /* DGROUP 0x870[move_state] */
 
 /* all_entries_flag_set — level-complete predicate.  Returns 0 ⇒ the do/while
    stays in the round (a stub cannot detect completion; DEFERRED). */
