@@ -1,0 +1,605 @@
+/* Host REPLAY HARNESS for src/screens.c — Phase-7 Tasks 2–5.
+ *
+ * Compiles the REAL front-end port (src/screens.c) on the host (Open Watcom 16-bit
+ * environment shimmed out: __far/__huge/__cdecl16near erased, exact-width typedefs,
+ * BUMPY_H so screens.h does not pull <dos.h>), then validates the reconstructed screen
+ * functions against the Phase-7 T1 capture local/build/render/screens_trace.bin
+ * (magic "SCRTRC01", version 1 — layout frozen in tools/screens_oracle.py's header
+ * §"TRACE LAYOUT" and local/build/screens_model.md).
+ *
+ * SKELETON STATE (Phase-7 T2): src/screens.c defines ONLY the screen globals — NO
+ * function bodies (they remain stubbed in game_stubs.c).  So the PORTED[] registry
+ * below holds NULL for every screen fn: EVERY record is reported UNPORTED, the three
+ * comparators are dormant, FAIL=0, no crash.  The T3–T5 ports fill PORTED[] entries
+ * with their C names, at which point the matching comparator runs per record.
+ *
+ * ── THREE COMPARATOR FLAVORS (all wired now; dormant until PORTED[] is filled) ────
+ *   (A) SEMANTIC-STATE DIFFERENTIAL (menus / title / highscore / level-intro — T4/T5).
+ *       For each record of a PORTED, host-callable fn: seed the reconstructed screen
+ *       globals from the record's ENTRY SCRSNAP, call the fn by its C name, then assert
+ *       the screen-global SCRSNAP bytes (current_level, palette_mode, menu_option2_
+ *       setting, input_state, score, timing_flag_accumulator, frame_abort_flag, the
+ *       8-byte highscore name-entry row, + the fn's AX return) == the EXIT SCRSNAP.
+ *       Prints PASS/FAIL with the first divergent field.
+ *
+ *   (B) DESCRIPTOR-LEVEL DIFFERENTIAL (text/number/HUD builders + every screen draw —
+ *       T3/T4/T5).  The screen builders write a 0x22-byte view struct through
+ *       render_descriptor_ptr and a 0x0A-byte blit descriptor through p1_sprite.  The
+ *       harness points those host far ptrs at its OWN host buffers (host_view_desc /
+ *       host_p1_sprite), seeds them + the seeded fullscreen_buf header from the record,
+ *       calls the ported builder, then diffs the bytes the reconstructed fn wrote into
+ *       the host buffers against the record's captured EXIT descriptors.  First
+ *       divergence (which descriptor + offset) printed.  (T1 note: multi-fill builders
+ *       capture only the FINAL descriptor — a T3/T4 concern, not the harness's.)
+ *
+ *   (C) PORT-WRITE-SEQUENCE DIFFERENTIAL (the DAC upload + iris-wipe — T5).  The DAC
+ *       records carry a per-call (port,value) OUT sequence (ports 0x3c8 index / 0x3c9
+ *       RGB) plus any IN polls.  Before calling a PORTED DAC fn, the harness primes the
+ *       IN-replay queue from the record's recorded IN events and clears the OUT-capture
+ *       buffer.  The reconstructed code's out(port,val) APPENDS to the OUT-capture
+ *       buffer; its in(port) REPLAYS the next recorded IN value (NOT a live read — the
+ *       engine's DAC dispatch may branch on IN, so the reconstruction must see the EXACT
+ *       inputs the engine saw).  After the call, the comparator diffs the host
+ *       OUT-capture vs the record's captured OUT events, first-divergence printed.
+ *
+ *   GRACEFUL UNPORTED DEGRADATION.  A record whose fn is not host-callable (its PORTED
+ *     entry holds NULL, or it is not in the registry) is marked UNPORTED and SKIPPED:
+ *     the harness never references the (absent) symbol and never calls into it.  UNPORTED
+ *     is NOT a crash and NOT a hard failure.  In T2 every record is UNPORTED by design.
+ *
+ * Build/run (also wrapped by tools/validate_screens.sh):
+ *     cc -O2 -Wall -Werror -o /tmp/screens_ctest tools/screens_ctest.c && \
+ *       /tmp/screens_ctest local/build/render/screens_trace.bin
+ * Exit 0 iff the harness parses the trace, runs, and the differential has ZERO failures
+ * on PORTED records (UNPORTED records never fail).
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+
+/* ── shim the Watcom 16-bit environment for host compilation ─────────────────── */
+#define BUMPY_H            /* screens.h's #include "bumpy.h" becomes a no-op */
+typedef uint8_t  u8;
+typedef uint16_t u16;
+typedef uint32_t u32;
+typedef int8_t   s8;
+typedef int16_t  s16;
+typedef int32_t  s32;
+#define __far
+#define __huge
+#define __cdecl16near
+
+/* ── HOST PORT-I/O SHIMS (comparator C — the DAC port-write gate) ──────────────────
+ *  When the DAC upload / iris-wipe port (T5), the included src/screens.c will issue
+ *  out(port,val) / in(port) (the Watcom port intrinsics).  On the host we provide our
+ *  own:
+ *    out(port,val)  APPENDS (port,val,size) to a capture buffer comparator C diffs
+ *                   against the trace's recorded OUT events (the DAC 0x3c8/0x3c9 writes).
+ *    in(port)       REPLAYS the next recorded IN value for the CURRENT record (in
+ *                   order) — it does NOT read live hardware.  When the replay queue is
+ *                   exhausted (or empty, e.g. T2 where nothing calls in()) it falls back
+ *                   to 0xFF so a stray read never deadlocks.
+ *  The intrinsic names vary (`outp`/`inp`, `outpw`/`inpw`); we define the common byte +
+ *  word forms so whichever the port uses resolves to these shims. */
+typedef struct { u16 port; u16 val; u8 size; } io_evt_t;
+#define IO_CAP_MAX 8192
+static io_evt_t out_cap[IO_CAP_MAX];      /* host OUT capture (port,val,size), in order */
+static int      out_cap_n = 0;
+static u16      in_queue[IO_CAP_MAX];      /* recorded IN values for the cur record       */
+static int      in_queue_n = 0, in_queue_i = 0;
+
+/* PERTURBATION knob (proves the port-write gate is REAL — not self-consistent).
+ *  When SCR_PERTURB=N is set, the Nth captured OUT event has its value XOR'd by 1; the
+ *  gate MUST then FAIL on a DAC fn that emits at least N+1 OUTs.  Wired from getenv. */
+static int  g_perturb_idx = -1;     /* -1 = disabled */
+static int  g_out_seen    = 0;      /* running OUT counter across the whole run */
+
+static void host_out_sz(u16 port, u16 val, u8 size)
+{
+    if (g_perturb_idx >= 0 && g_out_seen == g_perturb_idx) {
+        val ^= 1;                   /* corrupt exactly one emitted value */
+    }
+    g_out_seen++;
+    if (out_cap_n < IO_CAP_MAX) {
+        out_cap[out_cap_n].port = port;
+        out_cap[out_cap_n].val  = val;
+        out_cap[out_cap_n].size = size;
+        out_cap_n++;
+    }
+}
+static u16 host_in(u16 port)
+{
+    (void)port;
+    if (in_queue_i < in_queue_n) return in_queue[in_queue_i++];
+    return 0xFF;   /* replay exhausted/empty — deterministic fallback */
+}
+
+/* The port intrinsics the future T5 DAC port may use, all routed to the shims above.
+ *  Marked HOST_UNUSED: in the T2 skeleton no screen body is ported, so nothing calls
+ *  them yet (cc -Werror would reject otherwise-unused statics). */
+#ifdef __GNUC__
+#  define HOST_UNUSED __attribute__((unused))
+#else
+#  define HOST_UNUSED
+#endif
+static HOST_UNUSED int      outp (u16 port, int val) { host_out_sz(port, (u16)val, 1); return val; }
+static HOST_UNUSED unsigned inp  (u16 port)          { return host_in(port); }
+static HOST_UNUSED int      outpw(u16 port, int val) { host_out_sz(port, (u16)val, 2); return val; }
+static HOST_UNUSED unsigned inpw (u16 port)          { return host_in(port); }
+static HOST_UNUSED void     out  (u16 port, u16 val) { host_out_sz(port, val, 1); }
+static HOST_UNUSED u16      in   (u16 port)          { return host_in(port); }
+
+/* ── HOST DESCRIPTOR / IMAGE BUFFERS (comparator B) ───────────────────────────────
+ *  The reconstructed builders write through render_descriptor_ptr (the 0x22-byte view
+ *  struct) and p1_sprite (the 0x0A-byte blit descriptor), and read fullscreen_buf
+ *  (off:seg) for the decoded image.  src/screens.c declares those as far pointers /
+ *  off-seg words; here the harness points them at its OWN host buffers so the bytes the
+ *  ported fn writes are observable for the descriptor diff.  The fullscreen_buf header
+ *  is SEEDED from the record (the engine's own post-vec_decode buffer), so the builder
+ *  runs deterministically without re-running file I/O. */
+#define VIEW_DESC_MAX   0x40   /* >= RENDER_DESC_LEN (0x22) captured */
+#define P1_SPRITE_MAX   0x20   /* >= P1_SPRITE_DESC_LEN (0x0A) captured */
+#define SEED_BUF_MAX    0x100  /* >= SEED_HEADER_LEN (0x40) captured */
+static u8 host_view_desc[VIEW_DESC_MAX];
+static u8 host_p1_sprite[P1_SPRITE_MAX];
+static u8 host_seed_buf[SEED_BUF_MAX];
+
+#include "../src/screens.c"
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  HOST definitions of the cross-module globals src/screens.c will extern once the
+ *  screen fns port (owned by game.c / level.c / input.c / anim.c; the harness does NOT
+ *  link those .objs).  Mirrors the sound_ctest / items_ctest / anim_chan_ctest
+ *  convention.  In the T2 skeleton src/screens.c references none of these (globals-only),
+ *  so they are HOST_UNUSED for now — wired so T3+ land without harness edits.  Defined
+ *  HERE (above the seed/comparator fns that reference them).  p1_sprite is the anim.c-
+ *  owned 0x8884 blit-descriptor far ptr; the descriptor comparator (B) points it at the
+ *  host p1_sprite buffer.
+ * ════════════════════════════════════════════════════════════════════════════ */
+HOST_UNUSED u8  current_level        = 1;   /* level.c 0x79b2 */
+HOST_UNUSED u8  input_state;                 /* input.c 0x8244 */
+HOST_UNUSED u8  menu_option2_setting;        /* game.c  0x79b5 */
+HOST_UNUSED u16 score_lo;                    /* game.c  0xa0d4 */
+HOST_UNUSED u16 score_hi;                    /* game.c  0xa0d6 */
+HOST_UNUSED u8  frame_abort_flag;            /* game.c  0x928d (SNAP game_state_928d) */
+HOST_UNUSED u8 __far *p1_sprite;             /* anim.c  0x8884 — blit-descriptor far ptr */
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  Trace format (frozen — see tools/screens_oracle.py header §"TRACE LAYOUT").
+ *
+ *  Header:  magic[8]="SCRTRC01", u16 version(=1), u16 n_scenarios, u16 n_fn_names,
+ *           then per name {u8 len, len bytes ascii}.
+ *  Per scenario: u8 id, u8 name_len, name bytes, u32 n_records, then n_records records.
+ *  Per record:   u16 fn_off, u16 fn_name_idx, SCRSNAP entry, SCRSNAP exit, u16 ret_val,
+ *                u8 render_desc_len + bytes, u8 p1_sprite_len + bytes, u8 seed_len + bytes,
+ *                u16 n_io, then n_io * { u8 dir(0=OUT,1=IN), u16 port, u8 size, u16 value }.
+ *  SCRSNAP (struct "<BBBB" + "HH" + "BB" + "H" + "8B"):
+ *    u8 current_level, u8 palette_mode, u8 menu_option2_setting, u8 input_state,
+ *    u16 score_lo, u16 score_hi, u8 timing_flag_accum, u8 game_state_928d,
+ *    u16 palette_mode_word, u8[8] highscore_name0.
+ * ════════════════════════════════════════════════════════════════════════════ */
+#define TRACE_VER  1
+/* SCRSNAP byte size: 4*1 + 2*2 + 2*1 + 1*2 + 8 = 4 + 4 + 2 + 2 + 8 = 20. */
+#define SNAP_SIZE  (4 + 2 * 2 + 2 + 2 + 8)
+
+typedef struct {
+    u8  current_level;
+    u8  palette_mode;
+    u8  menu_option2_setting;
+    u8  input_state;
+    u16 score_lo;
+    u16 score_hi;
+    u8  timing_flag_accum;
+    u8  game_state_928d;
+    u16 palette_mode_word;
+    u8  highscore_name0[8];
+} snap_t;
+
+typedef struct { u8 dir; u16 port; u8 size; u16 value; } io_t;
+
+typedef struct {
+    u16    fn_off;
+    u16    fn_name_idx;
+    snap_t ent, ex;
+    u16    ret_val;
+    u8     render_desc_len;
+    u8     render_desc[VIEW_DESC_MAX];
+    u8     p1_sprite_len;
+    u8     p1_sprite[P1_SPRITE_MAX];
+    u8     seed_len;
+    u8     seed[SEED_BUF_MAX];
+    u16    n_io;
+    io_t  *io;            /* points into a per-record malloc'd array */
+} record_t;
+
+static u16 rd16(const u8 *p) { return (u16)(p[0] | (p[1] << 8)); }
+static u32 rd32(const u8 *p) { return (u32)p[0] | ((u32)p[1] << 8) |
+                                      ((u32)p[2] << 16) | ((u32)p[3] << 24); }
+
+static void parse_snap(const u8 *p, snap_t *s)
+{
+    u32 o = 0;
+    s->current_level        = p[o++];
+    s->palette_mode         = p[o++];
+    s->menu_option2_setting = p[o++];
+    s->input_state          = p[o++];
+    s->score_lo             = rd16(p + o); o += 2;
+    s->score_hi             = rd16(p + o); o += 2;
+    s->timing_flag_accum    = p[o++];
+    s->game_state_928d      = p[o++];
+    s->palette_mode_word    = rd16(p + o); o += 2;
+    memcpy(s->highscore_name0, p + o, 8); o += 8;
+}
+
+/* ── ENTRY SCRSNAP -> reconstructed screen globals (comparator A seeding) ──────────
+ *  Seed the module's screen state from the captured ENTRY snap, then (when a fn is
+ *  PORTED) comparator A diffs the post-call state against the EXIT snap.  Cross-module
+ *  globals the included TU does not own (current_level, input_state, menu_option2_
+ *  setting, score, frame_abort_flag) are supplied as HOST definitions below and seeded
+ *  here too, mirroring the sound_ctest / items_ctest convention.  (Skeleton T2: no fn
+ *  runs, so seeding is exercised only structurally — kept so T3+ land without harness
+ *  edits.) */
+static void seed_globals(const snap_t *s)
+{
+    /* screens.c-owned */
+    palette_mode            = s->palette_mode_word;
+    timing_flag_accumulator = s->timing_flag_accum;
+    memcpy(highscore_name_buf, s->highscore_name0, 8);
+    /* cross-module (host-defined below) */
+    current_level        = s->current_level;
+    input_state          = s->input_state;
+    menu_option2_setting = s->menu_option2_setting;
+    score_lo             = s->score_lo;
+    score_hi             = s->score_hi;
+    frame_abort_flag     = s->game_state_928d;
+}
+
+/* ── DESCRIPTOR seeding (comparator B) ────────────────────────────────────────────
+ *  Point the module far ptrs / image words at the host buffers, seed the fullscreen_buf
+ *  header from the record, and zero the descriptor buffers so the bytes the ported
+ *  builder writes are isolated.  (T2: dormant — wired so T3 lands without edits.) */
+static void seed_descriptors(const record_t *r)
+{
+    memset(host_view_desc, 0, sizeof host_view_desc);
+    memset(host_p1_sprite, 0, sizeof host_p1_sprite);
+    memset(host_seed_buf, 0, sizeof host_seed_buf);
+    if (r->seed_len <= SEED_BUF_MAX)
+        memcpy(host_seed_buf, r->seed, r->seed_len);
+    render_descriptor_ptr = host_view_desc;
+    p1_sprite             = host_p1_sprite;
+    /* fullscreen_buf off/seg: on the host the seg is the host buffer's notional segment;
+     *  the descriptor diff only inspects the bytes the builder writes into host_view_desc,
+     *  so the exact (off,seg) value is immaterial here — seed both to 0 (the builder reads
+     *  them only to compose the image far ptr it stores into the view struct, validated by
+     *  the descriptor comparison itself). */
+    fullscreen_buf     = 0;
+    fullscreen_buf_seg = 0;
+}
+
+/* ── (A) SEMANTIC-STATE COMPARATOR — live screen globals vs the EXIT snap ──────────
+ *  Returns NULL if every captured screen-global field matches the EXIT snap, else a
+ *  short field name of the first divergence; got/want filled. */
+static const char *cmp_semantic(const record_t *r, u16 ret, long *got, long *want)
+{
+    const snap_t *ex = &r->ex;
+    #define CHK(field, live) do { if ((long)(live) != (long)(ex->field)) { \
+        *got = (long)(live); *want = (long)(ex->field); return #field; } } while (0)
+    CHK(current_level,        current_level);
+    CHK(palette_mode,         (u8)palette_mode);
+    CHK(menu_option2_setting, menu_option2_setting);
+    CHK(input_state,          input_state);
+    CHK(score_lo,             score_lo);
+    CHK(score_hi,             score_hi);
+    CHK(timing_flag_accum,    timing_flag_accumulator);
+    CHK(game_state_928d,      frame_abort_flag);
+    CHK(palette_mode_word,    palette_mode);
+    #undef CHK
+    if (memcmp(highscore_name_buf, ex->highscore_name0, 8) != 0) {
+        *got = highscore_name_buf[0]; *want = ex->highscore_name0[0];
+        return "highscore_name0";
+    }
+    if ((long)ret != (long)r->ret_val) {
+        *got = ret; *want = r->ret_val;
+        return "ret_val";
+    }
+    return NULL;
+}
+
+/* ── (B) DESCRIPTOR-LEVEL COMPARATOR — host descriptor buffers vs the record ───────
+ *  Diffs the bytes the ported builder wrote into host_view_desc / host_p1_sprite
+ *  against the record's captured EXIT render_desc / p1_sprite.  Returns NULL on match,
+ *  else a short tag of the first divergent descriptor + offset. */
+static const char *cmp_descriptors(const record_t *r, long *got, long *want)
+{
+    static char buf[40];
+    unsigned i;
+    for (i = 0; i < r->render_desc_len && i < VIEW_DESC_MAX; i++) {
+        if (host_view_desc[i] != r->render_desc[i]) {
+            *got = host_view_desc[i]; *want = r->render_desc[i];
+            snprintf(buf, sizeof(buf), "view_desc[+0x%02x]", i);
+            return buf;
+        }
+    }
+    for (i = 0; i < r->p1_sprite_len && i < P1_SPRITE_MAX; i++) {
+        if (host_p1_sprite[i] != r->p1_sprite[i]) {
+            *got = host_p1_sprite[i]; *want = r->p1_sprite[i];
+            snprintf(buf, sizeof(buf), "p1_sprite[+0x%02x]", i);
+            return buf;
+        }
+    }
+    return NULL;
+}
+
+/* ── (C) PORT-WRITE-SEQUENCE COMPARATOR — host OUT-capture vs the record's OUTs ────
+ *  Diffs the host out() capture against the record's captured OUT events (in order).
+ *  IN events are the inputs the host in() shim replays; the validated output is the OUT
+ *  sequence the code produces given those inputs.  Returns NULL on match, else a tag. */
+static const char *cmp_ports(const record_t *r, long *got, long *want)
+{
+    static char buf[48];
+    int wi = 0, hi, n_out = 0, k;
+    for (k = 0; k < (int)r->n_io; k++)
+        if (r->io[k].dir == 0) n_out++;
+    if (out_cap_n != n_out) { *got = out_cap_n; *want = n_out; return "out_count"; }
+    for (hi = 0; hi < out_cap_n; hi++) {
+        while (wi < (int)r->n_io && r->io[wi].dir != 0) wi++;
+        if (wi >= (int)r->n_io) { *got = hi; *want = n_out; return "out_overrun"; }
+        if (out_cap[hi].port != r->io[wi].port) {
+            *got = out_cap[hi].port; *want = r->io[wi].port;
+            snprintf(buf, sizeof(buf), "out[%d].port", hi);
+            return buf;
+        }
+        if (out_cap[hi].val != r->io[wi].value) {
+            *got = out_cap[hi].val; *want = r->io[wi].value;
+            snprintf(buf, sizeof(buf), "out[%d].val@0x%03x", hi, r->io[wi].port);
+            return buf;
+        }
+        if (out_cap[hi].size != r->io[wi].size) {
+            *got = out_cap[hi].size; *want = r->io[wi].size;
+            snprintf(buf, sizeof(buf), "out[%d].size@0x%03x", hi, r->io[wi].port);
+            return buf;
+        }
+        wi++;
+    }
+    return NULL;
+}
+
+/* prime the in() replay queue + clear the out() capture for a DAC record. */
+static void prime_ports(const record_t *r)
+{
+    int k;
+    out_cap_n = 0;
+    in_queue_n = 0; in_queue_i = 0;
+    for (k = 0; k < (int)r->n_io; k++) {
+        if (r->io[k].dir == 1 && in_queue_n < IO_CAP_MAX)
+            in_queue[in_queue_n++] = r->io[k].value;
+    }
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  PORTED REGISTRY — engine seg-1000 offset -> reconstructed-C callable.
+ *
+ *  Phase-7 T2: ALL NULL — screens.c contributes no function bodies; every screen fn
+ *  remains stubbed in game_stubs.c.  So every record is reported UNPORTED, the three
+ *  comparators are dormant, FAIL=0.  T3–T5 fill these entries with the C wrapper that
+ *  recovers any args, calls the real port, and is dispatched through one of:
+ *    cmp = 'A' semantic-state | 'B' descriptor-level | 'C' port-write-sequence.
+ *  The registry is keyed by fn_off (the Ghidra seg-1000 offset), so an UNPORTED fn is
+ *  never referenced as a symbol.
+ * ════════════════════════════════════════════════════════════════════════════ */
+typedef struct { u16 off; const char *name; char cmp; void (*fn)(void); } ported_t;
+
+static const ported_t PORTED[] = {
+    /* text / number formatters (T3) — descriptor-level (B). */
+    { 0x0816, "draw_number",            'B', NULL },
+    { 0x07f0, "draw_text_at",           'B', NULL },
+    { 0x603d, "draw_number_sprites",    'B', NULL },
+    /* HUD (T3) — descriptor-level (B). */
+    { 0x51d8, "draw_hud_composite",     'B', NULL },
+    /* title (T4) — descriptor-level (B) + semantic (A) for show_title_and_init. */
+    { 0x2ef8, "init_title_graphics",    'B', NULL },
+    { 0x2fac, "show_title_background",  'B', NULL },
+    { 0x3ed4, "show_title_and_init",    'A', NULL },
+    /* menu (T4) — semantic-state (A): cursor via p1_sprite (B), return value (A). */
+    { 0x35a5, "run_main_menu",          'A', NULL },
+    { 0x0f7a, "show_menu_select_screen",'B', NULL },
+    /* highscore (T4) — semantic (A) for name-entry, descriptor (B) for the table. */
+    { 0x5681, "show_highscore_screen",  'B', NULL },
+    { 0x57e1, "render_highscore_table", 'B', NULL },
+    { 0x5c87, "enter_highscore_name",   'A', NULL },
+    { 0x59d3, "highscore_enter_name",   'A', NULL },
+    /* level intro (T5) — semantic (A) / descriptor (B). */
+    { 0x3852, "level_intro_screen",     'A', NULL },
+    { 0x0d9d, "show_level_intro_screen",'B', NULL },
+    /* transition / palette (T5) — port-write-sequence (C) DAC gate. */
+    { 0x3467, "play_iris_wipe_transition", 'C', NULL },
+    { 0x9864, "upload_vga_dac_palette",    'C', NULL },
+};
+#define PORTED_N (sizeof(PORTED) / sizeof(PORTED[0]))
+
+static const ported_t *ported_lookup(u16 off)
+{
+    unsigned i;
+    for (i = 0; i < PORTED_N; i++)
+        if (PORTED[i].off == off) return &PORTED[i];
+    return NULL;
+}
+
+typedef struct { long pass, fail, unported, desc_checked, port_checked; } stats_t;
+static const record_t *g_cur_rec = NULL;   /* published for future arg-recovery wrappers */
+
+/* ── PER-FUNCTION semantic / descriptor / port-write differential ───────────────── */
+static int run_per_function(record_t *recs, long nrec, const char *scname, stats_t *st)
+{
+    long i;
+    int  scen_fail = 0;
+    long printed = 0;
+    for (i = 0; i < nrec; i++) {
+        record_t *r = &recs[i];
+        const ported_t *p = ported_lookup(r->fn_off);
+
+        if (p == NULL || p->fn == NULL) {
+            /* No reconstructed body yet (T2: all NULL).  Never references the symbol;
+               UNPORTED is not a crash, not a hard failure. */
+            st->unported++;
+            continue;
+        }
+
+        /* ── PORTED: seed, call, assert via the registered comparator ──────────── */
+        {
+            const char *bad = NULL; long got = 0, want = 0;
+            u16 ret = 0;
+            g_cur_rec = r;
+            seed_globals(&r->ent);
+            seed_descriptors(r);
+            if (p->cmp == 'C') prime_ports(r);
+            /* NOTE: the actual call site is filled by T3–T5 (each wrapper recovers args
+             *  from g_cur_rec and invokes the real port, capturing AX into `ret` for the
+             *  semantic comparator).  In T2 no fn is callable so this branch is unreached. */
+            p->fn();
+            if (p->cmp == 'A') {
+                bad = cmp_semantic(r, ret, &got, &want);
+            } else if (p->cmp == 'B') {
+                bad = cmp_descriptors(r, &got, &want);
+                if (bad == NULL) st->desc_checked++;
+            } else { /* 'C' */
+                bad = cmp_ports(r, &got, &want);
+                if (bad == NULL) st->port_checked++;
+            }
+            if (bad == NULL) {
+                st->pass++;
+            } else {
+                st->fail++; scen_fail = 1;
+                if (printed++ < 8)
+                    printf("    FAIL [%s #%ld] %s field %s: got %#lx want %#lx\n",
+                           scname, i, p->name, bad, got, want);
+            }
+        }
+    }
+    return !scen_fail;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════ */
+int main(int argc, char **argv)
+{
+    const char *path = (argc > 1) ? argv[1]
+                                  : "local/build/render/screens_trace.bin";
+    FILE *f = fopen(path, "rb");
+    long sz; u8 *b; u32 o; u16 ver, nsc, nfn; unsigned s;
+    stats_t st = { 0, 0, 0, 0, 0 };
+    long n_records = 0, n_io_total = 0;
+    int hard_fail = 0;
+
+    {   /* perturbation knob: SCR_PERTURB=N corrupts the Nth emitted OUT (proves gate C). */
+        const char *pe = getenv("SCR_PERTURB");
+        if (pe && *pe) {
+            g_perturb_idx = atoi(pe);
+            printf("screens_ctest: PERTURBATION active — corrupting emitted OUT #%d "
+                   "(the DAC port-write gate MUST report a FAIL)\n", g_perturb_idx);
+        }
+    }
+    if (!f) { fprintf(stderr, "cannot open %s\n", path); return 2; }
+    fseek(f, 0, SEEK_END); sz = ftell(f); fseek(f, 0, SEEK_SET);
+    b = malloc(sz);
+    if (!b || fread(b, 1, sz, f) != (size_t)sz) { fprintf(stderr, "read fail\n"); return 2; }
+    fclose(f);
+
+    if (sz < 14 || memcmp(b, "SCRTRC01", 8) != 0) {
+        fprintf(stderr, "bad magic (want SCRTRC01)\n"); return 2;
+    }
+    ver = rd16(b + 8); nsc = rd16(b + 10);
+    if (ver != TRACE_VER) {
+        fprintf(stderr, "unsupported version %u (want %u)\n", ver, TRACE_VER); return 2;
+    }
+    o = 12;
+    nfn = rd16(b + o); o += 2;
+    /* skip the fn-name string table (we key on fn_off, not the name index). */
+    { u16 k; for (k = 0; k < nfn; k++) { u8 ln = b[o]; o += 1 + ln; } }
+
+    printf("screens_ctest: replay harness over %s\n", path);
+    printf("  trace: SCRTRC01 v%u, %u scenarios, %u fn-names (SNAP=%d B)\n",
+           ver, nsc, nfn, SNAP_SIZE);
+    printf("  src/screens.c: Phase-7 T2 SKELETON (globals only) — PORTED[] all NULL, so "
+           "every record is UNPORTED, the 3 comparators (A semantic / B descriptor / "
+           "C DAC port-write) are dormant.  Expected FAIL=0.\n");
+
+    for (s = 0; s < nsc; s++) {
+        u8 sid, name_len;
+        char scname[64];
+        u32 nrec, k;
+        record_t *recs;
+        stats_t sst = { 0, 0, 0, 0, 0 };
+        int per_ok;
+
+        sid = b[o]; o += 1;
+        name_len = b[o]; o += 1;
+        { unsigned n = name_len < 63 ? name_len : 63;
+          memcpy(scname, b + o, n); scname[n] = 0; o += name_len; }
+        nrec = rd32(b + o); o += 4;
+
+        recs = malloc(sizeof(record_t) * (nrec ? nrec : 1));
+        for (k = 0; k < nrec; k++) {
+            record_t *r = &recs[k];
+            unsigned j;
+            r->fn_off = rd16(b + o); o += 2;
+            r->fn_name_idx = rd16(b + o); o += 2;
+            parse_snap(b + o, &r->ent); o += SNAP_SIZE;
+            parse_snap(b + o, &r->ex);  o += SNAP_SIZE;
+            r->ret_val = rd16(b + o); o += 2;
+            r->render_desc_len = b[o++];
+            { unsigned n = r->render_desc_len < VIEW_DESC_MAX ? r->render_desc_len : VIEW_DESC_MAX;
+              memcpy(r->render_desc, b + o, n); o += r->render_desc_len; }
+            r->p1_sprite_len = b[o++];
+            { unsigned n = r->p1_sprite_len < P1_SPRITE_MAX ? r->p1_sprite_len : P1_SPRITE_MAX;
+              memcpy(r->p1_sprite, b + o, n); o += r->p1_sprite_len; }
+            r->seed_len = b[o++];
+            { unsigned n = r->seed_len < SEED_BUF_MAX ? r->seed_len : SEED_BUF_MAX;
+              memcpy(r->seed, b + o, n); o += r->seed_len; }
+            r->n_io = rd16(b + o); o += 2;
+            r->io = r->n_io ? malloc(sizeof(io_t) * r->n_io) : NULL;
+            for (j = 0; j < r->n_io; j++) {
+                r->io[j].dir   = b[o];        o += 1;
+                r->io[j].port  = rd16(b + o); o += 2;
+                r->io[j].size  = b[o];        o += 1;
+                r->io[j].value = rd16(b + o); o += 2;
+            }
+            n_io_total += r->n_io;
+            n_records++;
+        }
+
+        printf("\n== scenario %u: %s (%lu records) ==\n",
+               sid, scname, (unsigned long)nrec);
+
+        per_ok = run_per_function(recs, (long)nrec, scname, &sst);
+        printf("  per-fn: PASS=%ld  FAIL=%ld  UNPORTED=%ld  DESC_CHECKED=%ld  PORT_CHECKED=%ld\n",
+               sst.pass, sst.fail, sst.unported, sst.desc_checked, sst.port_checked);
+        if (!per_ok) hard_fail = 1;
+
+        st.pass += sst.pass; st.fail += sst.fail; st.unported += sst.unported;
+        st.desc_checked += sst.desc_checked; st.port_checked += sst.port_checked;
+        for (k = 0; k < nrec; k++) free(recs[k].io);
+        free(recs);
+    }
+
+    if (o != (u32)sz) {
+        fprintf(stderr, "WARNING: parsed %lu of %ld bytes (trailing data)\n",
+                (unsigned long)o, sz);
+        hard_fail = 1;
+    }
+
+    printf("\n=== TOTAL per-fn: PASS=%ld  FAIL=%ld  UNPORTED=%ld  DESC_CHECKED=%ld  "
+           "PORT_CHECKED=%ld (records=%ld, port-I/O events=%ld) ===\n",
+           st.pass, st.fail, st.unported, st.desc_checked, st.port_checked,
+           n_records, n_io_total);
+    if (hard_fail || st.fail != 0) {
+        printf("FAIL: %ld per-function differential failure(s) on PORTED fns\n", st.fail);
+        free(b);
+        return 1;
+    }
+    printf("PASS: FAIL=0.  %ld records UNPORTED (T2 skeleton: every screen fn body is "
+           "still stubbed in game_stubs.c); %ld PORTED records matched.\n",
+           st.unported, st.pass);
+    free(b);
+    return 0;
+}
