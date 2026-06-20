@@ -48,9 +48,27 @@
  *     its stub is removed (dup-symbol once anim.obj links). */
 /* apply_cell_animation (1000:69aa) — RECONSTRUCTED in anim.c (Phase-5 T3). */
 
-/* (2) Sound / anim helper leaves the move handlers call. */
-void play_sound(u8 sound_id)                { (void)sound_id; }  /* 1000:6e11 */
+/* (2) Sound / anim helper leaves the move handlers call.
+ *  play_sound (1000:6e11) — RECONSTRUCTED in sound.c (Phase-6 T3); its stub is removed
+ *  here (dup-symbol once sound.obj links).  play_sound_effect (6e30) +
+ *  schedule_timer_callback_a/b/c (9488/9502/956d) are also reconstructed in sound.c (T3);
+ *  the deeper callees they reach are stubbed below for the BUMPY.EXE link (deferred T4/T5). */
 void play_action_sound(void)                {}
+
+/* ── Phase-6 T3 still-stubbed sound callees (faithful-signature; for the link only) ──
+ *  RECONSTRUCTION FIDELITY: these are reached by the T3-ported sound pipeline
+ *  (play_sound_effect / schedule_timer_callback_a/b/c) but are NOT part of the
+ *  validated semantic state (the tone param frame + device-guarded dispatch).  No-op /
+ *  benign-default bodies so BUMPY.EXE links; their real ports land in Phase-6 T4/T5.
+ *    record_min_status_code (1000:945b) — records a min status code from a packed
+ *        flags word; the validated frame does not depend on it.            → T4/T5.
+ *    FUN_1000_7df9          (1000:7df9) — the PIT/timer scheduler.          → T4.
+ *    speaker_gate_reset     (1000:9440) — PC-speaker gate reset (L4).       → T5.
+ *    FUN_1000_8a07          (1000:8a07) — OPL/MPU raw two-byte sample emit.  → T5. */
+void record_min_status_code(u16 status)        { (void)status; }   /* 1000:945b */
+void FUN_1000_7df9(void)                        {}                  /* 1000:7df9 */
+void speaker_gate_reset(void)                   {}                  /* 1000:9440 */
+void FUN_1000_8a07(u8 sample_lo, u8 sample_hi)  { (void)sample_lo; (void)sample_hi; }  /* 1000:8a07 */
 void apply_contact_action(u8 code)          { (void)code; }
 void play_walk_anim_default(void)           {}  /* 1000:4361 */
 /* p1_set_pixel_from_cell 1000:4906 — set p1_pixel_x/y + move_step_count from the

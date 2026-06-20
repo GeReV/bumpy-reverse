@@ -78,9 +78,21 @@ extern u8  snd_voice_table[SND_VOICE_TABLE_LEN];         /* CODE 0x83cc */
  *  externs them rather than re-declaring here to avoid a redundant/conflicting
  *  declaration. */
 
-/* ── sound function prototypes (bodies stubbed in game_stubs.c this task; the L1–L4
- *    ports land in Phase-6 T3–T6 and move here) ───────────────────────────────── */
-void play_sound(u8 sound_id);            /* 1000:6e11 */
+/* ── sound function prototypes ───────────────────────────────────────────────────
+ *  PORTED (Phase-6 T3 — effect→frame pipeline): play_sound + play_sound_effect
+ *  (L1 dispatch) and schedule_timer_callback_a/b/c (L3 tone-submit) have 1:1 bodies
+ *  in sound.c.  The rest are still stubbed in game_stubs.c; their L2/L4/L5 ports land
+ *  in Phase-6 T4–T6 and move here. */
+void play_sound(u8 sound_id);            /* 1000:6e11 — PORTED (T3) */
+void play_sound_effect(u8 effect_id);    /* 1000:6e30 — PORTED (T3) */
+u16  schedule_timer_callback_a(u16 param_1, u16 param_2, u16 param_3, u16 param_4,
+                               u16 param_5, u16 param_6, u16 param_7, u16 param_8);
+                                         /* 1000:9488 — PORTED (T3) */
+u16  schedule_timer_callback_b(u16 param_1, u16 param_2, u16 param_3, u16 param_4,
+                               u16 param_5, u16 param_6);
+                                         /* 1000:9502 — PORTED (T3) */
+u16  schedule_timer_callback_c(u16 param_1, u16 param_2);
+                                         /* 1000:956d — PORTED (T3) */
 void play_action_sound(void);            /* 1000:63be */
 void sound_select_device(void);          /* 1000:6de3 */
 

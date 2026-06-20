@@ -208,6 +208,22 @@ static void seed_globals(const snap_t *s)
     snd_timer_cb_seg = s->timer_cb_seg;
 }
 
+/* ── CODE-segment load-base relocation (the project's deliberate _seg convention) ──
+ *  The far timer-callback SEGMENT is a relocated word: src/sound.c stores the FAITHFUL
+ *  Ghidra image-base literal 0x1000 (decomp `timer_callback_seg = 0x1000`), but the MZ
+ *  relocation fixes that segment immediate to the RUNTIME CODE base at load.  The Phase-6
+ *  T1 oracle loaded the image at base = PSP_SEG+0x10 = 0x110 (tools/sound_oracle.py
+ *  CODE_LIN), so the trace captured timer_cb_seg = 0x110.  Both denote "the program's
+ *  CODE segment"; the comparator maps the host's image-base literal to the trace's
+ *  runtime base.  The OFFSET is NOT relocated (faithful literal 0x9631/0x96c4/0x95b5
+ *  matches the trace verbatim). */
+#define CODE_IMAGE_SEG   0x1000   /* Ghidra seg-1000 image base (the faithful literal) */
+#define CODE_RUNTIME_SEG 0x110    /* oracle runtime CODE base (what the trace captured) */
+static u16 seg_to_trace(u16 seg)
+{
+    return (seg == CODE_IMAGE_SEG) ? CODE_RUNTIME_SEG : seg;
+}
+
 /* ── (A) SEMANTIC-STATE COMPARATOR — read live sound globals vs the EXIT snap ─────
  *  Returns NULL if every captured sound-global field matches the EXIT snap, else a
  *  short field name of the first divergence; got/want filled. */
@@ -226,7 +242,10 @@ static const char *cmp_semantic(const snap_t *ex, long *got, long *want)
     CHK(prev_game_mode,      prev_game_mode);
     CHK(p1_contact_code,     p1_contact_code);
     CHK(timer_cb_off,        snd_timer_cb_off);
-    CHK(timer_cb_seg,        snd_timer_cb_seg);
+    /* timer_cb_seg: src/sound.c stores the faithful image-base literal (0x1000); the
+     *  trace captured the relocated runtime CODE base (0x110).  Map before comparing
+     *  (the project's _seg load-base relocation — see seg_to_trace). */
+    CHK(timer_cb_seg,        seg_to_trace(snd_timer_cb_seg));
     #undef CHK
     for (i = 0; i < PF_WORDS; i++) {
         if (snd_param_frame[i] != ex->param_frame[i]) {
@@ -299,24 +318,184 @@ u8  p1_contact_code;        /* player.c 0x8551 */
 u8  tile_below_player;      /* player.c 0x79b9 */
 u8  prev_game_mode;         /* player.c 0x8552 */
 
+/* ── HOST stubs for the T3 still-stubbed sound callees src/sound.c references ──────
+ *  In BUMPY.EXE these resolve to the faithful-signature stubs in game_stubs.c; the
+ *  harness does NOT link game_stubs.c (it #includes only src/sound.c), so it supplies
+ *  its own no-op host stubs — the same convention items_ctest uses for play_sound etc.
+ *  None affects the validated semantic state (device-guarded dispatch + tone frame). */
+void record_min_status_code(u16 status)        { (void)status; }   /* 1000:945b */
+void FUN_1000_7df9(void)                        {}                  /* 1000:7df9 */
+void speaker_gate_reset(void)                   {}                  /* 1000:9440 */
+void FUN_1000_8a07(u8 lo, u8 hi)               { (void)lo; (void)hi; }  /* 1000:8a07 */
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  Phase-6 T3 — CALL-ARGUMENT RECOVERY for the effect→frame pipeline.
+ *
+ *  WHY recovery is needed.  The trace records a sound-fn CALL as fn_off + ENTRY snap
+ *  + EXIT snap + port-I/O — it does NOT serialize the call's ARGUMENTS (the eid handed
+ *  to play_sound, or the tone-param tuple handed to schedule_timer_callback_*).  But to
+ *  re-run a PORTED pipeline fn on the host and diff its EXIT frame, the harness must
+ *  call it with the SAME arguments the engine used.  We recover them from the record:
+ *
+ *   (1) schedule_timer_callback_a/b/c — the fn OVERWRITES the param frame from its args
+ *       via a fixed slot map (decompiled at 1000:9488/9502/956d).  So the args are read
+ *       back from the EXIT frame's CANONICAL slots (the inverse of the fill map), then
+ *       the reconstructed fn is re-run from the seeded ENTRY frame and ALL 10 slots +
+ *       the cb ptr are asserted == the EXIT snap.  This is a genuine differential, NOT
+ *       a fit: recovery reads the canonical source slots ([0],[1],[2|7],[3],[4],[5|8],
+ *       [6]); the comparator then checks EVERY slot, so a wrong-slot / missing dual-write
+ *       / wrong-cb bug in the port still diverges (the port writes the live frame, the
+ *       harness recovery + comparator are independent of the port).
+ *
+ *   (2) play_sound / play_sound_effect — recover the effect id by SIMULATING the 21-case
+ *       switch SPEC (an independent data table here, EFFECT_SPEC[]) against the record's
+ *       ENTRY frame for every candidate eid and picking the eid whose simulated EXIT
+ *       frame == the record's EXIT frame.  The real reconstructed play_sound(eid) is then
+ *       called and its live frame diffed vs the EXIT snap — so the port must reproduce
+ *       what the independent spec predicts (a real differential of the switch + the
+ *       device guard + the scheduler chain).  Device-guard paths where the frame does not
+ *       change (mute: device==-0x8000; OPL sample: device==4) are detected as exit==entry
+ *       and validated as the no-op the engine captured (any eid; the port leaves the frame
+ *       untouched, matching).
+ *
+ *  The current record is published in g_cur_rec so the zero-arg wrapper the registry
+ *  needs can read back the recovered args.  Recovery + spec live ONLY in the harness;
+ *  src/sound.c is never consulted for them. */
+static const record_t *g_cur_rec = NULL;
+
+/* EFFECT_SPEC[eid] — the play_sound_effect switch as DATA (independent of src/sound.c).
+ *  submit: 'a' => schedule_timer_callback_a(2,arg2,arg3,1,uVar1,uVar2,uVar3,uVar4),
+ *          'b' => schedule_timer_callback_b(2,p2,p3,p4,p5,p6).
+ *  For 'a': frame=[uVar2',arg3,arg4(=1),...] per the 9488 fill; encoded as the literal
+ *  arg tuple the decomp passes.  eid 0 + any eid not below => no submit (frame unchanged). */
+typedef struct {
+    char submit;            /* 'a', 'b', or 0 (no submit) */
+    u16  a2, a3, a4, a5, a6, a7, a8;  /* schedule_timer_callback_a(2,a2,a3,a4,a5,a6,a7,a8) */
+    u16  b2, b3, b4, b5, b6;          /* schedule_timer_callback_b(2,b2,b3,b4,b5,b6)        */
+} effect_spec_t;
+
+/* From play_sound_effect (1000:6e30).  'a' tuple = (tone_arg2, tone_arg3, 1, uVar1,
+ *  uVar2, uVar3, uVar4); cases 1/9/0xc/0x10/0x15 take the LAB_70d6 tail (uVar3=1,
+ *  tone_arg2=0x1e). 'b' cases 0x0b/0x11/0x12 submit via schedule_timer_callback_b. */
+static const effect_spec_t EFFECT_SPEC[0x16] = {
+    /* 0x00 */ { 0 },
+    /* 0x01 */ { 'a', 0x1e, 1000,  1, 10,     0x1c2, 1, 1,        0,0,0,0,0 },
+    /* 0x02 */ { 'a', 0x28, 800,   1, 0xfff6, 0x1c2, 1, 1,        0,0,0,0,0 },
+    /* 0x03 */ { 'a', 400,  0x1b8, 1, 0xffff, 499,   4, 0xffff,   0,0,0,0,0 },
+    /* 0x04 */ { 'a', 0x5a, 0xdc,  1, 0xffff, 100,   1, 4,        0,0,0,0,0 },
+    /* 0x05 */ { 'a', 0x19, 1000,  1, 10,     0x1b8, 1, 2,        0,0,0,0,0 },
+    /* 0x06 */ { 'a', 0x14, 0x44c, 1, 10,     0x1b8, 2, 5,        0,0,0,0,0 },
+    /* 0x07 */ { 'a', 0xf,  0x4b0, 1, 10,     0x1b8, 1, 3,        0,0,0,0,0 },
+    /* 0x08 */ { 'a', 0x28, 0xdc,  1, 0xfffb, 100,   1, 5,        0,0,0,0,0 },
+    /* 0x09 */ { 'a', 0x1e, 0x32,  1, 0x14,   0x1c2, 1, 1,        0,0,0,0,0 },
+    /* 0x0a */ { 'a', 0xf,  200,   1, 0x32,   0x15d, 1, 10,       0,0,0,0,0 },
+    /* 0x0b */ { 'b', 0,0,0,0,0,0,0,                              0x28, 0x14, 499, 1, 0xfffc },
+    /* 0x0c */ { 'a', 0x1e, 0x4b0, 1, 10,     0x1a4, 1, 2,        0,0,0,0,0 },
+    /* 0x0d */ { 'a', 0x14, 200,   1, 0x32,   0x15d, 2, 0xf,      0,0,0,0,0 },
+    /* 0x0e */ { 'a', 0x32, 10,    1, 4,      200,   10,0,        0,0,0,0,0 },
+    /* 0x0f */ { 'a', 400,  300,   1, 2,      100,   2, 1,        0,0,0,0,0 },
+    /* 0x10 */ { 'a', 0x1e, 0x4b0, 1, 10,     0x1a4, 1, 2,        0,0,0,0,0 },
+    /* 0x11 */ { 'b', 0,0,0,0,0,0,0,                              0x28, 0x14, 499, 1, 0xfffc },
+    /* 0x12 */ { 'b', 0,0,0,0,0,0,0,                              0x50, 0x1e, 499, 2, 0xfffc },
+    /* 0x13 */ { 'a', 800,  300,   1, 1,      100,   2, 1,        0,0,0,0,0 },
+    /* 0x14 */ { 'a', 0x32, 10,    1, 4,      200,   10,0,        0,0,0,0,0 },
+    /* 0x15 */ { 'a', 0x1e, 600,   1, 10,     0x1c2, 1, 1,        0,0,0,0,0 },
+};
+
+/* Apply schedule_timer_callback_a's frame fill (1000:9488 map) to f[10]. */
+static void spec_fill_a(u16 f[PF_WORDS], u16 a2, u16 a3, u16 a4, u16 a5,
+                        u16 a6, u16 a7, u16 a8, u16 *cb_off, u16 *cb_seg)
+{
+    f[0] = a2; f[1] = a3; f[7] = a4; f[2] = a4; f[3] = a5;
+    f[4] = a6; f[5] = a7; f[8] = a7; f[6] = a8; f[9] = 0xf;
+    *cb_off = 0x9631; *cb_seg = CODE_RUNTIME_SEG;   /* trace-base (relocated) for matching */
+}
+/* schedule_timer_callback_b fill (1000:9502 map). */
+static void spec_fill_b(u16 f[PF_WORDS], u16 b2, u16 b3, u16 b4, u16 b5, u16 b6,
+                        u16 *cb_off, u16 *cb_seg)
+{
+    f[0] = b2; f[1] = b3; f[4] = b4; f[5] = b5; f[8] = b5; f[6] = b6; f[9] = 0xf;
+    *cb_off = 0x96c4; *cb_seg = CODE_RUNTIME_SEG;   /* trace-base (relocated) for matching */
+}
+
+/* Simulate play_sound_effect(eid) on entry frame -> exit frame + cb (spec, host-side). */
+static void spec_effect(u8 eid, s16 device, const u16 ein[PF_WORDS],
+                        u16 efoff, u16 efseg,
+                        u16 out[PF_WORDS], u16 *cb_off, u16 *cb_seg)
+{
+    int i;
+    for (i = 0; i < PF_WORDS; i++) out[i] = ein[i];
+    *cb_off = efoff; *cb_seg = efseg;
+    if (device == 4) return;                 /* OPL sample path: frame unchanged */
+    if (eid >= 0x16) return;                 /* default: no submit */
+    {
+        const effect_spec_t *s = &EFFECT_SPEC[eid];
+        if (s->submit == 'a')
+            spec_fill_a(out, s->a2, s->a3, s->a4, s->a5, s->a6, s->a7, s->a8, cb_off, cb_seg);
+        else if (s->submit == 'b')
+            spec_fill_b(out, s->b2, s->b3, s->b4, s->b5, s->b6, cb_off, cb_seg);
+        /* submit==0: frame unchanged */
+    }
+}
+
+/* Recover the effect id whose spec EXIT frame matches the record's EXIT snap. */
+static int recover_eid(const record_t *r)
+{
+    u16 f[PF_WORDS], co, cs; int eid;
+    for (eid = 0; eid < 0x16; eid++) {
+        spec_effect((u8)eid, r->ent.sound_device_state, r->ent.param_frame,
+                    r->ent.timer_cb_off, r->ent.timer_cb_seg, f, &co, &cs);
+        if (memcmp(f, r->ex.param_frame, sizeof f) == 0 &&
+            co == r->ex.timer_cb_off && cs == r->ex.timer_cb_seg)
+            return eid;
+    }
+    return 0;   /* no spec eid matched (e.g. frame unchanged) — no-op call is correct */
+}
+
+/* ── zero-arg registry wrappers: recover args from g_cur_rec, call the real port ──── */
+static void call_play_sound(void)
+{
+    play_sound((u8)recover_eid(g_cur_rec));
+}
+static void call_play_sound_effect(void)
+{
+    play_sound_effect((u8)recover_eid(g_cur_rec));
+}
+static void call_schedule_timer_callback_a(void)
+{
+    /* args from the EXIT frame's canonical source slots (inverse of the 9488 fill). */
+    const u16 *e = g_cur_rec->ex.param_frame;
+    schedule_timer_callback_a(2, e[0], e[1], e[2], e[3], e[4], e[5], e[6]);
+}
+static void call_schedule_timer_callback_b(void)
+{
+    const u16 *e = g_cur_rec->ex.param_frame;
+    schedule_timer_callback_b(2, e[0], e[1], e[4], e[5], e[6]);
+}
+static void call_schedule_timer_callback_c(void)
+{
+    /* _c writes only slot [1] (+ the 0x0f marker + cb); recover param_2 from [1]. */
+    const u16 *e = g_cur_rec->ex.param_frame;
+    schedule_timer_callback_c(2, e[1]);
+}
+
 /* ════════════════════════════════════════════════════════════════════════════
  *  PORTED REGISTRY — engine seg-1000 offset -> reconstructed-C callable.
  *
- *  Phase-6 T2 SKELETON: every entry is NULL (no sound body is reconstructed yet — the
- *  bodies remain stubbed in game_stubs.c).  So EVERY record is reported UNPORTED and
- *  the comparators are dormant.  The L1–L4 ports (T3–T6) replace a NULL with the fn's
- *  C name; the run loop then dispatches each PORTED record through comparator (A) for
- *  L1–L3 fns or comparator (B) for L4 driver fns.  Until then the harness never
- *  references an (absent) sound-body symbol.
+ *  Phase-6 T3: the effect→frame pipeline (play_sound / play_sound_effect +
+ *  schedule_timer_callback_a/b/c) is PORTED in src/sound.c and wired below via the
+ *  arg-recovery wrappers above.  The remaining sound fns stay NULL (UNPORTED) until
+ *  their L2/L4/L5 ports (T4–T6) fill them.  The run loop dispatches each PORTED record
+ *  through comparator (A) semantic-state (L1–L3) or (B) port-write-sequence (L4).
  *
  *  `is_l4` selects the port-write-sequence comparator (B); else semantic-state (A).
  * ════════════════════════════════════════════════════════════════════════════ */
 typedef struct { u16 off; const char *name; int is_l4; void (*fn)(void); } ported_t;
 
 static const ported_t PORTED[] = {
-    /* L1 dispatch (semantic-state, T3) — bodies still stubbed -> NULL. */
-    { 0x6e11, "play_sound",            0, NULL },
-    { 0x6e30, "play_sound_effect",     0, NULL },
+    /* L1 dispatch (semantic-state, T3) — PORTED in src/sound.c. */
+    { 0x6e11, "play_sound",            0, call_play_sound },
+    { 0x6e30, "play_sound_effect",     0, call_play_sound_effect },
     { 0x63be, "play_action_sound",     0, NULL },
     { 0x640c, "play_contact_sound",    0, NULL },
     { 0x6305, "play_exit_sound",       0, NULL },
@@ -332,10 +511,10 @@ static const ported_t PORTED[] = {
     { 0x8600, "snddrv_dispatch_c",            0, NULL },
     { 0x8626, "snddrv_dispatch_d",            0, NULL },
     { 0x872e, "snd_busy_delay",               0, NULL },
-    /* L3 tone (semantic-state, T5). */
-    { 0x9488, "schedule_timer_callback_a",    0, NULL },
-    { 0x9502, "schedule_timer_callback_b",    0, NULL },
-    { 0x956d, "schedule_timer_callback_c",    0, NULL },
+    /* L3 tone (semantic-state) — schedule_timer_callback_a/b/c PORTED (T3). */
+    { 0x9488, "schedule_timer_callback_a",    0, call_schedule_timer_callback_a },
+    { 0x9502, "schedule_timer_callback_b",    0, call_schedule_timer_callback_b },
+    { 0x956d, "schedule_timer_callback_c",    0, call_schedule_timer_callback_c },
     { 0x7f2b, "arm_timer_callback",           0, NULL },
     { 0x7de8, "set_timer_slot",               0, NULL },
     { 0x7f65, "disable_timer_callback",       0, NULL },
@@ -386,6 +565,7 @@ static int run_per_function(record_t *recs, long nrec, const char *scname,
         /* ── PORTED: seed entry, (prime ports if L4), call, assert ──────────────── */
         {
             const char *bad = NULL; long got = 0, want = 0;
+            g_cur_rec = r;            /* publish current record for the arg-recovery wrappers */
             seed_globals(&r->ent);
             if (p->is_l4) {
                 prime_ports(r);
