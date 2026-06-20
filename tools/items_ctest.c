@@ -82,6 +82,12 @@ u8  p1_cell;                     /* player.c — 0x856e          */
 u8  move_step_count;             /* player.c — 0x855e          */
 u8  physics_frozen;              /* player.c — 0xa0ce          */
 s16 p1_pixel_y;                  /* player.c — 0x9292          */
+s16 sound_device_state;          /* player.c — 0x689c (==4 → OPL ids; here 0)  */
+
+/* FX/sound callees the collect path reaches (game_stubs.c in BUMPY.EXE).  They
+   have no effect on the validated semantic state, so the harness stubs them. */
+void play_sound(unsigned char id)        { (void)id; }   /* 1000:6e11 */
+void apply_cell_animation(unsigned char f){ (void)f; }    /* 1000:69aa */
 
 #include "../src/items.c"
 
@@ -232,11 +238,11 @@ static const char *cmp_exit(const snap_t *e, u8 entry_cell, long *got, long *wan
 typedef struct { u16 off; void (*fn)(void); } ported_t;
 
 static const ported_t PORTED[] = {
-    { FN_P1_COLLECT_ITEM,       NULL },   /* T3/T4 -> p1_collect_item            */
-    { FN_P1_COLLECT_ITEM_SCORE, NULL },   /* T3/T4 -> p1_collect_item_score      */
-    { FN_CHECK_EXIT_TILE_VERT,  NULL },   /* T3/T4 -> check_exit_tile_vert       */
-    { FN_MOVE_STEP_READ_ITEM,   NULL },   /* T3/T4 -> move_step_read_item        */
-    { FN_TELEPORT_NEXT_EXIT,    NULL },   /* T3/T4 -> teleport_to_next_exit_tile */
+    { FN_P1_COLLECT_ITEM,       p1_collect_item },        /* T3 ported            */
+    { FN_P1_COLLECT_ITEM_SCORE, p1_collect_item_score },  /* T3 ported            */
+    { FN_CHECK_EXIT_TILE_VERT,  NULL },   /* T4 -> check_exit_tile_vert           */
+    { FN_MOVE_STEP_READ_ITEM,   move_step_read_item },    /* T3 ported            */
+    { FN_TELEPORT_NEXT_EXIT,    NULL },   /* T4 -> teleport_to_next_exit_tile     */
 };
 #define PORTED_N (sizeof(PORTED) / sizeof(PORTED[0]))
 
