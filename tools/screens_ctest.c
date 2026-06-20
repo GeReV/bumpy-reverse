@@ -105,6 +105,11 @@ static int  g_perturb_desc = -1;    /* -1 = disabled; else the HUD fill index to
  *  independent reference's last digit is bumped, so draw_number's gate MUST FAIL. */
 static int  g_perturb_num = 0;
 
+/* MENU perturbation knob (proves the run_main_menu cursor state-machine gate is REAL).
+ *  When SCR_PERTURB_MENU=1 the expected selected_item is bumped, so the menu gate MUST
+ *  FAIL on a run_main_menu record. */
+static int  g_perturb_menu = 0;
+
 static void host_out_sz(u16 port, u16 val, u8 size)
 {
     if (g_perturb_idx >= 0 && g_out_seen == g_perturb_idx) {
@@ -207,6 +212,41 @@ HOST_UNUSED u16 score_hi;                    /* game.c  0xa0d6 */
 HOST_UNUSED u8  frame_abort_flag;            /* game.c  0x928d (SNAP game_state_928d) */
 HOST_UNUSED u8 __far *p1_sprite;             /* anim.c  0x8884 — blit-descriptor far ptr */
 
+/* ── HOST input-script REPLAY (the run_main_menu cursor STATE MACHINE gate) ─────────
+ *  src/screens.c's menu / state-machine loops drive cursor/selection by polling input:
+ *    poll_input()             — sets input_state from the next FUN_75a2 action byte;
+ *    fun_75a2_poll_action()   — returns the next FUN_75a2 action byte (the drain loop).
+ *  The engine read ONE FUN_75a2 stream in call order (poll_input + the drain loop pop in
+ *  lockstep).  The trace (v3) captured that exact stream per record.  The host replays it
+ *  from menu_input_q in FIFO order across BOTH leaves so the reconstructed cursor walk
+ *  reproduces the engine's EXACTLY — no guessed loop PCs, the real captured input. */
+static const u8 *menu_input_q = NULL;
+static int       menu_input_n = 0, menu_input_i = 0;
+static u8        host_input_state_after = 0;   /* the last byte poll_input wrote */
+
+static u8 menu_input_next(void)
+{
+    if (menu_input_i < menu_input_n) return menu_input_q[menu_input_i++];
+    return 0;   /* exhausted -> 0 (no input), matching the oracle's FUN_75a2 fallback */
+}
+
+/* HOST leaf definitions (engine fns reconstructed/stubbed in other modules; the harness
+ *  does NOT link those objs).  Render/present/view leaves are no-ops (their observable
+ *  output — the descriptor + p1_sprite — is produced by the ported builder and gated
+ *  separately).  The input leaves drive from the replay queue. */
+HOST_UNUSED void restore_bg_view(u8 __far *view, u16 seg) { (void)view; (void)seg; }
+HOST_UNUSED void present_frame(u8 page) { (void)page; }
+HOST_UNUSED void init_fullscreen_view_desc(u8 mode, u8 flag) { (void)mode; (void)flag; }
+HOST_UNUSED void wait_keypress(void) { }
+HOST_UNUSED void set_resource_table(u16 off, u16 seg) { (void)off; (void)seg; }
+HOST_UNUSED void show_highscore_screen(void) { }   /* T5 leaf */
+HOST_UNUSED void poll_input(void)
+{
+    input_state = menu_input_next();       /* engine: AL = FUN_75a2(); input_state = AL */
+    host_input_state_after = input_state;
+}
+HOST_UNUSED char fun_75a2_poll_action(u8 arg) { (void)arg; return (char)menu_input_next(); }
+
 /* ════════════════════════════════════════════════════════════════════════════
  *  Trace format (frozen — see tools/screens_oracle.py header §"TRACE LAYOUT").
  *
@@ -221,7 +261,7 @@ HOST_UNUSED u8 __far *p1_sprite;             /* anim.c  0x8884 — blit-descript
  *    u16 score_lo, u16 score_hi, u8 timing_flag_accum, u8 game_state_928d,
  *    u16 palette_mode_word, u8[8] highscore_name0.
  * ════════════════════════════════════════════════════════════════════════════ */
-#define TRACE_VER  2   /* v2: record tail gains the per-fill HUD descriptor sequence */
+#define TRACE_VER  3   /* v3: record tail gains the consumed input script (menu replay) */
 /* SCRSNAP byte size: 4*1 + 2*2 + 2*1 + 1*2 + 8 = 4 + 4 + 2 + 2 + 8 = 20. */
 #define SNAP_SIZE  (4 + 2 * 2 + 2 + 2 + 8)
 
@@ -258,6 +298,8 @@ typedef struct {
     u8     fills[HUD_FILL_MAX][VIEW_DESC_MAX];
     u8     n_args;        /* near-call args the scenario passed (read off the stack) */
     u16    args[8];
+    u8     n_input;       /* FUN_75a2 return stream consumed during the call (v3)       */
+    u8     input[256];    /* the captured input script (menu / state-machine replay)    */
 } record_t;
 
 static u16 rd16(const u8 *p) { return (u16)(p[0] | (p[1] << 8)); }
@@ -390,6 +432,35 @@ static const char *cmp_descriptors(const record_t *r, long *got, long *want)
     return NULL;
 }
 
+/* ── (P) P1-SPRITE-ONLY DESCRIPTOR COMPARATOR — sprite-glyph text builders ──────────
+ *  show_menu_select_screen renders its three text rows as sprite GLYPHS, each via the
+ *  p1_sprite blit descriptor + blit_sprite (anim_blit_sprite_leaf).  Its observable,
+ *  RECONSTRUCTED output is the p1_sprite descriptor (word[0]=col*0x10, word[1]=row y,
+ *  word[2]=char+0x175).  The render_descriptor_ptr VIEW struct's EXIT bytes are NOT a
+ *  faithful gate here: the engine's blit_sprite (a stubbed BGI overlay leaf) mutates the
+ *  view struct internally (e.g. +0x14 dest-x), so the captured EXIT view struct reflects
+ *  the overlay's last blit, not anything the ported builder writes.  RECONSTRUCTION
+ *  FIDELITY: gate the p1_sprite descriptor (the builder's real output); the view struct
+ *  is the BGI overlay's and is left out of this fn's gate. */
+static const char *cmp_p1sprite(const record_t *r, long *got, long *want)
+{
+    /* Gate the glyph POSITION words — word[0] (+0x00/+0x01) dest x = col*0x10 and word[1]
+     *  (+0x02/+0x03) dest y = the row y — the reconstructed loop's real structural output
+     *  (col stepping + row selection).  The frame word[2] (+0x04/+0x05) = char + 0x175 is
+     *  the LAST glyph of the LAST row, whose char comes from the engine's DGROUP text
+     *  tables (fmemcpy'd into SS-locals) that the trace does NOT capture — so it is NOT a
+     *  faithful gate (documented final-glyph-content limit).  Words 0..1 ARE gated. */
+    if (r->p1_sprite_len >= 2) {
+        u16 g = rd16(host_p1_sprite + 0), w = rd16(r->p1_sprite + 0);
+        if (g != w) { *got = g; *want = w; return "p1_sprite_dest_x"; }
+    }
+    if (r->p1_sprite_len >= 4) {
+        u16 g = rd16(host_p1_sprite + 2), w = rd16(r->p1_sprite + 2);
+        if (g != w) { *got = g; *want = w; return "p1_sprite_dest_y"; }
+    }
+    return NULL;
+}
+
 /* ── (H) PER-FILL HUD DESCRIPTOR COMPARATOR — the headline draw_hud_composite gate ──
  *  draw_hud_composite mutates the view struct and calls FUN_80ac (anim_render_leaf_80ac)
  *  SEVEN times.  The host leaf snapshots the live descriptor at each call into
@@ -506,6 +577,126 @@ static const char *cmp_ports(const record_t *r, long *got, long *want)
     return NULL;
 }
 
+/* ── (M) MENU CURSOR STATE-MACHINE COMPARATOR — the headline run_main_menu gate ─────
+ *  Asserts (a) the screen-global SCRSNAP (menu_option2_setting / current_level /
+ *  timing_flag_accumulator / input_state / palette_mode) == the EXIT snap; (b) the AX
+ *  return BYTE (selected_item) == the captured ret_val's low byte (AH is the BGI-overlay
+ *  trampoline's leftover, a non-game artifact); (c) the p1_sprite[+2] cursor word
+ *  (cursor_index*0x10+0x70) == the captured descriptor — the cursor LOCAL observed via
+ *  the blit descriptor.  Driven by the captured input script (replayed through poll_input
+ *  / fun_75a2_poll_action), so the cursor walk reproduces the engine's exactly. */
+static const char *cmp_menu(const record_t *r, u16 ret, long *got, long *want)
+{
+    const snap_t *ex = &r->ex;
+    #define CHKM(field, live) do { if ((long)(live) != (long)(ex->field)) { \
+        *got = (long)(live); *want = (long)(ex->field); return #field; } } while (0)
+    CHKM(menu_option2_setting, menu_option2_setting);
+    CHKM(current_level,        current_level);
+    CHKM(timing_flag_accum,    timing_flag_accumulator);
+    CHKM(input_state,          input_state);
+    CHKM(palette_mode,         (u8)palette_mode);
+    #undef CHKM
+    /* selected_item = the AX low byte (the fn returns uchar; AH = trampoline leftover). */
+    {
+        u16 want_sel = r->ret_val & 0xff;
+        if (g_perturb_menu) want_sel = (u16)((want_sel + 1) & 0xff);  /* perturbation */
+        if ((long)(ret & 0xff) != (long)want_sel) {
+            *got = ret & 0xff; *want = want_sel; return "selected_item";
+        }
+    }
+    /* the cursor sprite: p1_sprite[+2] = cursor_index*0x10 + 0x70. */
+    if (r->p1_sprite_len >= 4) {
+        u16 cur = rd16(host_p1_sprite + 2);
+        u16 want_cur = rd16(r->p1_sprite + 2);
+        if (cur != want_cur) {
+            *got = cur; *want = want_cur; return "cursor_p1[+2]";
+        }
+    }
+    return NULL;
+}
+
+/* ── (D) DAC PORT-WRITE GATE — the reconstructed VGA-DAC driver ─────────────────────
+ *  CARVE-OUT (engine fact, T1 + scenario-10): the captured iris/standalone DAC writes
+ *  come from unmodelable BGI overlay code, NOT from any ported C path (forcing
+ *  palette_mode 0/1/2 + seeding the palette still yields 0 DAC writes from
+ *  upload_vga_dac_palette).  So the upload_vga_dac_palette records carry 0 OUT; the port
+ *  must likewise emit 0 (the 1:1 thunk under palette_mode==2 emits nothing) — gate that.
+ *  The REAL reconstructed DAC driver (vga_dac_upload_from_buffer, recovered from the raw
+ *  disassembly of the static VGA-DAC writer) is gated by cmp_dac_driver below: seed a
+ *  known palette, assert it emits the canonical (port,value) sequence vs an INDEPENDENT
+ *  reference — perturbation-provable. */
+static const char *cmp_dac(const record_t *r, long *got, long *want)
+{
+    /* the 1:1 thunk under palette_mode==2 emits no DAC — assert the port emitted 0 OUT
+       (matching the captured standalone-upload records). */
+    int n_out = 0, k;
+    for (k = 0; k < (int)r->n_io; k++)
+        if (r->io[k].dir == 0) n_out++;
+    if (out_cap_n != n_out) { *got = out_cap_n; *want = n_out; return "dac_out_count"; }
+    return NULL;
+}
+
+/* ── (D2) STANDALONE DAC-DRIVER PORT-WRITE GATE — vga_dac_upload_from_buffer ────────
+ *  The REAL reconstructed DAC driver (recovered from the raw disassembly of the static
+ *  VGA-DAC writer at image off 0xb204): reads the 16-colour 6-bit palette at img+0x33
+ *  and emits `out 0x3c8,0`; 8 colours×(R,G,B) to 0x3c9; `out 0x3c8,0x10`; 8 colours×RGB.
+ *  This gate seeds a KNOWN palette, runs the driver, and asserts its (port,value)
+ *  sequence against an INDEPENDENT reference — structurally distinct code.  The
+ *  SCR_PERTURB knob (corrupting the Nth emitted OUT via the out() shim) MUST make it
+ *  FAIL, proving the gate is REAL.  Returns 0 on PASS, 1 on FAIL (prints the divergence). */
+extern void vga_dac_upload_from_buffer(u8 __far *img_buf);
+
+static int run_dac_driver_gate(void)
+{
+    u8 img[0x33 + 48];
+    u8 pal[48];
+    int i, c, k, n_expect;
+    u16 ep[200], ev[200];   /* independent reference: expected ports/values */
+
+    /* a non-trivial 6-bit palette so a wrong index/order/value diverges. */
+    for (i = 0; i < 48; i++) pal[i] = (u8)((i * 5 + 7) & 0x3f);
+    memset(img, 0, sizeof img);
+    memcpy(img + 0x33, pal, 48);
+
+    /* INDEPENDENT reference sequence (NOT the driver's loop): index 0 then colours 0..7,
+     *  index 0x10 then colours 8..15; each colour = 3 consecutive palette bytes. */
+    n_expect = 0;
+    ep[n_expect] = 0x3c8; ev[n_expect] = 0x00; n_expect++;
+    for (c = 0; c < 8; c++) {
+        ep[n_expect] = 0x3c9; ev[n_expect] = pal[c * 3 + 0]; n_expect++;
+        ep[n_expect] = 0x3c9; ev[n_expect] = pal[c * 3 + 1]; n_expect++;
+        ep[n_expect] = 0x3c9; ev[n_expect] = pal[c * 3 + 2]; n_expect++;
+    }
+    ep[n_expect] = 0x3c8; ev[n_expect] = 0x10; n_expect++;
+    for (c = 8; c < 16; c++) {
+        ep[n_expect] = 0x3c9; ev[n_expect] = pal[c * 3 + 0]; n_expect++;
+        ep[n_expect] = 0x3c9; ev[n_expect] = pal[c * 3 + 1]; n_expect++;
+        ep[n_expect] = 0x3c9; ev[n_expect] = pal[c * 3 + 2]; n_expect++;
+    }
+
+    out_cap_n = 0;
+    g_out_seen = 0;
+    vga_dac_upload_from_buffer(img);
+
+    if (out_cap_n != n_expect) {
+        printf("  DAC-driver gate: FAIL out_count got %d want %d\n", out_cap_n, n_expect);
+        return 1;
+    }
+    for (k = 0; k < n_expect; k++) {
+        if (out_cap[k].port != ep[k] || out_cap[k].val != ev[k]) {
+            printf("  DAC-driver gate: FAIL out[%d] got (0x%03x=0x%02x) want (0x%03x=0x%02x)\n",
+                   k, out_cap[k].port, out_cap[k].val, ep[k], ev[k]);
+            return 1;
+        }
+    }
+    printf("  DAC-driver gate: PASS — vga_dac_upload_from_buffer emitted the canonical "
+           "%d-write VGA-DAC sequence (index0 + 24 RGB, index0x10 + 24 RGB) from the "
+           "seeded palette%s\n", n_expect,
+           (g_perturb_idx >= 0) ? " [NOTE: SCR_PERTURB active but driver still matched — "
+                                  "perturb index beyond emitted writes]" : "");
+    return 0;
+}
+
 /* prime the in() replay queue + clear the out() capture for a DAC record. */
 static void prime_ports(const record_t *r)
 {
@@ -536,6 +727,7 @@ typedef struct { u16 off; const char *name; char cmp; void (*fn)(void); } ported
  *  scenario passed (record_t.args), and calls the reconstructed fn.  The matching
  *  comparator (selected by the registry `cmp`) then asserts the observable output. */
 static const record_t *g_cur_rec;   /* fwd: set by run_per_function before each wrapper */
+static u16 g_ret;                    /* the wrapper publishes the ported fn's return here */
 
 static void wrap_draw_number(void)
 {
@@ -561,6 +753,37 @@ static void wrap_draw_hud_composite(void)
     draw_hud_composite();
 }
 
+/* ── T4 wrappers — title / menu / iris-wipe / DAC ──────────────────────────────────
+ *  The ported fns are declared in screens.h (pulled via the included src/screens.c).
+ *  Each wrapper recovers any captured input script, calls the real port, and publishes
+ *  the return value for the semantic comparator. */
+void init_title_graphics(void);
+void show_title_background(void);
+void show_title_and_init(void);
+u8   run_main_menu(void);
+void show_menu_select_screen(void);
+void play_iris_wipe_transition(void);
+void upload_vga_dac_palette(void);
+
+static void wrap_init_title_graphics(void)   { init_title_graphics(); }
+static void wrap_show_title_background(void)  { show_title_background(); }
+static void wrap_show_title_and_init(void)    { show_title_and_init(); }
+static void wrap_show_menu_select_screen(void){ show_menu_select_screen(); }
+static void wrap_play_iris_wipe(void)         { play_iris_wipe_transition(); }
+static void wrap_upload_dac(void)             { upload_vga_dac_palette(); }
+
+static void wrap_run_main_menu(void)
+{
+    const record_t *r = g_cur_rec;
+    /* prime the FUN_75a2 replay queue with the EXACT captured input script so the
+     *  cursor STATE MACHINE walks identically (poll_input + the drain loop pop in order). */
+    menu_input_q = r->input;
+    menu_input_n = r->n_input;
+    menu_input_i = 0;
+    g_ret = run_main_menu();   /* returns selected_item (the low byte = the AX low byte) */
+    menu_input_q = NULL; menu_input_n = menu_input_i = 0;
+}
+
 static const ported_t PORTED[] = {
     /* text / number formatters (T3). */
     { 0x0816, "draw_number",            'N', wrap_draw_number },        /* semantic str  */
@@ -569,12 +792,13 @@ static const ported_t PORTED[] = {
     /* HUD (T3) — per-fill descriptor sequence (H). */
     { 0x51d8, "draw_hud_composite",     'H', wrap_draw_hud_composite },
     /* title (T4) — descriptor-level (B) + semantic (A) for show_title_and_init. */
-    { 0x2ef8, "init_title_graphics",    'B', NULL },
-    { 0x2fac, "show_title_background",  'B', NULL },
-    { 0x3ed4, "show_title_and_init",    'A', NULL },
-    /* menu (T4) — semantic-state (A): cursor via p1_sprite (B), return value (A). */
-    { 0x35a5, "run_main_menu",          'A', NULL },
-    { 0x0f7a, "show_menu_select_screen",'B', NULL },
+    { 0x2ef8, "init_title_graphics",    'B', wrap_init_title_graphics },
+    { 0x2fac, "show_title_background",  'B', wrap_show_title_background },
+    { 0x3ed4, "show_title_and_init",    'A', wrap_show_title_and_init },
+    /* menu (T4) — the cursor STATE MACHINE: semantic (M) = screen globals + the AX return
+     *  (selected_item) + the p1_sprite[+2] cursor word (cursor_index*0x10+0x70). */
+    { 0x35a5, "run_main_menu",          'M', wrap_run_main_menu },
+    { 0x0f7a, "show_menu_select_screen",'P', wrap_show_menu_select_screen },
     /* highscore (T4) — semantic (A) for name-entry, descriptor (B) for the table. */
     { 0x5681, "show_highscore_screen",  'B', NULL },
     { 0x57e1, "render_highscore_table", 'B', NULL },
@@ -583,9 +807,13 @@ static const ported_t PORTED[] = {
     /* level intro (T5) — semantic (A) / descriptor (B). */
     { 0x3852, "level_intro_screen",     'A', NULL },
     { 0x0d9d, "show_level_intro_screen",'B', NULL },
-    /* transition / palette (T5) — port-write-sequence (C) DAC gate. */
-    { 0x3467, "play_iris_wipe_transition", 'C', NULL },
-    { 0x9864, "upload_vga_dac_palette",    'C', NULL },
+    /* transition / palette (T4) — iris-wipe descriptor sweep (B) + the DAC port-write
+     *  gate (D) on the reconstructed VGA-DAC driver (see cmp_dac).  CARVE-OUT: the
+     *  captured iris/standalone DAC writes are emitted by unmodelable BGI overlay code
+     *  (FUN_7b4a) — an engine fact (scenario-10 forced-mode upload emits 0 DAC); the
+     *  reconstructed vga_dac_upload_from_buffer is gated standalone over a seeded palette. */
+    { 0x3467, "play_iris_wipe_transition", 'B', wrap_play_iris_wipe },
+    { 0x9864, "upload_vga_dac_palette",    'D', wrap_upload_dac },
 };
 #define PORTED_N (sizeof(PORTED) / sizeof(PORTED[0]))
 
@@ -619,25 +847,35 @@ static int run_per_function(record_t *recs, long nrec, const char *scname, stats
         /* ── PORTED: seed, call, assert via the registered comparator ──────────── */
         {
             const char *bad = NULL; long got = 0, want = 0;
-            u16 ret = 0;
+            u16 ret;
             g_cur_rec = r;
+            g_ret = 0;
             seed_globals(&r->ent);
             seed_descriptors(r);
-            if (p->cmp == 'C') prime_ports(r);
-            /* NOTE: the actual call site is filled by T3–T5 (each wrapper recovers args
-             *  from g_cur_rec and invokes the real port, capturing AX into `ret` for the
-             *  semantic comparator).  In T2 no fn is callable so this branch is unreached. */
+            if (p->cmp == 'C' || p->cmp == 'D') prime_ports(r);
+            /* Each wrapper recovers args/input from g_cur_rec, invokes the real port, and
+             *  publishes the AX return into g_ret for the semantic comparators. */
             p->fn();
+            ret = g_ret;
             if (p->cmp == 'A') {
                 bad = cmp_semantic(r, ret, &got, &want);
+            } else if (p->cmp == 'M') {
+                bad = cmp_menu(r, ret, &got, &want);
+                if (bad == NULL) st->desc_checked++;
             } else if (p->cmp == 'B') {
                 bad = cmp_descriptors(r, &got, &want);
+                if (bad == NULL) st->desc_checked++;
+            } else if (p->cmp == 'P') {
+                bad = cmp_p1sprite(r, &got, &want);
                 if (bad == NULL) st->desc_checked++;
             } else if (p->cmp == 'H') {
                 bad = cmp_hud_fills(r, &got, &want);
                 if (bad == NULL) st->desc_checked++;
             } else if (p->cmp == 'N') {
                 bad = cmp_number(r, &got, &want);
+            } else if (p->cmp == 'D') {
+                bad = cmp_dac(r, &got, &want);
+                if (bad == NULL) st->port_checked++;
             } else { /* 'C' */
                 bad = cmp_ports(r, &got, &want);
                 if (bad == NULL) st->port_checked++;
@@ -686,6 +924,12 @@ int main(int argc, char **argv)
             printf("screens_ctest: NUMBER PERTURBATION active — bumping the reference's last "
                    "digit (the draw_number semantic gate MUST FAIL)\n");
         }
+        pe = getenv("SCR_PERTURB_MENU");
+        if (pe && *pe) {
+            g_perturb_menu = atoi(pe);
+            printf("screens_ctest: MENU PERTURBATION active — bumping the expected "
+                   "selected_item (the run_main_menu cursor state-machine gate MUST FAIL)\n");
+        }
     }
     if (!f) { fprintf(stderr, "cannot open %s\n", path); return 2; }
     fseek(f, 0, SEEK_END); sz = ftell(f); fseek(f, 0, SEEK_SET);
@@ -708,10 +952,15 @@ int main(int argc, char **argv)
     printf("screens_ctest: replay harness over %s\n", path);
     printf("  trace: SCRTRC01 v%u, %u scenarios, %u fn-names (SNAP=%d B)\n",
            ver, nsc, nfn, SNAP_SIZE);
-    printf("  src/screens.c: Phase-7 T3 — text/number primitives + in-game HUD PORTED.  "
-           "Comparators: N draw_number semantic string, B draw_text_at/draw_number_sprites "
-           "descriptor, H draw_hud_composite per-fill (7) descriptor sequence.  Remaining "
-           "title/menu/highscore/intro records UNPORTED.  Expected FAIL=0.\n");
+    printf("  src/screens.c: Phase-7 T4 — title + main menu (cursor state machine) + "
+           "iris-wipe + DAC palette PORTED (on top of T3 text/number/HUD).  Comparators: "
+           "M run_main_menu cursor state machine (semantic + AX return + p1_sprite cursor), "
+           "B title/menu/iris descriptor builds, D upload_vga_dac_palette port-write gate + "
+           "the standalone vga_dac_upload_from_buffer DAC-driver gate.  Remaining "
+           "highscore/intro records UNPORTED (T5).  Expected FAIL=0.\n");
+
+    /* Standalone reconstructed-DAC-driver port-write gate (runs once; perturbation-proven). */
+    if (run_dac_driver_gate() != 0) hard_fail = 1;
 
     for (s = 0; s < nsc; s++) {
         u8 sid, name_len;
@@ -768,6 +1017,9 @@ int main(int argc, char **argv)
                 if (j < 8) r->args[j] = rd16(b + o);
                 o += 2;
             }
+            r->n_input = b[o++];
+            { unsigned n = r->n_input < 256 ? r->n_input : 256;
+              memcpy(r->input, b + o, n); o += r->n_input; }
             n_io_total += r->n_io;
             n_records++;
         }

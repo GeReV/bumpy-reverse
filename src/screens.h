@@ -104,4 +104,39 @@ void draw_number_sprites(u16 value_lo, u16 value_hi, u8 width, u16 base_x, u16 f
  *  render_descriptor_ptr view struct and call FUN_1000_80ac 7× (7 HUD sprite tiles). */
 void draw_hud_composite(void);
 
+/* ── PORTED (Phase-7 T4): title screens + main menu + iris-wipe + DAC palette ────────
+ *  1:1 bodies in screens.c (addresses cited there); the matching game_stubs.c stubs are
+ *  removed.  These are also declared in game.h (the game-loop spine's callees); the
+ *  prototypes match.  The remaining highscore / level-intro fns stay stubbed (T5). */
+
+/* init_title_graphics (1000:2ef8): set the resource table, show the title background,
+ *  load+process the sprite resource + the HUD image, draw the HUD composite. */
+void init_title_graphics(void);
+
+/* show_title_background (1000:2fac): load resource 2 (vec-decoded fullscreen image),
+ *  optional palette patch, iris-wipe in, build the 20x25 bg view, present, upload DAC,
+ *  run the intro animation loop. */
+void show_title_background(void);
+
+/* show_title_and_init (1000:3ed4): show highscore screen (T5), load+decode resource
+ *  0x11, iris-wipe in, present, wait for a keypress, current_level=1. */
+void show_title_and_init(void);
+
+/* run_main_menu (1000:35a5): the 4-option cursor STATE MACHINE — load the menu image,
+ *  poll up/down/fire, draw the cursor sprite (p1_sprite[1]=cursor_index*0x10+0x70), cycle
+ *  menu_option2_setting on option 2; returns the selected item (0xff while selecting). */
+u8 run_main_menu(void);
+
+/* show_menu_select_screen (1000:0f7a): fullscreen image (resource 3) + three sprite-glyph
+ *  text rows; current_level = enter_highscore_name() (default 1). */
+void show_menu_select_screen(void);
+
+/* play_iris_wipe_transition (1000:3467): the rectangle-wipe screen transition — step the
+ *  blit-view rect inward over 10 steps (4 view-blits + DAC uploads per step), then clear. */
+void play_iris_wipe_transition(void);
+
+/* upload_vga_dac_palette (1000:9864): thunk -> dispatch_by_palette_mode_2036 (the DAC
+ *  palette upload; under palette_mode==2 the standalone handler emits no DAC). */
+void upload_vga_dac_palette(void);
+
 #endif /* SCREENS_H */

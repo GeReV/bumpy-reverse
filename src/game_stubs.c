@@ -263,23 +263,23 @@ void reset_round_counters(void)
 
 /* ── D. game_loop (1000:0c18) per-tick spine callees ────────────────────────── */
 
-/* init_sprite_structs / init_title_graphics — one-time per-game setup. */
+/* init_sprite_structs — one-time per-game setup (still stubbed). */
 void init_sprite_structs(void)   {}
-void init_title_graphics(void)   {}
 
-/* run_main_menu — returns the menu selection byte.  Returns 0 ⇒ game_loop's menu
-   while-loop exits immediately into the play path (a stub cannot honor menu
-   navigation; DEFERRED). */
-u8 run_main_menu(void)           { return 0; }
+/* init_title_graphics / run_main_menu / show_menu_select_screen / show_title_and_init /
+   play_iris_wipe_transition — RECONSTRUCTED 1:1 in screens.c (Phase-7 T4); their stubs
+   are removed here (would be duplicate symbols once screens.obj links). */
 
-void show_highscore_screen(void)     {}
-void show_menu_select_screen(void)   {}
+/* FUN_1000_75a2 — the engine's input-poll primitive (returns the action byte in AL).
+   Faithful-signature stub for the BUMPY.EXE link; reconstructed in input.c later.  The
+   screens.c menu / state-machine loops call it through this symbol. */
+char fun_75a2_poll_action(u8 arg)    { (void)arg; return 0; }
+
+void show_highscore_screen(void)     {}   /* T5 (highscore) */
 void show_text_screen(void)          {}
 void show_pause_screen(void)         {}
-void show_title_and_init(void)       {}
-void show_level_intro_screen(void)   {}
-void level_intro_screen(void)        {}
-void play_iris_wipe_transition(void) {}
+void show_level_intro_screen(void)   {}   /* T5 (level intro) */
+void level_intro_screen(void)        {}   /* T5 (level intro) */
 
 /* p2_set_move_state (1000:4bc6) — RECONSTRUCTED in player2.c (Phase-4 T3); stub
    removed (would be a duplicate symbol once player2.obj links). */

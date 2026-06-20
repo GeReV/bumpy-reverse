@@ -204,7 +204,12 @@ TRACE_MAGIC: bytes = b"SCRTRC01"
 # render_descriptor_ptr struct snapshotted at EACH FUN_80ac call boundary inside
 # draw_hud_composite).  n_fills is 0 for every non-HUD record, so the field is a single
 # zero byte there.  v1 had no such field.  The harness parses on version.
-TRACE_VERSION: int = 2
+# v3 (Phase-7 T4): record tail gains, after the args, the INPUT SCRIPT consumed during
+# the call — `u8 n_input`, then n_input bytes (the FUN_1000_75a2 return stream the menu /
+# state-machine loops read).  Lets the replay harness feed run_main_menu the EXACT input
+# the engine saw so the cursor STATE MACHINE reproduces host-side (cursor / menu_option2 /
+# selected_item).  0 for fns that consume no input.
+TRACE_VERSION: int = 3
 # SCRSNAP: see header docstring. 4 bytes + 2 words + 2 bytes + 1 word + 8 name bytes.
 SCRSNAP_FMT: str = "<BBBB" + "HH" + "BB" + "H" + "8B"
 SCRSNAP_SIZE: int = struct.calcsize(SCRSNAP_FMT)
@@ -610,11 +615,17 @@ def main() -> None:
     # struct bytes, one per FUN_80ac call boundary, accumulated while inside a
     # draw_hud_composite call.  hud_depth>0 means "inside draw_hud_composite".
     hud_state = {"depth": 0, "fills": []}
+    # Input-script capture (Phase-7 T4): every FUN_1000_75a2 return byte injected during a
+    # captured call window is appended to input_log; a state-machine record slices the
+    # bytes consumed between its entry and exit so the replay harness can feed the menu /
+    # name-entry loops the EXACT input the engine saw.
+    input_log: List[int] = []
 
     def emit_record(fn_off: int, entry_snap: bytes, exit_snap: bytes, ret_val: int,
                     render_desc: bytes, p1_sprite: bytes, seed: bytes,
                     io_events: List[Tuple[int, int, int, int]],
-                    hud_fills: List[bytes], args: List[int]) -> None:
+                    hud_fills: List[bytes], args: List[int],
+                    input_script: List[int]) -> None:
         rec = struct.pack("<HH", fn_off, fn_name_idx[FN_NAMES[fn_off]])
         rec += entry_snap + exit_snap
         rec += struct.pack("<H", ret_val & 0xFFFF)
@@ -633,6 +644,10 @@ def main() -> None:
         rec += struct.pack("<B", len(args))
         for a in args:
             rec += struct.pack("<H", a & 0xFFFF)
+        # the INPUT SCRIPT consumed during the call (FUN_75a2 return stream) — v3.
+        rec += struct.pack("<B", len(input_script) & 0xFF)
+        for ib in input_script[:0xFF]:
+            rec += struct.pack("<B", ib & 0xFF)
         cur_records.append(rec)
 
     def hook_fun_80ac(uc: Uc, addr: int, size: int, _: object) -> None:
@@ -669,8 +684,9 @@ def main() -> None:
             bytes(uc.mem_read(ss * 16 + ((sp + 2) & 0xFFFF), 2 * ARG_WORDS))))
         io_mark = len(io_seq) if is_dac else 0
         hud_mark = len(hud_state["fills"]) if is_hud else 0
+        input_mark = len(input_log)
         pending_exit.setdefault(ret_lin, []).append(
-            (fn_off, entry_snap, is_dac, io_mark, is_hud, hud_mark, args))
+            (fn_off, entry_snap, is_dac, io_mark, is_hud, hud_mark, args, input_mark))
         if ret_lin not in exit_hook_lins:
             exit_hook_lins.add(ret_lin)
             uc.hook_add(UC_HOOK_CODE, hook_fn_exit, None, ret_lin, ret_lin)
@@ -679,7 +695,8 @@ def main() -> None:
         stack = pending_exit.get(addr)
         if not stack:
             return
-        (fn_off, entry_snap, is_dac, io_mark, is_hud, hud_mark, args) = stack.pop()
+        (fn_off, entry_snap, is_dac, io_mark, is_hud, hud_mark, args,
+         input_mark) = stack.pop()
         exit_snap = snap()
         ret_val = uc.reg_read(UC_X86_REG_AX) & 0xFFFF
         render_desc = read_far_target(OFF_RENDER_DESC_PTR, RENDER_DESC_LEN)
@@ -699,8 +716,10 @@ def main() -> None:
             hud_state["depth"] -= 1
             if hud_state["depth"] == 0:
                 hud_state["fills"] = []
+        input_script = list(input_log[input_mark:])
         emit_record(fn_off, entry_snap, exit_snap, ret_val,
-                    render_desc, p1_sprite, seed, io_events, hud_fills, args)
+                    render_desc, p1_sprite, seed, io_events, hud_fills, args,
+                    input_script)
 
     for off in FN_NAMES:
         lin = CODE_LIN + off
@@ -863,6 +882,9 @@ def main() -> None:
         nxt = q.pop(0) if q else 0   # exhausted -> no input (lets drain/idle loops settle)
         ax = uc2.reg_read(UC_X86_REG_AX) & 0xFF00
         uc2.reg_write(UC_X86_REG_AX, ax | (nxt & 0xFF))
+        # record the injected FUN_75a2 return byte (the input script) for replay-harness use.
+        if capturing["on"]:
+            input_log.append(nxt & 0xFF)
 
     uc.hook_add(UC_HOOK_CODE, hook_75a2_entry, None,
                 CODE_LIN + FUN_75A2_OFF, CODE_LIN + FUN_75A2_OFF)
@@ -948,6 +970,16 @@ def main() -> None:
         ]),
     ]
 
+    # Scenario 10 (DAC palette-mode seed) is built separately because each call PRE-SEEDS
+    # palette_mode + a KNOWN 16-colour 6-bit palette at fullscreen_buf+0x33, then calls
+    # upload_vga_dac_palette so the standalone palette-mode HANDLER's OWN DAC write
+    # sequence is captured (the natural boot runs palette_mode==2, whose handler emits no
+    # DAC; forcing 0/1 exercises the VGA-DAC handler).  The harness's reconstructed
+    # vga_dac_upload_from_buffer reads the SAME seeded palette and must reproduce the
+    # captured (port,value) sequence — the REAL standalone DAC port-write gate.
+    DAC_SEED_PALETTE = bytes(((i * 3 + 1) & 0x3f) for i in range(48))  # known 16x3 6-bit
+    DAC_SEED_MODES = [0, 1, 2]
+
     # ---------------------------------------------------------------------------
     # Run scenarios
     # ---------------------------------------------------------------------------
@@ -971,6 +1003,29 @@ def main() -> None:
         capturing["on"] = False
         return list(cur_records)
 
+    def seed_fullscreen_palette(palette: bytes) -> None:
+        """Write `palette` into the decoded-image buffer at +0x33 (the 16-colour 6-bit
+        palette the VGA-DAC handler reads)."""
+        o = rd_u16(OFF_FULLSCREEN_BUF)
+        s = rd_u16(OFF_FULLSCREEN_SEG)
+        lin = (s * 16 + o + 0x33) & 0xFFFFF
+        uc.mem_write(lin, palette)
+
+    def run_dac_seed_scenario() -> List[bytes]:
+        """Scenario 10: for each forced palette_mode, seed a known palette + call
+        upload_vga_dac_palette, capturing the handler's own DAC writes."""
+        cur_records.clear()
+        capturing["on"] = True
+        for mode in DAC_SEED_MODES:
+            uc.mem_write(DG_LIN + OFF_PALETTE_MODE, struct.pack("<H", mode))
+            seed_fullscreen_palette(DAC_SEED_PALETTE)
+            seed_input_state(OFF_INPUT_STATE, 0)
+            input_driver["active"] = False
+            input_driver["queue"] = []
+            call_near(0x9864, [])     # upload_vga_dac_palette
+        capturing["on"] = False
+        return list(cur_records)
+
     scenario_blobs: List[Tuple[Scenario, List[bytes]]] = []
     for sc in SCENARIOS:
         sc_id, name, calls = sc
@@ -981,6 +1036,15 @@ def main() -> None:
         print("[screens_oracle]   %d records, %d DAC I/O events" % (len(recs), n_io),
               flush=True)
         scenario_blobs.append((sc, recs))
+
+    # Scenario 10 — DAC palette-mode seed (standalone handler DAC capture).
+    restore_boot_state()
+    print("[screens_oracle] === scenario 10 (dac_palette_seed) ===", flush=True)
+    dac_recs = run_dac_seed_scenario()
+    n_io = sum(_record_io_count(r) for r in dac_recs)
+    print("[screens_oracle]   %d records, %d DAC I/O events" % (len(dac_recs), n_io),
+          flush=True)
+    scenario_blobs.append(((10, "dac_palette_seed", []), dac_recs))
 
     # ---------------------------------------------------------------------------
     # Write the frozen trace
@@ -1048,9 +1112,12 @@ def main() -> None:
                     fills.append(data[o:o + fl]); o += fl
                 n_args = data[o]; o += 1
                 fargs = list(struct.unpack_from("<%dH" % n_args, data, o)); o += 2 * n_args
+                n_inp = data[o]; o += 1
+                inp_script = list(data[o:o + n_inp]); o += n_inp
                 recs.append(dict(fn_off=fn_off, fn=names[name_idx], ent=ent, ex=ex,
                                  ret=ret_val, render_desc=render_desc, p1_sprite=p1_sprite,
-                                 seed=seed, io=ios, fills=fills, args=fargs))
+                                 seed=seed, io=ios, fills=fills, args=fargs,
+                                 input_script=inp_script))
             scenarios.append(dict(id=sid, name=nm, recs=recs))
         assert o == len(data), "trailing bytes: parsed %d of %d" % (o, len(data))
         return dict(names=names, scenarios=scenarios)
