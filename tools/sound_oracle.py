@@ -217,6 +217,17 @@ for _o in L4_FNS:
 # Sound-hardware port set (for filtering the I/O-capture noise from VGA/PIT/keyboard).
 SOUND_PORTS: set = {0x61, 0x330, 0x331, 0x388, 0x389}
 
+# Synthesized port-0x61 IN value. There is NO PC-speaker/system-control hardware
+# under Unicorn, so any IN AL,0x61 must return a FIXED, run-to-run-deterministic byte
+# rather than emulation state. We use 0xFF (matching tools/physics_oracle.py's 0x61
+# read). What is validated is NOT this absolute byte but the engine's bit manipulation
+# over the replayed IN sequence: e.g. pc_speaker_silence does `IN AL,0x61; AND AL,0xfc;
+# OUT 0x61,AL`, so the captured OUT(0x61) == SYNTH_PORT61_IN & 0xfc == 0xFC and is
+# stable. A later L4 ctest replays the recorded IN sequence (each IN event carries the
+# value the hook returned) so the reconstructed driver sees the same inputs the engine
+# saw, then asserts the OUT writes. See local/build/sound_model.md.
+SYNTH_PORT61_IN: int = 0xFF
+
 # ---------------------------------------------------------------------------
 # Per-effect tone-param table — recovered verbatim from play_sound_effect (6e30).
 # schedule_timer_callback_a(2, tone_arg2, tone_arg3, 1, uVar1, uVar2, uVar3, uVar4)
@@ -487,8 +498,13 @@ def main() -> None:
         elif port == 0x60:
             val = cur_scan[0]
         elif port == 0x61:
-            # PC-speaker gate read: return a plausible gate byte (bit pattern toggling).
-            val = (io[0] & 0xFF)
+            # PC-speaker / system-control read: FIXED synthesized value (no hardware
+            # under Unicorn). MUST NOT use the global IN-counter io[0] — its upper bits
+            # would leak host-counter noise into the captured OUT(0x61) (e.g. via
+            # pc_speaker_silence's `IN; AND 0xfc; OUT`), making the byte non-reproducible
+            # run-to-run. The validated invariant is the engine's bit manipulation over
+            # the (now deterministic) replayed IN sequence, not the absolute byte.
+            val = SYNTH_PORT61_IN
         elif port == 0x331:
             # MPU-401 status: DSR bit 0x40 CLEAR => "ready" so the poll loop exits and
             # the driver proceeds to write the data port (capturing the OUT we want).
@@ -499,6 +515,11 @@ def main() -> None:
         else:
             val = 0xFF
         if io_capture["depth"] > 0 and port in SOUND_PORTS:
+            # Record the IN event WITH the value the hook returned (dir=1), in order with
+            # the OUT events. A later L4 ctest's host in() shim replays this EXACT IN
+            # sequence so the reconstructed driver sees the same inputs the engine saw,
+            # then asserts the OUT writes. For 0x61 `val` is the deterministic
+            # SYNTH_PORT61_IN; for 0x331/0x388 it is the fixed poll-exit constant.
             io_seq.append((1, port, size, val & 0xFFFF))
         return val
 
@@ -1063,6 +1084,19 @@ def main() -> None:
     lines.append("\n## Captured L4 port-write sequences (per driver, first occurrence)\n\n")
     lines.append("Sound-hardware ports: 0x61 (PC speaker gate+enable), 0x330/0x331 "
                  "(MPU-401 data/status), 0x388/0x389 (OPL addr/data).\n\n")
+    lines.append("**Synthesized status reads (no hardware under Unicorn).** The IN side "
+                 "of these sequences reads a FIXED synthesized value, not real hardware "
+                 "state: port 0x61 returns SYNTH_PORT61_IN=0x%02x; the MPU-401 status "
+                 "0x331 returns 0x00 (DSR clear => ready) and the OPL status 0x388 "
+                 "returns 0x00 (not-busy) so the driver poll loops exit. These constants "
+                 "are run-to-run deterministic (the captured byte does NOT depend on the "
+                 "emulator's IN counter), so the trace is reproducible. The VALIDATED "
+                 "invariant is the engine's bit manipulation over the replayed IN "
+                 "sequence — e.g. pc_speaker_silence's `IN AL,0x61; AND AL,0xfc; OUT "
+                 "0x61,AL` yields OUT(0x61)=0x%02x — NOT the absolute hardware byte. A "
+                 "later L4 ctest replays the recorded IN sequence (each IN event below "
+                 "carries the returned value) before asserting the OUT writes.\n\n"
+                 % (SYNTH_PORT61_IN, SYNTH_PORT61_IN & 0xfc))
     if not driver_io:
         lines.append("_(no L4 driver port I/O captured — see scenario notes)_\n")
     for off in sorted(driver_io):
