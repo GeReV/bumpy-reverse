@@ -290,11 +290,11 @@ void erase_p1_view(void)             {}
 void restore_bg_pending(void)        {}
 void render_p1_view(void)            {}
 
-/* Anim-channel DRAW + ERASE (per-tick). */
-void draw_anim_channels_a(void)      {}
-void draw_anim_channels_b(void)      {}
-void erase_anim_channels_a(void)     {}
-void erase_anim_channels_b(void)     {}
+/* Anim-channel DRAW + ERASE (per-tick) — RECONSTRUCTED in anim.c (Phase-5 T4:
+   draw_anim_channels_a 1000:165e, draw_anim_channels_b 1000:17c7,
+   erase_anim_channels_a 1000:1a67, erase_anim_channels_b 1000:1b2b); their stubs
+   are removed (dup-symbol once anim.obj's bodies link).  Their BGI-overlay present
+   leaves stay faithful-signature stubs INSIDE anim.c (anim_*_leaf). */
 
 /* P1/P2 bounding-box update.  update_p2_bbox (1000:50c0) is RECONSTRUCTED in
    player2.c (Phase-4 T5); its stub is removed (dup-symbol once player2.obj links). */

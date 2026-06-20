@@ -42,6 +42,24 @@
  * ──────────────────────────────────────────────────────────────────────────── */
 #include "anim.h"
 
+/* ── runtime DGROUP segment (the `DS` register the draw/erase wrappers store into
+ *    their view descriptors' far-data SEGMENT fields) ────────────────────────────
+ *  The four wrappers do `MOV ES:[BX+off], DS` to stamp the host work-buffer / page
+ *  segment into the view descriptor.  Ghidra renders that register store as the
+ *  constant 0x203b (its STATIC link-time DGROUP assumption), and the disassembly is
+ *  `MOV …,DS` — i.e. the engine writes whatever DS holds AT RUNTIME.  Under the
+ *  Phase-5 T1 trace the program is loaded at PSP_SEG 0x100 (code base 0x110), so the
+ *  runtime DGROUP/DS = 0x110 + 0x103b = 0x114b — the value actually captured in the
+ *  view descriptors (the far-ptr SEG halves stored as DATA stay the static 0x203b;
+ *  the DS REGISTER store is 0x114b).  We express the register store as this single
+ *  symbol so it is (a) documented and (b) host-overridable to match the captured
+ *  runtime DS in the descriptor gate.  Default = the decomp literal 0x203b.
+ *  RECONSTRUCTION FIDELITY: the engine value is the runtime DS, not a constant; this
+ *  symbol stands in for that register.  See docs/reconstruction-fidelity.md. */
+#ifndef ANIM_DGROUP_RUNTIME_SEG
+#define ANIM_DGROUP_RUNTIME_SEG 0x203b
+#endif
+
 /* ── the channel records (one fixed 12-byte record per slot) ─────────────────── */
 anim_chan_rec anim_a_records[ANIM_A_SLOTS];   /* 3 channel-A slots */
 anim_chan_rec anim_b_records[ANIM_B_SLOTS];   /* 4 channel-B slots */
@@ -285,5 +303,293 @@ void step_anim_channels_b(void)
         }
         anim_b_loop_idx = anim_b_loop_idx + 1;
     }
+    return;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  Present/blit LEAF stubs — the BGI-overlay render-core call sites of the four
+ *  draw/erase wrappers below.  These are FAITHFUL-SIGNATURE no-ops that preserve
+ *  each call site 1:1 WITHOUT re-driving the Phase-0 work-buffer render core.
+ *
+ *  RECONSTRUCTION FIDELITY: the engine leaves are real far-call wrappers —
+ *    restore_bg_view  (1000:80bc), render_player_view (1000:93b8),
+ *    blit_sprite      (1000:942a), and the unnamed B-side render leaf FUN_1000_80ac
+ *    (1000:80ac) — each taking ONE far-ptr / a (off,seg) pair on the engine stack
+ *    (e.g. draw_a: `PUSH [0x8d6]; PUSH [0x8d4]; CALL 0x80bc`).  Phase-0 already
+ *    reconstructed restore_bg_view / render_player_view as BEHAVIOR-FAITHFUL
+ *    semantic models in src/bgi_overlay.c driven by HOST WORK BUFFERS with a
+ *    different 3-arg (planes, vga_src, view) signature; blit_sprite was inlined
+ *    into its three validated pipeline stages in src/entity.c (no callable symbol).
+ *    Those Phase-0 wrappers hold no work-buffer context here and MUST NOT be
+ *    modified to take the engine's far-ptr convention.  So — exactly as player2.c's
+ *    Phase-4 T5 present leaves (p2_blit_sprite_leaf / p2_render_view_leaf /
+ *    p2_restore_view_leaf) — the leaves are modeled here as faithful-signature
+ *    stubs (anim_*_leaf) keeping the call sites byte-faithful.  The OBSERVABLE
+ *    output of the four wrappers — the VIEW-DESCRIPTOR field writes and the
+ *    p1_sprite (0x792e pointee) blit-descriptor bytes — IS produced here and is the
+ *    validated descriptor-level gate (tools/anim_chan_ctest.c §DESCRIPTOR, over the
+ *    already plane-exact blitter underneath).  FUN_1000_80ac stays a faithful-
+ *    signature stub of the unnamed B-side render leaf (no clean decomp; do not
+ *    invent a body).  Phase-0 render core is left UNTOUCHED. */
+void anim_restore_bg_view_leaf(u8 __far *view);   /* restore_bg_view   1000:80bc */
+void anim_render_view_leaf(u8 __far *view);       /* render_player_view 1000:93b8 */
+void anim_blit_sprite_leaf(u16 obj_off, u16 obj_seg); /* blit_sprite   1000:942a */
+void anim_render_leaf_80ac(u8 __far *view);       /* FUN_1000_80ac     1000:80ac */
+
+void anim_restore_bg_view_leaf(u8 __far *view) { (void)view; return; }
+void anim_render_view_leaf(u8 __far *view)     { (void)view; return; }
+void anim_blit_sprite_leaf(u16 obj_off, u16 obj_seg)
+{
+    (void)obj_off; (void)obj_seg; return;
+}
+void anim_render_leaf_80ac(u8 __far *view)     { (void)view; return; }
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  draw_anim_channels_a — 1000:165e  (draw the 3 channel-A overlay cells)
+ *  Ported 1:1 from the live Ghidra decomp + disassembly (verified fresh, 2026-06).
+ *
+ *  Iterates the channel-A slot table until the 0xFF terminator.  For each ACTIVE
+ *  (non-0, non-0xFF) slot it builds two view descriptors and the p1_sprite blit
+ *  descriptor, then calls the BGI-overlay leaves:
+ *
+ *    cell = slot[1];  uVar4 = gridA[cell*4+0] (x);  uVar5 = gridA[cell*4+2] (y).
+ *    ERASE view (0x8d4): [+0x1c]=0, |=0x600 if (cell&1); [+0x14]=[+6]=x;
+ *                        [+0x16]=[+8]=y; restore_bg_view(erase_view).
+ *    p1_sprite (0x8884 -> 0x792e pointee): [+0]=posA_x[cell*4]; [+2]=posA_y[cell*4]
+ *                        + slot[+8]; [+4]=slot[+0xa]; blit_sprite(0x792e,0x203b)
+ *                        unless (slot[+0xa] & 0x200).
+ *    DRAW view (0x8e0): [+6]=x; [+8]=y; [+0x10]=(channel_idx*0x180)+0x79be;
+ *                        [+0x12]=0x203b; [+0x1c]=0, |=0x200 if (cell&1);
+ *                        render_player_view(draw_view).
+ *  See the LEAF-stub FIDELITY note above; the descriptor field writes are the gate.
+ * ════════════════════════════════════════════════════════════════════════════ */
+void draw_anim_channels_a(void)
+{
+    u8                   active;       /* cVar1 — slot active byte                  */
+    u8                   cell;         /* bVar2 — slot[1]                           */
+    anim_chan_rec __far *slot;         /* pcVar3 — the channel record               */
+    u16                  x, y;         /* uVar4 / uVar5 — gridA coords              */
+    u8 __far            *view;         /* the view-descriptor pointee               */
+    u16                  posy;         /* posA y-half (slot vertical bias source)   */
+    u8                   channel_idx;
+
+    /* STACK-CHECK PROLOGUE intentionally OMITTED (compiler probe — not game logic).*/
+    channel_idx = 0;
+    do {
+        slot = anim_channels_a_tbl[channel_idx];
+        active = slot->active;
+        if ((active != '\0') && (active != 0xff)) {
+            cell = slot->cell;
+            x = *(u16 __far *)(anim_a_grid_tbl + (u16)cell * 4 + 0);
+            y = *(u16 __far *)(anim_a_grid_tbl + (u16)cell * 4 + 2);
+
+            /* ── ERASE view (0x8d4) ──────────────────────────────────────────── */
+            view = anim_a_erase_view;
+            *(u16 __far *)(view + 0x1c) = 0;
+            if ((cell & 1) != 0) {
+                *(u16 __far *)(view + 0x1c) = *(u16 __far *)(view + 0x1c) | 0x600;
+            }
+            view = anim_a_erase_view;
+            *(u16 __far *)(view + 0x14) = x;
+            *(u16 __far *)(view + 6)    = x;
+            *(u16 __far *)(view + 0x16) = y;
+            *(u16 __far *)(view + 8)    = y;
+            anim_restore_bg_view_leaf(anim_a_erase_view);
+
+            /* ── p1_sprite blit descriptor (0x8884 far ptr -> 0x792e pointee) ──── */
+            posy = *(u16 __far *)(anim_posA_tbl + (u16)cell * 4 + 2);
+            *(u16 __far *)(p1_sprite + 0) = *(u16 __far *)(anim_posA_tbl + (u16)cell * 4 + 0);
+            *(u16 __far *)(p1_sprite + 2) = (u16)(posy + slot->data_off);
+            *(u16 __far *)(p1_sprite + 4) = slot->data_seg;
+            if ((slot->data_seg & 0x200) == 0) {
+                anim_blit_sprite_leaf(0x792e, ANIM_DGROUP_RUNTIME_SEG);
+            }
+
+            /* ── DRAW view (0x8e0) save-under ─────────────────────────────────── */
+            view = anim_a_draw_view;
+            *(u16 __far *)(view + 6)    = x;
+            *(u16 __far *)(view + 8)    = y;
+            *(u16 __far *)(view + 0x10) = (u16)((u16)channel_idx * 0x180 + 0x79be);
+            *(u16 __far *)(view + 0x12) = ANIM_DGROUP_RUNTIME_SEG;
+            *(u16 __far *)(view + 0x1c) = 0;
+            if ((cell & 1) != 0) {
+                *(u16 __far *)(view + 0x1c) = *(u16 __far *)(view + 0x1c) | 0x200;
+            }
+            anim_render_view_leaf(anim_a_draw_view);
+        }
+        channel_idx = channel_idx + 1;
+    } while (active != 0xff);
+    return;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  draw_anim_channels_b — 1000:17c7  (draw the 4 channel-B overlay cells)
+ *  Ported 1:1 from the live Ghidra decomp + disassembly (verified fresh, 2026-06).
+ *
+ *  Layer-B analog of draw_anim_channels_a, but the B path is the shadow/mask path:
+ *  it touches THREE view descriptors (0x8c8 / 0x8cc / 0x8d0), alternates the
+ *  view1 (0x8cc) far-data segment 0x9eba/0x9fba/0x8888, and applies the +0xf1 frame
+ *  bias to the p1_sprite blit descriptor; gridB at 0x343e/0x3440, posB at 0x3f4/0x3f6,
+ *  work-buffer ptr (channel_idx*0x100)+0x7e3e.  The if/else shadow alternation is
+ *  ported VERBATIM (cell&1 selects which order the 0x9eba/0x9fba pre-pass runs).
+ *
+ *  NOTE (B view0 0x8c8): the engine pre-renders view0 with FUN_1000_80ac BEFORE
+ *  writing view1; view1 (0x8cc) is then written multiply with leaf calls between.
+ *  Each [+2]/[+4] far-data write + leaf call mirrors the asm exactly.
+ *  See the LEAF-stub FIDELITY note above.
+ * ════════════════════════════════════════════════════════════════════════════ */
+void draw_anim_channels_b(void)
+{
+    u8                   active;
+    u8                   cell;
+    anim_chan_rec __far *slot;
+    u16                  x, y;
+    u8 __far            *view;
+    u16                  posy;
+    u8                   channel_idx;
+
+    /* STACK-CHECK PROLOGUE intentionally OMITTED. */
+    channel_idx = 0;
+    do {
+        slot = anim_channels_b_tbl[channel_idx];
+        active = slot->active;
+        if ((active != '\0') && (active != 0xff)) {
+            cell = slot->cell;
+            x = *(u16 __far *)(anim_b_grid_tbl + (u16)cell * 4 + 0);
+            y = *(u16 __far *)(anim_b_grid_tbl + (u16)cell * 4 + 2);
+
+            /* ── view0 (0x8c8) pre-pass ───────────────────────────────────────── */
+            view = anim_b_view0;
+            *(u16 __far *)(view + 6) = x;
+            *(u16 __far *)(view + 8) = y;
+            anim_render_leaf_80ac(anim_b_view0);
+
+            /* ── view1 (0x8cc) shadow/mask pre-pass (cell&1 selects order) ─────── */
+            view = anim_b_view1;
+            *(u16 __far *)(view + 0xa)  = 1;
+            *(u16 __far *)(view + 0x16) = 0;
+            *(u16 __far *)(view + 0x14) = 0;
+            *(u16 __far *)(view + 0x1c) = 4;
+            if ((cell & 1) == 0) {
+                view = anim_b_view1;
+                *(u16 __far *)(view + 2) = 0x9eba;
+                *(u16 __far *)(view + 4) = ANIM_DGROUP_RUNTIME_SEG;
+                anim_render_leaf_80ac(anim_b_view1);
+                view = anim_b_view1;
+                *(u16 __far *)(view + 2) = 0x9fba;
+            } else {
+                *(u16 __far *)(view + 2) = 0x9fba;
+                *(u16 __far *)(view + 4) = ANIM_DGROUP_RUNTIME_SEG;
+                anim_render_leaf_80ac(anim_b_view1);
+                view = anim_b_view1;
+                *(u16 __far *)(view + 2) = 0x9eba;
+            }
+            *(u16 __far *)(view + 4) = ANIM_DGROUP_RUNTIME_SEG;
+            view = anim_b_view1;
+            *(u16 __far *)(view + 0x14) = x;
+            *(u16 __far *)(view + 0x16) = y;
+            anim_restore_bg_view_leaf(anim_b_view1);
+            view = anim_b_view1;
+            *(u16 __far *)(view + 2)    = 0x8888;
+            *(u16 __far *)(view + 4)    = ANIM_DGROUP_RUNTIME_SEG;
+            *(u16 __far *)(view + 0xa)  = 3;
+            *(u16 __far *)(view + 0x1c) = 3;
+            anim_restore_bg_view_leaf(anim_b_view1);
+
+            /* ── p1_sprite blit descriptor (frame +0xf1 bias) ─────────────────── */
+            posy = *(u16 __far *)(anim_posB_tbl + (u16)cell * 4 + 2);
+            *(u16 __far *)(p1_sprite + 0) = *(u16 __far *)(anim_posB_tbl + (u16)cell * 4 + 0);
+            *(u16 __far *)(p1_sprite + 2) = (u16)(posy + slot->data_off);
+            if ((slot->data_seg & 0x200) == 0) {
+                *(u16 __far *)(p1_sprite + 4) = (u16)(slot->data_seg + 0xf1);
+                anim_blit_sprite_leaf(0x792e, ANIM_DGROUP_RUNTIME_SEG);
+            }
+
+            /* ── DRAW view (0x8d0) save-under ─────────────────────────────────── */
+            view = anim_b_draw_view;
+            *(u16 __far *)(view + 6)    = x;
+            *(u16 __far *)(view + 8)    = y;
+            *(u16 __far *)(view + 0x10) = (u16)((u16)channel_idx * 0x100 + 0x7e3e);
+            *(u16 __far *)(view + 0x12) = ANIM_DGROUP_RUNTIME_SEG;
+            anim_render_view_leaf(anim_b_draw_view);
+        }
+        channel_idx = channel_idx + 1;
+    } while (active != 0xff);
+    return;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  erase_anim_channels_a — 1000:1a67  (restore the 3 channel-A cells' background)
+ *  Ported 1:1 from the live Ghidra decomp + disassembly (verified fresh, 2026-06).
+ *
+ *  Iterates the channel-A slot table until 0xFF.  For each ACTIVE slot it writes the
+ *  CLEAR view descriptor (0x8c0) — the (channel_idx*0x180)+0x79be work-buffer ptr,
+ *  the gridA coords at +0x14/+0x16, and the 0x400 flag bit if (cell&1) — then calls
+ *  restore_bg_view.  See the LEAF-stub FIDELITY note above.
+ * ════════════════════════════════════════════════════════════════════════════ */
+void erase_anim_channels_a(void)
+{
+    u8        active;
+    u8        cell;
+    u8 __far *view;
+    u8        channel_idx;
+
+    /* STACK-CHECK PROLOGUE intentionally OMITTED. */
+    channel_idx = 0;
+    do {
+        active = anim_channels_a_tbl[channel_idx]->active;
+        if ((active != '\0') && (active != 0xff)) {
+            cell = anim_channels_a_tbl[channel_idx]->cell;
+            view = anim_a_clear_view;
+            *(u16 __far *)(view + 2) = (u16)((u16)channel_idx * 0x180 + 0x79be);
+            *(u16 __far *)(view + 4) = ANIM_DGROUP_RUNTIME_SEG;
+            *(u16 __far *)(anim_a_clear_view + 0x14) =
+                *(u16 __far *)(anim_a_grid_tbl + (u16)cell * 4 + 0);
+            *(u16 __far *)(anim_a_clear_view + 0x16) =
+                *(u16 __far *)(anim_a_grid_tbl + (u16)cell * 4 + 2);
+            *(u16 __far *)(view + 0x1c) = 0;
+            if ((cell & 1) != 0) {
+                *(u16 __far *)(view + 0x1c) = *(u16 __far *)(view + 0x1c) | 0x400;
+            }
+            anim_restore_bg_view_leaf(anim_a_clear_view);
+        }
+        channel_idx = channel_idx + 1;
+    } while (active != 0xff);
+    return;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  erase_anim_channels_b — 1000:1b2b  (restore the 4 channel-B cells' background)
+ *  Ported 1:1 from the live Ghidra decomp + disassembly (verified fresh, 2026-06).
+ *
+ *  Layer-B analog of erase_anim_channels_a: CLEAR view (0x8bc), work-buffer ptr
+ *  (channel_idx*0x100)+0x7e3e, gridB coords (0x343e/0x3440) at +0x14/+0x16, then
+ *  restore_bg_view.  NOTE: the B erase has NO (cell&1) flag write (unlike the A
+ *  erase's 0x400) — mirrored faithfully.  See the LEAF-stub FIDELITY note above.
+ * ════════════════════════════════════════════════════════════════════════════ */
+void erase_anim_channels_b(void)
+{
+    u8        active;
+    u8        cell;
+    u8 __far *view;
+    u8        channel_idx;
+
+    /* STACK-CHECK PROLOGUE intentionally OMITTED. */
+    channel_idx = 0;
+    do {
+        active = anim_channels_b_tbl[channel_idx]->active;
+        if ((active != '\0') && (active != 0xff)) {
+            cell = anim_channels_b_tbl[channel_idx]->cell;
+            view = anim_b_clear_view;
+            *(u16 __far *)(view + 2) = (u16)((u16)channel_idx * 0x100 + 0x7e3e);
+            *(u16 __far *)(view + 4) = ANIM_DGROUP_RUNTIME_SEG;
+            *(u16 __far *)(anim_b_clear_view + 0x14) =
+                *(u16 __far *)(anim_b_grid_tbl + (u16)cell * 4 + 0);
+            *(u16 __far *)(anim_b_clear_view + 0x16) =
+                *(u16 __far *)(anim_b_grid_tbl + (u16)cell * 4 + 2);
+            anim_restore_bg_view_leaf(anim_b_clear_view);
+        }
+        channel_idx = channel_idx + 1;
+    } while (active != 0xff);
     return;
 }

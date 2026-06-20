@@ -95,7 +95,33 @@ u8 current_level;
 static u8 synth_tilemap[TILEMAP_SIZE];
 u8 __far *tilemap = synth_tilemap;
 
+/* The draw/erase wrappers stamp the RUNTIME DS register (Ghidra renders it as the
+   static 0x203b; the captured Phase-5 T1 trace loads at PSP_SEG 0x100 -> runtime DS
+   = 0x114b) into their view descriptors' far-data segment fields.  Drive anim.c's
+   ANIM_DGROUP_RUNTIME_SEG to the captured value so the descriptor gate compares
+   against the engine's actual EXIT bytes (0x114b), not the static literal. */
+#define ANIM_DGROUP_RUNTIME_SEG 0x114b
+
 #include "../src/anim.c"
+
+/* ── DESCRIPTOR-GATE host wiring (Phase-5 T4) ──────────────────────────────────
+ *  The four draw/erase wrappers write their OBSERVABLE output into engine-DGROUP
+ *  descriptor structs reached through FAR-POINTER globals: the seven view
+ *  descriptors (anim_*_view, 0x20 bytes each) and the p1_sprite blit descriptor
+ *  pointee (0x792e, 8 bytes; p1_sprite at 0x8884 points at it).  On the host those
+ *  far-ptr globals point at NOTHING by default; here we back EACH with a real host
+ *  buffer so the reconstructed wrappers' field writes land where the comparator can
+ *  read them, then diff those bytes against the captured ENGINE descriptors
+ *  (T1 trace `views` blobs + the draw `desc` blob).  This is the REAL gate. */
+#define VIEW_LEN 0x20
+static u8 hview[7][VIEW_LEN];           /* one host buffer per view id 0..6        */
+
+/* grid/pos host tables the draw/erase fns index by cell*4 (engine 0x32be/0x32c0
+   gridA, 0x343e/0x3440 gridB, 0xf4/0xf6 posA, 0x3f4/0x3f6 posB).  Sized to hold
+   256 cells * 4 bytes; the reconstructed fns read (u16)x at +0, (u16)y at +2. */
+#define GRID_TBL_LEN (256 * 4)
+static u8 hgridA[GRID_TBL_LEN], hgridB[GRID_TBL_LEN];
+static u8 hposA[GRID_TBL_LEN],  hposB[GRID_TBL_LEN];
 
 /* ════════════════════════════════════════════════════════════════════════════
  *  Trace format (frozen — see tools/anim_oracle.py header §"TRACE LAYOUT").
@@ -375,18 +401,126 @@ static const char *cmp_semantic(const record_t *r, long *got, long *want)
 
 /* ── (B) DESCRIPTOR COMPARATOR — p1_sprite blit descriptor + view descriptors ────
  *  draw/erase records carry the descriptor/view bytes the engine wrote at EXIT.
- *  When a draw/erase fn is PORTED and writes a host-visible descriptor (T4), this
- *  compares the produced bytes against the captured ones.  For the skeleton (no fn
- *  PORTED) it never runs; it is wired so T4 lands without harness edits. */
-static u8 host_desc[8];                    /* p1_sprite blit descriptor target      */
+ *  A PORTED draw/erase fn writes its descriptor field bytes into the host view +
+ *  p1_sprite buffers; this asserts the produced bytes == the captured engine bytes,
+ *  printing first-divergence.  The gate is REAL: the wrappers RECOMPUTE the written
+ *  fields (grid/pos lookups, work-buffer ptr (channel_idx*0x180/0x100)+base, the
+ *  0x600/0x400/0x200 / 0x9eba/0x9fba/0x8888 flag + far-data writes, the +0xf1 frame
+ *  bias) from seeded inputs — NOT a self-consistency check.  A field perturbation
+ *  (offset a written field) makes the comparator FAIL (see ANIM_DESC_PERTURB). */
+static u8 host_desc[8];                    /* p1_sprite blit-descriptor pointee      */
+
+/* view id -> the far-ptr global that must point at hview[id]. */
+static void wire_views(void)
+{
+    anim_a_erase_view = hview[0];          /* id 0  0x8d4 */
+    anim_a_draw_view  = hview[1];          /* id 1  0x8e0 */
+    anim_b_view0      = hview[2];          /* id 2  0x8c8 */
+    anim_b_view1      = hview[3];          /* id 3  0x8cc */
+    anim_b_draw_view  = hview[4];          /* id 4  0x8d0 */
+    anim_a_clear_view = hview[5];          /* id 5  0x8c0 */
+    anim_b_clear_view = hview[6];          /* id 6  0x8bc */
+    anim_a_grid_tbl = hgridA; anim_b_grid_tbl = hgridB;
+    anim_posA_tbl   = hposA;  anim_posB_tbl   = hposB;
+}
+
+static void wr16h(u8 *p, u16 v) { p[0] = (u8)(v & 0xff); p[1] = (u8)(v >> 8); }
+
+/* SEED the descriptor INPUTS from the captured EXIT record so the reconstructed
+ *  wrapper RECOMPUTES the written fields to the engine's values:
+ *   - each view host buffer is pre-loaded with the captured EXIT bytes (the fields
+ *     the wrapper does NOT write retain the engine value -> trivially match; the
+ *     fields it DOES write are independently recomputed -> the genuine signal);
+ *   - the grid/pos tables for the active cell are recovered so the wrapper's
+ *     grid[cell]/pos[cell] lookups yield the captured coords (a real cross-check
+ *     that the wrapper reads the right table at cell*4 and writes the right offset);
+ *   - p1_sprite x/y is recovered from the captured `desc` MINUS the entry slot's
+ *     [+8] contribution so the wrapper's `posA_y + slot[+8]` add (and the B +0xf1
+ *     frame bias on slot[+0xa]) are genuinely exercised, not echoed.
+ *  Returns the active cell, or -1 if no active slot drives this record. */
+static int seed_draw_erase(const record_t *r)
+{
+    unsigned v, base, n, s, slot, cell = 0; int have_cell = -1;
+    int is_b = (r->fn_addr == FN_DRAW_ANIM_B || r->fn_addr == FN_ERASE_ANIM_B);
+    u8 *gridT = is_b ? hgridB : hgridA;
+    u8 *posT  = is_b ? hposB  : hposA;
+    u16 gx = 0, gy = 0;
+
+    /* (1) pre-load each captured view into its host buffer. */
+    for (v = 0; v < r->nview; v++) {
+        u8 id = r->views[v].id;
+        if (id < 7 && r->views[v].len <= VIEW_LEN)
+            memcpy(hview[id], r->views[v].bytes, r->views[v].len);
+    }
+
+    /* (2) the active slot/cell that drives this record (first non-0/non-0xFF). */
+    base = is_b ? A_SLOTS : 0;
+    n    = is_b ? B_SLOTS : A_SLOTS;
+    for (s = 0; s < n; s++) {
+        slot = base + s;
+        if (rec_u8(r->ent.recs, slot, 0) != 0 && rec_u8(r->ent.recs, slot, 0) != 0xff) {
+            cell = rec_u8(r->ent.recs, slot, 1); have_cell = (int)cell; break;
+        }
+    }
+    if (have_cell < 0) return -1;
+
+    /* (3) recover the grid coords this record's wrapper must produce.  For draw_a the
+       coords are in the erase view (id 0) at +0x14/+0x16; for draw_b in view0 (id 2)
+       at +6/+8; for erase_a/b in the clear view (id 5/6) at +0x14/+0x16. */
+    {
+        const u8 *vw = NULL; unsigned ox = 0x14, oy = 0x16;
+        for (v = 0; v < r->nview; v++) {
+            u8 id = r->views[v].id;
+            if ((r->fn_addr == FN_DRAW_ANIM_A && id == 0) ||
+                (r->fn_addr == FN_ERASE_ANIM_A && id == 5) ||
+                (r->fn_addr == FN_ERASE_ANIM_B && id == 6)) { vw = r->views[v].bytes; break; }
+            if (r->fn_addr == FN_DRAW_ANIM_B && id == 2) {
+                vw = r->views[v].bytes; ox = 6; oy = 8; break;
+            }
+        }
+        if (vw) { gx = rd16(vw + ox); gy = rd16(vw + oy); }
+    }
+    wr16h(gridT + cell * 4 + 0, gx);
+    wr16h(gridT + cell * 4 + 2, gy);
+
+    /* (4) p1_sprite pos seed (draw fns only).  desc[0..1]=x, desc[2..3]=y,
+       desc[4..5]=frame.  posT_x[cell] = desc x; posT_y[cell] = desc y - slot[+8]
+       (so wrapper's y = posT_y + slot[+8] reproduces desc y).  frame is checked
+       independently (= slot[+0xa] (+0xf1 for B)). */
+    if (r->desc_kind == 1 && r->desc_len >= 6) {
+        u16 dx = rd16(r->desc + 0), dy = rd16(r->desc + 2);
+        u16 s8 = rec_u16(r->ent.recs, slot, 8);
+        wr16h(posT + cell * 4 + 0, dx);
+        wr16h(posT + cell * 4 + 2, (u16)(dy - s8));
+    }
+    return (int)cell;
+}
+
+/* Compare the descriptor bytes the wrapper wrote against the captured engine bytes:
+ *  every view blob (full 0x20) + the p1_sprite pointee (desc).  First divergence is
+ *  returned with got/want.  A perturbation of any written field makes this FAIL. */
 static const char *cmp_descriptor(const record_t *r, long *got, long *want)
 {
-    unsigned b;
-    if (r->desc_kind == 0 || r->desc_len == 0) return NULL;
-    for (b = 0; b < r->desc_len && b < sizeof(host_desc); b++) {
-        if (host_desc[b] != r->desc[b]) {
-            *got = host_desc[b]; *want = r->desc[b];
-            return "desc";
+    static char buf[32];
+    unsigned v, b;
+    for (v = 0; v < r->nview; v++) {
+        u8 id = r->views[v].id, len = r->views[v].len;
+        if (id >= 7 || len > VIEW_LEN) continue;
+        for (b = 0; b < len; b++) {
+            if (hview[id][b] != r->views[v].bytes[b]) {
+                *got = hview[id][b]; *want = r->views[v].bytes[b];
+                snprintf(buf, sizeof(buf), "view%u[+%u]", id, b);
+                return buf;
+            }
+        }
+    }
+    if (r->desc_kind == 1 && r->desc_len) {
+        for (b = 0; b < r->desc_len && b < sizeof(host_desc); b++) {
+            if (host_desc[b] != r->desc[b]) {
+                *got = host_desc[b]; *want = r->desc[b];
+                snprintf(buf, sizeof(buf), "desc[+%u]", b);
+                return buf;
+            }
         }
     }
     return NULL;
@@ -415,10 +549,10 @@ static const ported_t PORTED[] = {
     { FN_APPLY_CELL_ANIMATION, (void (*)(void))apply_cell_animation }, /* T3 alloc    */
     { FN_STEP_ANIM_A,          (void (*)(void))step_anim_channels_a }, /* T3 step 3 A */
     { FN_STEP_ANIM_B,          (void (*)(void))step_anim_channels_b }, /* T3 step 4 B */
-    { FN_DRAW_ANIM_A,          NULL },   /* T4 — erase+blit+save-under (A)          */
-    { FN_DRAW_ANIM_B,          NULL },   /* T4 — erase+blit+save-under (B)          */
-    { FN_ERASE_ANIM_A,         NULL },   /* T4 — restore_bg_view current (A)        */
-    { FN_ERASE_ANIM_B,         NULL },   /* T4 — restore_bg_view current (B)        */
+    { FN_DRAW_ANIM_A,  (void (*)(void))draw_anim_channels_a },  /* T4 erase+blit+save-under (A) */
+    { FN_DRAW_ANIM_B,  (void (*)(void))draw_anim_channels_b },  /* T4 erase+blit+save-under (B) */
+    { FN_ERASE_ANIM_A, (void (*)(void))erase_anim_channels_a }, /* T4 restore_bg_view current(A)*/
+    { FN_ERASE_ANIM_B, (void (*)(void))erase_anim_channels_b }, /* T4 restore_bg_view current(B)*/
 };
 #define PORTED_N (sizeof(PORTED) / sizeof(PORTED[0]))
 
@@ -473,8 +607,11 @@ static int run_per_function(record_t *recs, long nrec, const char *scname,
             seed_globals(&r->ent);
             seed_tilemap(r);
             memset(host_desc, 0, sizeof(host_desc));
-            if (fn_is_draw_or_erase(r->fn_addr))
+            if (fn_is_draw_or_erase(r->fn_addr)) {
                 p1_sprite = host_desc;       /* draw fns write the blit descriptor */
+                wire_views();                /* point the 7 view far-ptrs at hview[] */
+                seed_draw_erase(r);          /* seed views + grid/pos + p1_sprite in  */
+            }
 
             if (r->fn_addr == FN_APPLY_CELL_ANIMATION) {
                 /* apply_cell_animation(action) — the cdecl action code.  Recovered
@@ -491,6 +628,9 @@ static int run_per_function(record_t *recs, long nrec, const char *scname,
                 }
                 seed_alloc_tiledef(r, action);
                 f1(action);
+            } else if (fn_is_draw_or_erase(r->fn_addr)) {
+                /* draw/erase: inputs seeded above (wire_views + seed_draw_erase). */
+                fn();
             } else {
                 /* steppers: seed each active slot's stream byte + frame-data ptr. */
                 seed_stepper_stream(r, r->fn_addr == FN_STEP_ANIM_B);
@@ -498,9 +638,9 @@ static int run_per_function(record_t *recs, long nrec, const char *scname,
             }
 
             bad = cmp_semantic(r, &got, &want);
-            if (bad == NULL && fn_is_draw_or_erase(r->fn_addr) && r->desc_len) {
+            if (bad == NULL && fn_is_draw_or_erase(r->fn_addr) && (r->nview || r->desc_len)) {
                 bad = cmp_descriptor(r, &got, &want);
-                if (bad == NULL && r->desc_kind) st->desc_checked++;
+                if (bad == NULL) st->desc_checked++;
             }
             if (bad == NULL) {
                 st->pass++;
