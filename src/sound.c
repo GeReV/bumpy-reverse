@@ -136,7 +136,8 @@ u16 snd_select_scratch_83ef;      /* CODE   0x83ef — select-from-mask reset sc
  *  calls must mirror the decomp verbatim).  A file-scope carry scalar carries the
  *  identical observable effect (frame fills iff carry clear) without perturbing the
  *  call sites.  record_min_status_code itself is a stub/no-op (it records a min status
- *  code — not part of the validated frame).  Recorded in docs/reconstruction-fidelity.md.
+ *  code — not part of the validated frame).  Recorded in docs/reconstruction-fidelity.md
+ *  (the Phase-6 "L1 dispatch + L3 tone-submit" row + the flags-carry-convention deviation).
  * ════════════════════════════════════════════════════════════════════════════ */
 
 /* extern stubs (still-stubbed callees — see header block above).
@@ -351,18 +352,25 @@ switchD_1000_6e7e_default:
 /* ── schedule_timer_callback_a (1000:9488) — L3 tone-submit (8-arg frame) ─────────
  *  Records prior CPU-flags status, then (if carry clear) fills the 10-word tone param
  *  frame snd_param_frame[0..9] (CODE 0x9788..0x979a) from the args and installs the far
- *  callback ptr 1000:9631.  param_1 (=2 from every caller) is the status-code argument;
- *  param_2..param_8 are the frame words.  Frame-offset → snd_param_frame[] index map:
+ *  callback ptr 1000:9631.  param_2..param_8 are the frame words.  Frame-offset →
+ *  snd_param_frame[] index map:
  *    0x9788→[0] 0x978a→[1] 0x978c→[2] 0x978e→[3] 0x9790→[4]
  *    0x9792→[5] 0x9794→[6] 0x9796→[7] 0x9798→[8] 0x979a→[9] (byte 0x0f, low half).
- *  Deeper callees FUN_1000_7df9 (scheduler) + speaker_gate_reset stay STUBBED → T4/T5. */
+ *  NOTE on the record_min_status_code arg: the ORIGINAL (decomp 1000:9488) does NOT pass
+ *  param_1 — it passes the PACKED ENTRY-FLAGS word, the bit-OR of the CPU flags captured at
+ *  entry: (in_NT<<14)|(in_OF<<11)|(in_IF<<9)|(in_TF<<8)|(in_SF<<7)|(in_ZF<<6)|(in_AF<<4)|
+ *  (in_PF<<2)|in_CF.  Because record_min_status_code is a no-op stub (records into CS:[0x946c],
+ *  not part of any validated frame/port sequence), we hand it the available value (param_1)
+ *  in lieu of reconstructing the host-absent FLAGS register — observationally identical.
+ *  Deeper callee FUN_1000_7df9 = set_timer_slot_raw (PORTED T4); speaker_gate_reset PORTED T5. */
 u16 schedule_timer_callback_a(u16 param_1, u16 param_2, u16 param_3, u16 param_4,
                               u16 param_5, u16 param_6, u16 param_7, u16 param_8)
 {
     u16 ret_status;
     u8  in_CF = snd_sched_carry_in;   /* modelled entry carry (see FIDELITY note) */
 
-    record_min_status_code(param_1);  /* status word; not part of the validated frame */
+    record_min_status_code(param_1);  /* ORIGINAL: packed entry-FLAGS word (in_NT..in_CF
+                                        *  bit-OR); param_1 stands in (callee is a no-op stub) */
     ret_status = 0xffff;
     if (!in_CF) {
         snd_param_frame[0] = param_2;   /* DAT_1000_9788 */
@@ -399,7 +407,7 @@ u16 schedule_timer_callback_b(u16 param_1, u16 param_2, u16 param_3, u16 param_4
     u16 ret_status;
     u8  in_CF = snd_sched_carry_in;
 
-    record_min_status_code(param_1);
+    record_min_status_code(param_1);    /* ORIGINAL: packed entry-FLAGS word (no-op stub) */
     ret_status = 0xffff;
     if (!in_CF) {
         snd_param_frame[0] = param_2;   /* DAT_1000_9788 */
@@ -429,7 +437,7 @@ u16 schedule_timer_callback_c(u16 param_1, u16 param_2)
     u16 ret_status;
     u8  in_CF = snd_sched_carry_in;
 
-    record_min_status_code(param_1);
+    record_min_status_code(param_1);    /* ORIGINAL: packed entry-FLAGS word (no-op stub) */
     ret_status = 0xffff;
     if (!in_CF) {
         snd_param_frame[9] = 0xf;       /* DAT_1000_979a (byte 0x0f) */
@@ -937,6 +945,17 @@ u8 opl_chan_idx_5614[0x100];       /* DGROUP 0x5614 — per-channel block index 
  *  reproduce the engine's first-seen sequence. */
 u8 snd_mpu_byte_89e2 = 0x99;       /* the byte FUN_89e2 writes to 0x330 (engine: AH) */
 
+/* ── L5 ISR sequencer PRNG/state bytes (CODE 0x979b..0x979e) ─────────────────────────
+ *  The 96c4/95b5 noise sequencers keep their LFSR/PRNG state in the CS-segment bytes
+ *  just PAST the 10-word L3 param frame: 0x979a is the per-tick fire counter (it ALIASES
+ *  snd_param_frame[9]'s low byte — the schedulers seed it 0x0f as the frame's 0x0f marker,
+ *  the ISR then `inc`/`test 0x10`s it each tick), and 0x979b..0x979e hold the two PRNG
+ *  words the ISR self-modifies.  Modelled here as a 5-byte region BASED at 0x979a so the
+ *  ISR's exact byte/word offset arithmetic (0x979a,0x979b,0x979c,0x979d) indexes it 1:1;
+ *  the alias of [0] onto the frame's [9] low byte is the faithful image behaviour.  Owned
+ *  here; not captured in the SND_SNAP (the ISR is never host-run — see the L5 block). */
+u8 snd_isr_state_979a[5];          /* CODE 0x979a..0x979e — ISR tick counter + PRNG state */
+
 /* ── FUN_89e2 (1000:89e2) — MPU-401 byte-out primitive ──────────────────────────────
  *  Poll status port 0x331 until DSR (bit 0x40) is CLEAR (CX from 0 -> up to 0x10000
  *  iters), then write the data byte (engine AH) to data port 0x330.  On a poll TIMEOUT
@@ -1160,4 +1179,251 @@ void record_status_and_strobe_speaker(void)
     } else {
         record_min_status_code(0xff);   /* MOV AX,0xff; CALL 0x945b */
     }
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  Phase-6 T6 — L5 ISR TONE-SEQUENCER (the PIT timer-callback tone engine).
+ *
+ *  These are the engine's IRQ0 / int-8 (PIT, ~18.2 Hz reprogrammed faster) machinery:
+ *  a multiplexer ISR (1000:7c02) that walks the 6-channel timer-callback table 0x5516
+ *  each tick decrementing a per-channel counter and, when it wraps past 500, FAR-CALLS
+ *  the channel's installed tone-sequencer callback; and the three installed callbacks
+ *  (1000:9631 / 96c4 / 95b5) the L3 schedule_timer_callback_a / _b / _c fns install (via
+ *  set_timer_slot_raw + the snd_timer_cb_off/seg far ptr).  Each callback advances the
+ *  10-word tone param frame snd_param_frame (0x9788..0x979a) it was handed and reprograms
+ *  PIT channel 2 (ports 0x42/0x43) / strobes the PC-speaker gate (port 0x61) to sweep the
+ *  tone's frequency over its lifetime, retiring the channel (disable + speaker strobe) when
+ *  the duration counter (frame[0]) expires.
+ *
+ *  ── RECONSTRUCTION FIDELITY: reconstructed 1:1 as DOCUMENTATION, NOT runtime-gated ──
+ *  Reached ONLY through the installed far pointer (the 0x5516 table the L3 layer fills),
+ *  these routines have NO Ghidra function boundary and are NOT hooked by the sound oracle
+ *  (tools/sound_oracle.py FN_NAMES) — so the Phase-6 T1 capture contains ZERO records for
+ *  0x7c02 / 0x9631 / 0x96c4 / 0x95b5, and there is no host differential to gate them.  Each
+ *  body below is transcribed VERBATIM from the raw disassembly (cited per fn) and is
+ *  structurally faithful to the decomp + to the L3 param frame it consumes; but the engine's
+ *  async per-PIT-tick frequency sweep — driven by hardware interrupts mutating the frame
+ *  out from under the foreground game loop — is NOT host-replayable as a deterministic
+ *  differential.  They are therefore BEHAVIOR-FAITHFUL reconstructions kept for
+ *  documentation, the same precedent as the self-modifying-BGI-overlay blitters
+ *  (sprite_blit / bg_render): faithful to what the binary does, validated by inspection
+ *  against the asm rather than by a runtime gate.  See docs/reconstruction-fidelity.md.
+ *
+ *  The CS-relative entry-guard `call 0x9439; jne exit` reads sound_mode (DGROUP 0x683e) and
+ *  skips the body when sound_mode != 0; 0x9434 is the noop JMP-thunk chain (AL preserved);
+ *  0x945b = record_min_status_code (no-op stub); 0x7df9 = set_timer_slot_raw (PORTED); 0x7e1f
+ *  = the channel-slot clear (modelled by isr_disable_timer_slot below); 0x9451 =
+ *  speaker_gate_strobe (PORTED).  Stack-probe / register-save prologue omitted (convention).
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/* isr_disable_timer_slot (1000:7e1f) — clear channel's 0x549c slot (value=0, cb=0:0).
+ *  Validates channel 0..3, then set_timer_slot_raw(channel, 0, 0, 0) (the asm adds 2 to
+ *  BX and tail-calls the 0x7e62 writer with AX=CX=DX=0).  The tone-sequencer retire path
+ *  calls it with channel 2. */
+static int isr_disable_timer_slot(int channel)
+{
+    if ((-1 < channel) && (channel < 4)) {
+        set_timer_slot_raw(channel, 0, 0, 0);
+        return 1;
+    }
+    return 0;
+}
+
+/* ── tone_seq_callback_9631 (1000:9631) — sweep tone sequencer (schedule_a's installed cb) ─
+ *  Per-tick: gated on sound_mode==0 (entry guard 0x9439).  Decrement the sub-sweep counter
+ *  frame[8] (0x9798); on wrap reload it from frame[5] (0x9792), advance the channel-2 reload
+ *  value frame[4] (0x9790 += frame[6] @0x9794) and re-arm the slot (set_timer_slot_raw(2,
+ *  frame[4], cb_off, cb_seg)).  Decrement the step counter frame[7] (0x9796); when it too
+ *  wraps, decrement the lifetime counter frame[0] (0x9788): if it hits 0 RETIRE (record 0xff,
+ *  disable slot 2, strobe gate); else reload frame[7] from frame[2] (0x978c), advance the
+ *  pitch frame[1] (0x978a += frame[3] @0x978e) and reprogram PIT ch2 (0x43<-0xb6, 0x42<-lo,
+ *  0x42<-hi).  asm 1000:9631 verbatim. */
+void tone_seq_callback_9631(void)
+{
+    u8 ax_hi_lo;
+
+    if (sound_mode != 0) {              /* call 0x9439; jne 0x96ba (exit) */
+        return;
+    }
+    snd_param_frame[8] -= 1;            /* dec word cs:[0x9798] */
+    if (snd_param_frame[8] == 0) {      /* jne 0x9672 */
+        snd_param_frame[8] = snd_param_frame[5];                 /* [0x9798] = [0x9792] */
+        snd_param_frame[4] += snd_param_frame[6];                /* [0x9790] += [0x9794] */
+        set_timer_slot_raw(2, (int)snd_param_frame[4],           /* AX=[0x9790], BX=2     */
+                           snd_timer_cb_off, snd_timer_cb_seg);  /* CX=[0x97a1], DX=[0x979f] */
+    }
+    snd_param_frame[7] -= 1;            /* dec word cs:[0x9796] */
+    if (snd_param_frame[7] != 0) {      /* jne 0x96ba (exit) */
+        return;
+    }
+    snd_param_frame[0] -= 1;            /* dec word cs:[0x9788] */
+    if (snd_param_frame[0] == 0) {      /* jne 0x9691 */
+        record_min_status_code(0xff);          /* MOV AX,0xff; CALL 0x945b */
+        isr_disable_timer_slot(2);             /* MOV AX,2;    CALL 0x7e1f */
+        speaker_gate_strobe();                 /* CALL 0x9451 */
+        return;                                /* jmp 0x96ba (exit) */
+    }
+    snd_param_frame[7] = snd_param_frame[2];   /* [0x9796] = [0x978c] */
+    snd_param_frame[1] += snd_param_frame[3];  /* [0x978a] += [0x978e] */
+    outp(0x43, 0xb6);                          /* MOV AL,0xb6; OUT 0x43,AL */
+    (void)0;                                   /* CALL 0x9434 (noop thunk chain) */
+    outp(0x42, (u8)snd_param_frame[1]);        /* MOV AX,[0x978a]; OUT 0x42,AL (lo) */
+    (void)0;                                   /* CALL 0x9434 */
+    ax_hi_lo = (u8)(snd_param_frame[1] >> 8);  /* XCHG AH,AL */
+    outp(0x42, ax_hi_lo);                      /* OUT 0x42,AL (hi) */
+}
+
+/* ── tone_seq_callback_96c4 (1000:96c4) — noise/PRNG tone sequencer (schedule_b's cb) ──────
+ *  Per-tick (gated on sound_mode==0): bump the per-tick fire counter at 0x979a (= the ISR
+ *  state byte, seeded 0x0f by the scheduler's frame[9] marker); every time the low nibble
+ *  carries past 0x10 run one PRNG step over the two state words at 0x979b/0x979d
+ *  (xor/add/xor mixing with the 0x2345 / 0x4567 constants) and reprogram PIT ch2 in MODE 2
+ *  (0x43<-0xb4) with the pitch frame[1].  Then run the same sub-sweep/step/lifetime ladder
+ *  as 9631 (frame[8]/frame[0] counters, the re-arm + retire), and finally roll the PRNG
+ *  word (ROL 0x979b) and toggle the speaker gate from port 0x61 (mode-2-ish bit dance).
+ *  asm 1000:96c4 verbatim. */
+void tone_seq_callback_96c4(void)
+{
+    u16 ax;
+    u8  port61;
+
+    if (sound_mode != 0) {                     /* call 0x9439; jne 0x977e (exit) */
+        return;
+    }
+    snd_isr_state_979a[0] += 1;                /* inc byte cs:[0x979a] */
+    if ((snd_isr_state_979a[0] & 0x10) != 0) { /* test byte cs:[0x979a],0x10; je 0x971e */
+        ax = 0;
+        ax ^= *(u16 *)(snd_isr_state_979a + 1);   /* xor ax, cs:[0x979b] */
+        ax += 0x2345;                             /* add ax, 0x2345 */
+        ax ^= *(u16 *)(snd_isr_state_979a + 2);   /* xor ax, cs:[0x979c] */
+        ax ^= *(u16 *)(snd_isr_state_979a + 3);   /* xor ax, cs:[0x979d] */
+        *(u16 *)(snd_isr_state_979a + 1) = ax;    /* mov cs:[0x979b], ax */
+        ax += 0x4567;                             /* add ax, 0x4567 */
+        ax ^= *(u16 *)(snd_isr_state_979a + 2);   /* xor ax, cs:[0x979c] */
+        *(u16 *)(snd_isr_state_979a + 3) = ax;    /* mov cs:[0x979d], ax */
+        snd_isr_state_979a[0] = 0;                /* xor ax,ax; mov cs:[0x979a],al */
+        outp(0x43, 0xb4);                         /* MOV AL,0xb4; OUT 0x43,AL (mode 2) */
+        (void)0;                                  /* CALL 0x9434 */
+        outp(0x42, (u8)snd_param_frame[1]);       /* MOV AX,[0x978a]; OUT 0x42,AL (lo) */
+        (void)0;                                  /* CALL 0x9434 */
+        outp(0x42, (u8)(snd_param_frame[1] >> 8));/* XCHG AH,AL; OUT 0x42,AL (hi) */
+    }
+    snd_param_frame[8] -= 1;                    /* dec word cs:[0x9798] */
+    if (snd_param_frame[8] == 0) {              /* jne 0x9766 */
+        snd_param_frame[0] -= 1;               /* dec word cs:[0x9788] */
+        if (snd_param_frame[0] == 0) {         /* jne 0x973d */
+            record_min_status_code(0xff);          /* MOV AX,0xff; CALL 0x945b */
+            isr_disable_timer_slot(2);             /* MOV AX,2;    CALL 0x7e1f */
+            speaker_gate_strobe();                 /* CALL 0x9451 */
+            return;                                /* jmp 0x977e (exit) */
+        }
+        snd_param_frame[8] = snd_param_frame[5];                /* [0x9798] = [0x9792] */
+        snd_param_frame[4] += snd_param_frame[6];               /* [0x9790] += [0x9794] */
+        set_timer_slot_raw(2, (int)snd_param_frame[4],          /* AX=[0x9790], BX=2     */
+                           snd_timer_cb_off, snd_timer_cb_seg); /* CX=[0x97a1], DX=[0x979f] */
+    }
+    *(u16 *)(snd_isr_state_979a + 1) =                          /* mov ax,[0x979b]; rol ax,1 */
+        (u16)((*(u16 *)(snd_isr_state_979a + 1) << 1) |
+              (*(u16 *)(snd_isr_state_979a + 1) >> 15));        /* mov [0x979b],ax */
+    port61 = (u8)inp(0x61);                     /* IN AL,0x61 */
+    /* AH = (AH & 2) | 1 then AL = (AL & 0xfd) | AH.  AH starts as the rol'd word's high byte;
+     *  the engine reuses AX from the ROL — AH = (ax>>8).  The 0x61 bit dance toggles bit1
+     *  (speaker data) / sets bit0 (gate) from the PRNG. */
+    {
+        u8 ah = (u8)(*(u16 *)(snd_isr_state_979a + 1) >> 8);   /* AH = rolled hi byte */
+        ah = (u8)((ah & 2) | 1);               /* AND AH,2; OR AH,1 */
+        port61 = (u8)((port61 & 0xfd) | ah);   /* AND AL,0xfd; OR AL,AH */
+    }
+    outp(0x61, port61);                        /* OUT 0x61,AL */
+}
+
+/* ── tone_seq_callback_95b5 (1000:95b5) — noise/PRNG tone sequencer (schedule_c's cb) ──────
+ *  The variant 96c4 installed by schedule_timer_callback_c.  Same PRNG-stepped noise engine
+ *  as 96c4 but a shorter ladder: the PRNG step additionally masks AX with 0xdb6d (the LFSR
+ *  tap mask) and there is NO sub-sweep/lifetime counter section — after the optional PRNG
+ *  step it just rolls 0x979b and does the port-0x61 speaker bit dance.  asm 1000:95b5 verbatim. */
+void tone_seq_callback_95b5(void)
+{
+    u16 ax;
+    u8  port61;
+
+    if (sound_mode != 0) {                     /* call 0x9439; jne 0x9627 (exit) */
+        return;
+    }
+    snd_isr_state_979a[0] += 1;                /* inc byte cs:[0x979a] */
+    if ((snd_isr_state_979a[0] & 0x10) != 0) { /* test byte cs:[0x979a],0x10; je 0x960f */
+        ax = 0;
+        ax ^= *(u16 *)(snd_isr_state_979a + 1);   /* xor ax, cs:[0x979b] */
+        ax += 0x2345;                             /* add ax, 0x2345 */
+        ax ^= *(u16 *)(snd_isr_state_979a + 2);   /* xor ax, cs:[0x979c] */
+        ax ^= *(u16 *)(snd_isr_state_979a + 3);   /* xor ax, cs:[0x979d] */
+        ax &= 0xdb6d;                             /* and ax, 0xdb6d (LFSR tap mask) */
+        *(u16 *)(snd_isr_state_979a + 1) = ax;    /* mov cs:[0x979b], ax */
+        ax += 0x4567;                             /* add ax, 0x4567 */
+        ax ^= *(u16 *)(snd_isr_state_979a + 2);   /* xor ax, cs:[0x979c] */
+        *(u16 *)(snd_isr_state_979a + 3) = ax;    /* mov cs:[0x979d], ax */
+        snd_isr_state_979a[0] = 0;                /* xor ax,ax; mov cs:[0x979a],al */
+        outp(0x43, 0xb4);                         /* MOV AL,0xb4; OUT 0x43,AL (mode 2) */
+        (void)0;                                  /* CALL 0x9434 */
+        outp(0x42, (u8)snd_param_frame[1]);       /* MOV AX,[0x978a]; OUT 0x42,AL (lo) */
+        (void)0;                                  /* CALL 0x9434 */
+        outp(0x42, (u8)(snd_param_frame[1] >> 8));/* XCHG AH,AL; OUT 0x42,AL (hi) */
+    }
+    *(u16 *)(snd_isr_state_979a + 1) =                          /* mov ax,[0x979b]; rol ax,1 */
+        (u16)((*(u16 *)(snd_isr_state_979a + 1) << 1) |
+              (*(u16 *)(snd_isr_state_979a + 1) >> 15));        /* mov [0x979b],ax */
+    port61 = (u8)inp(0x61);                     /* IN AL,0x61 */
+    {
+        u8 ah = (u8)(*(u16 *)(snd_isr_state_979a + 1) >> 8);   /* AH = rolled hi byte */
+        ah = (u8)((ah & 2) | 1);               /* AND AH,2; OR AH,1 */
+        port61 = (u8)((port61 & 0xfd) | ah);   /* AND AL,0xfd; OR AL,AH */
+    }
+    outp(0x61, port61);                        /* OUT 0x61,AL */
+}
+
+/* ── pit_timer_isr_multiplexer (1000:7c02) — the IRQ0 / int-8 PIT tick multiplexer ─────────
+ *  The installed hardware ISR (set as the int-8 vector at the timer-init routine 1000:7c34
+ *  via DOS int 21h AH=25 AL=8).  Per tick it sets DS=DGROUP (0x103b), loads the far pointer
+ *  to the 6-channel timer-callback table (DGROUP [0x54cc] -> base 0x5516), and walks 6 slots
+ *  of 8 bytes {current@0, reload@2, cb_off@4, cb_seg@6}: current += reload; if it reaches the
+ *  500-tick (0x1f4) period it subtracts 500 and FAR-CALLS the slot's installed callback
+ *  (cb_seg:cb_off) — that is where tone_seq_callback_9631 / 96c4 / 95b5 run.  After the sweep
+ *  it sends the 8259 EOI (OUT 0x20,0x20) and chains/returns to the prior int-8 handler.
+ *
+ *  The original is a hand-written naked ISR (CS-scratch register save/restore at 0x7cce.., a
+ *  manufactured far-return frame at 0x7c87, the int-21h vector chain).  Reconstructed here at
+ *  the LOGICAL level — the per-channel period accumulate + far-callback dispatch + EOI — over
+ *  the same 0x5516 slot layout (snd_timer_cb_table); the register-save/EOI/vector-chain
+ *  plumbing is the ambient ISR scaffolding, noted not transcribed.  Dispatches the channel-2
+ *  far callback by its installed offset (the value the L3 schedulers wrote: 0x9631 / 0x96c4 /
+ *  0x95b5) so the engine's actual per-tick tone advance is reproduced.  NOT runtime-gated
+ *  (see the L5 FIDELITY block) — documentation of the async sweep driver. */
+void pit_timer_isr_multiplexer(void)
+{
+    int channel;
+
+    for (channel = 0; channel < 6; channel++) {            /* MOV CX,6; (loop) */
+        u16 idx = (u16)(channel * 8);                      /* 0x5516 + channel*8 */
+        u16 cur = *(u16 *)(snd_timer_cb_table + idx + 0);  /* [bx]     = current  */
+        u16 reload = *(u16 *)(snd_timer_cb_table + idx + 2);/* [bx+2]   = reload   */
+        u16 acc = (u16)(cur + reload);                     /* AX = [bx] + [bx+2]  */
+        if (acc >= 0x1f4) {                                /* cmp ax,0x1f4; jge fire */
+            u16 cb_off = *(u16 *)(snd_timer_cb_table + idx + 4);   /* push [bx+4] */
+            u16 cb_seg = *(u16 *)(snd_timer_cb_table + idx + 6);   /* push [bx+6] */
+            acc = (u16)(acc - 0x1f4);                       /* SUB AX,0x1f4 */
+            /* FAR-CALL cb_seg:cb_off (the manufactured far frame at 0x7c87 returns here).
+             *  On the host we dispatch by the installed CODE-seg offset to the reconstructed
+             *  callback (cb_seg is the load-base CODE segment). */
+            (void)cb_seg;
+            if (cb_off == 0x9631) {
+                tone_seq_callback_9631();
+            } else if (cb_off == 0x96c4) {
+                tone_seq_callback_96c4();
+            } else if (cb_off == 0x95b5) {
+                tone_seq_callback_95b5();
+            }
+        }
+        *(u16 *)(snd_timer_cb_table + idx + 2) = acc;      /* MOV [bx+2],AX (store back) */
+    }
+    outp(0x20, 0x20);                                      /* OUT 0x20,AL — 8259 EOI */
 }

@@ -253,6 +253,112 @@ anim-channel FX subsystem is **reconstructed and validated**:
    the full game loop can be replay-validated tick-for-tick. Deferred (unchanged from
    Phase 2/3/4).
 
+## Phase-6 module audit (sound subsystem — `src/sound.c`)
+
+The complete sound subsystem — L1 effect dispatch, L2 device state machine, L3 tone
+submit + timer-table management, L4 hardware drivers, and the L5 PIT ISR tone-sequencer
+— ported 1:1 from the live Ghidra decomp + raw disassembly. Validation splits by layer:
+L1–L3 are gated at the **semantic-state / data** level (the device/driver scalars, the
+10-word tone param frame `DAT_1000_9788..979a`, the installed far-cb ptr, and the two L3
+timer tables); L4 is gated by a **port-write-sequence** differential (the engine's real
+`OUT(port,val,size)` trace captured under Unicorn, replayed and diffed byte-for-byte);
+L5 is reconstructed 1:1 as **documentation** (NOT runtime-gated — see below).
+
+| Module / function set | Fidelity | Notes |
+|---|---|---|
+| **L1 dispatch + L3 tone-submit** (T3): `play_sound` (6e11), `play_sound_effect` (6e30, 21-case effect→tone switch), `schedule_timer_callback_a/b/c` (9488/9502/956d) | Transcription | The effect→frame pipeline. `play_sound_effect`'s 21-case switch ported VERBATIM (cases not collapsed; the `LAB_70d6` shared tail preserved). The schedulers fill the 10-word param frame (`DAT_1000_9788..979a`) + install the far cb ptr (0x9631/0x96c4/0x95b5 : seg 0x1000), then tail into `set_timer_slot_raw`. The static-image install seg literal 0x1000 is the load-base; the host harness relocates it (0x1000→0x110-class runtime CODE seg) for the captured exit, the source keeps the faithful image literal. Validated at the **semantic-state** level (entry SNAP→call→exit SNAP). |
+| **L1 event wrappers** (T4): `play_action_sound` (63be), `play_contact_sound` (640c), `play_exit_sound` (6305), `play_pickup_sound` (645d), `play_event_sound_64c1` (64c1), `play_state_sound_79b9` (647e) | Transcription | Each reads a per-device byte LUT (OPL table when `sound_device_state==4`, else std) indexed by an event/state global → sound id → `play_sound`. The six 0x30-byte LUTs (DGROUP 0x260e/0x263e/0x26ce/0x26fe/0x276e/0x278e) dumped byte-exact from the unpacked image. Semantic-state validated. |
+| **L2 device state** (T4): `sound_select_device` (6de3), `snddrv_init` (88e5), `select_sound_device_from_mask` (891e), `snddrv_dispatch_a-d` (85b5/85db/8600/8626), `snd_busy_delay` (872e) | Transcription | The device init/select state machine (`sound_init_state` 0→1→2; `snddrv_mode` 0x85b3; `sound_active_device_mask` 0x5586). The dead `if(!substep_ok)` failure arms in `snddrv_init` preserved 1:1. Semantic-state validated. |
+| **L3 timer-table mgmt** (T4): `set_timer_slot(_raw)` (7de8/7df9), `arm_timer_callback` (7f2b), `disable_timer_callback` (7f65), `get_timer_slot_field` (7e3d), `timer_restore` (7fde) | Transcription | Two tables: the 0x5516 cb table (`arm`/`disable`, 8-byte slot `{current@0, reload@2, cb_off@4, cb_seg@6}`) and the 0x549c slot table (`set`/`get`, `{value@0, 0@2, cb_seg@4, cb_off@6}` at `(channel+2)*8`). Slot-store register semantics recovered from the asm. Semantic-state + TABLE-diff validated. |
+| **L4 hardware backends** (T5): `pc_speaker_silence` (9115), `speaker_gate_reset/strobe` (9440/9451), `record_status_and_strobe_speaker` (946e), `opl_write_reg` (9007), `opl_play_note` (905d), `FUN_89e2` (89e2, MPU byte-out), `FUN_8a07` (8a07, MPU sample), `FUN_8ad0` (8ad0, MPU settle), `FUN_8e2f` (8e2f, OPL all-off) | Transcription | The engine's real port-I/O drivers (PC-speaker/PIT 0x61, MPU-401 0x330/0x331, OPL2 0x388/0x389). Validated by the **port-write-sequence** differential: capture the engine's `OUT(port,val,size)` under Unicorn, replay the recorded IN sequence into the host `in()` shim, run the reconstructed driver, diff its OUT capture vs the engine's — a perturbation-proven real gate (corrupting any emitted OUT FAILs). |
+| **L5 ISR tone-sequencer** (T6): `pit_timer_isr_multiplexer` (7c02), `tone_seq_callback_9631` (9631), `tone_seq_callback_96c4` (96c4), `tone_seq_callback_95b5` (95b5) | **Behavior-faithful (NOT runtime-gated)** | The PIT (IRQ0/int-8) multiplexer walks the 0x5516 cb table each tick (`current += reload`; on the 500-tick period far-call the slot's installed callback) and the three tone-sequencer callbacks advance the L3 param frame + reprogram PIT ch2 (0x42/0x43) / strobe the speaker gate (0x61) to sweep the tone. Reached ONLY via the installed far pointer — NO Ghidra function boundary, NOT hooked by the oracle, so the trace has ZERO records and there is no host differential. Transcribed verbatim from the raw disasm as documentation; the **self-modifying-BGI-blitter precedent** (`sprite_blit`/`bg_render`): faithful to what the binary does, validated by inspection vs the asm, not by a runtime gate. |
+
+**Phase-6 deviations (all accurate; stated plainly; in-code RECONSTRUCTION FIDELITY notes present):**
+
+- **(a) L5 async per-PIT-tick sweep not host-replayable.** The L5 sequencer is driven by
+  hardware interrupts mutating the param frame out from under the foreground game loop;
+  this async sweep is not reproducible as a deterministic differential. Ported 1:1 for
+  documentation/faithfulness; **not runtime-gated** (the blitter precedent).
+- **(b) OPL note-program exclusion.** `opl_play_note` (905d) + `FUN_8e2f` (8e2f, which
+  drives it) read the per-note F-number / per-channel block tables (DGROUP 0x5593 / 0x559c
+  / 0x55b4 / 0x5614) that an OPL-init routine populates at **runtime** (the static image
+  leaves them zero / BSS). The Phase-6 T1 capture does NOT serialize those tables, so the
+  exact note OUTs are not host-reproducible from the trace. Both are ported **1:1** for the
+  link + faithfulness, and registered **UNPORTED** in the port-write gate (a documented
+  exclusion — not a port gap).
+- **(c) Recovered value byte vs genuinely-gated port/order/size/count.** For `FUN_89e2`
+  (89e2) / `FUN_8a07` (8a07) / `opl_write_reg` (9007), the *value byte* written arrives in a
+  CPU register/arg the SND_SNAP does not serialize; the host harness recovers it from the
+  captured OUT event and stages it (so that byte is self-consistent for that record). The
+  **port, order, size, and count** of the writes are genuinely gated — a wrong/extra/missing
+  write at the wrong port diverges and FAILs.
+- **(d) `play_state_sound` gameplay records UNPORTED.** `play_state_sound_79b9` (647e) tail-
+  calls `p1_try_trigger_pending_action` (654e, player.c) whose captured exit on the gameplay
+  path is dominated by a cross-module player/anim tail the sound harness cannot link. Those
+  records are reported **UNPORTED** on the gameplay path; the function is frame-validated via
+  4 SEEDED inert-tail records (scenario 6).
+- **(e) Status ports read fixed synthesized IN values.** There is no PC-speaker / MPU /
+  status hardware under Unicorn, so each `IN AL,0x61` / `IN AL,0x331` returns a fixed,
+  run-deterministic byte (0x61→0xFF, 0x331→0x00 DSR-clear). What is validated is not the
+  absolute byte but the engine's bit manipulation over the **replayed** IN sequence (the
+  L4 gate replays the exact IN bytes the engine saw).
+- **(f) Already-reconstructed callers stay in `player.c`.** `do_move_with_sound` /
+  `p1_move_step_with_sound` (the move-step paths that call `play_sound`) were reconstructed
+  in `player.c` in Phase 2; they are not re-ported here.
+- **(g) The flags-carry convention modeled as a scalar.** `schedule_timer_callback_a/b/c`
+  in the original read the entry CPU FLAGS (PUSHF) and pass the packed flags word to the
+  no-op `record_min_status_code`, then fill the frame only `if (!in_CF)`. The host has no
+  incoming CPU carry; it is modeled with a file-scope `snd_sched_carry_in` (default 0 =
+  carry clear, reproducing the captured frame-fills) rather than a literal parameter (a true
+  param would perturb the 21-case switch's verbatim call sites). The `record_min_status_code`
+  arg is given the available value (`param_1`) in lieu of reconstructing the host-absent
+  packed-FLAGS register — observationally identical (the callee is a no-op stub).
+
+**Phase-6 validation method:** per-function differential with two comparators (the L1–L3
+**semantic-state** gate: seed entry SND_SNAP → call the reconstructed C fn → assert the
+device/driver scalars + 10-word tone param frame + installed far-cb ptr (+ the two L3
+timer tables for the timer-mgmt fns) vs the engine exit SNAP; and the L4
+**port-write-sequence** gate: prime the host `in()` shim with the record's recorded IN
+sequence, clear the `out()` capture, run the driver, assert the OUT capture == the engine's
+captured OUT events). Engine ground truth captured by `tools/sound_oracle.py` (Unicorn
+instrumentation, port-I/O scoped to the L4 driver windows + the sound-hardware port set);
+8 scenarios, 4439 records, 23581 port-I/O events. **Gate: `validate_sound` FAIL=0
+PORT_CHECKED=3752 UNPORTED=25** (the 25 UNPORTED = the OPL note-program exclusion
+`opl_play_note`/`FUN_8e2f` + the `play_state_sound` gameplay records; the L5 ISR adds no
+trace records). The L5 sequencer is reconstructed as documentation (no gate).
+
+## Phase-6 status (sound subsystem)
+
+As of Phase-6 Task 6, the complete sound subsystem is **reconstructed**:
+
+- **Reconstructed 1:1** (live Ghidra decomp + raw disasm, verified via MCP): L1 dispatch
+  (`play_sound` 6e11, `play_sound_effect` 6e30 + the 6 event wrappers), L2 device state
+  (`sound_select_device` 6de3, `snddrv_init` 88e5, `select_sound_device_from_mask` 891e,
+  `snddrv_dispatch_a-d`, `snd_busy_delay`), L3 tone-submit + timer-table mgmt
+  (`schedule_timer_callback_a/b/c` 9488/9502/956d, `arm`/`set`/`get`/`disable`/`restore`),
+  L4 hardware drivers (`pc_speaker_silence` 9115, `speaker_gate_*`, `opl_write_reg` 9007,
+  `opl_play_note` 905d, `FUN_89e2`/`8a07`/`8ad0`/`8e2f`), and the **L5 PIT ISR
+  tone-sequencer** (`pit_timer_isr_multiplexer` 7c02, `tone_seq_callback_9631`/`96c4`/`95b5`).
+- **Validation split**: L1–L3 at the **semantic-state / data** level; L4 by the
+  **port-write-sequence** differential (perturbation-proven real gate); **L5 documented**
+  (reconstructed 1:1 from the disasm, NOT runtime-gated — the blitter precedent; reached
+  only via the installed far pointer, no trace records).
+- **Gate re-confirmed (2026-06-20)**: `validate_sound` FAIL=0 PORT_CHECKED=3752 UNPORTED=25
+  (= the OPL note-program exclusion + the `play_state_sound` gameplay records). No-regression:
+  `validate_blit` 17/17 anim + 17/17 chain + 24/24 blits; `validate_composite` 54152 @ 53858
+  baseline; `validate_player` PASS; `validate_physics` PASS=16584 FAIL=0 UNPORTED=624;
+  `validate_items` PASS=11 FAIL=0 UNPORTED=0; `validate_p2` PASS=74 FAIL=0 UNPORTED=0
+  DESC_CHECKED=1; `validate_anim` PASS=45 FAIL=0 UNPORTED=1 DESC_CHECKED=28; `BUMPY.EXE`
+  links clean (216K, Open Watcom 16-bit DOS, `sound.obj` in the link set, no duplicate
+  symbols).
+
+**Deferred from Phase 6:** none specific to sound — the complete subsystem
+(dispatch + device + tone-engine + hardware drivers + ISR sequencer) is reconstructed and
+validated (L1–L4) / documented (L5). The **int8-synced end-to-end gate** remains the single
+project-wide deferral (the Unicorn capture granularity does not match the engine's
+physics-frame rate; a frame-accurate DOSBox-path capture is needed before the full game
+loop can be replay-validated tick-for-tick — unchanged from Phases 2/3/4/5).
+
 ## Phase-1 slice status (vertical slice — session → loop → modules)
 
 As of Phase-1 Task 7 the reconstructed `src/` tree forms a complete, **linkable**

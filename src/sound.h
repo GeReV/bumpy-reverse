@@ -166,4 +166,19 @@ extern u8 opl_chan_data_55b4[0x100];    /* DGROUP 0x55b4 — per-channel data (r
 extern u8 opl_chan_idx_5614[0x100];     /* DGROUP 0x5614 — per-channel block index (runtime) */
 extern u8 snd_mpu_byte_89e2;            /* the byte FUN_89e2 writes (engine AH; host-staged) */
 
+/* ── PORTED (Phase-6 T6 — L5 ISR tone-sequencer; reconstructed 1:1, NOT runtime-gated) ──
+ *  The PIT (IRQ0 / int-8) timer ISR multiplexer + the far tone-sequencer callbacks it
+ *  fires once per tick.  These are reached only through the installed far pointer (the
+ *  0x5516 cb table the L3 arm_timer_callback / schedule_timer_callback_* fns populate),
+ *  so the Ghidra database has NO function boundary for them and the sound oracle does NOT
+ *  hook them — there are no trace records, hence no host differential.  Ported here from
+ *  the raw disassembly as DOCUMENTATION of the engine's async per-tick frequency sweep;
+ *  the self-modifying-BGI-blitter precedent (behavior-faithful, not runtime-gated).  See
+ *  the RECONSTRUCTION FIDELITY block at the L5 section in sound.c +
+ *  docs/reconstruction-fidelity.md. */
+void pit_timer_isr_multiplexer(void);   /* 1000:7c02 — IRQ0/int-8 PIT tick mux           */
+void tone_seq_callback_9631(void);      /* 1000:9631 — sweep tone sequencer (sched_a cb)  */
+void tone_seq_callback_96c4(void);      /* 1000:96c4 — noise/PRNG tone sequencer (sched_b)*/
+void tone_seq_callback_95b5(void);      /* 1000:95b5 — noise/PRNG tone sequencer (sched_c)*/
+
 #endif /* SOUND_H */
