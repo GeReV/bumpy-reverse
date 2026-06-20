@@ -150,6 +150,14 @@ SEED_HEADER_LEN: int = 0x40            # decoded-image header (incl. embedded pa
 OFF_COPYPROTECT: int = 0x119a          # s8 (copyprotect_flag)
 OFF_KEY_STATE_PTR: int = 0x4D42        # near ptr to g_key_state_table base
 
+# Per-fill HUD descriptor capture (Phase-7 T3 extension).  draw_hud_composite (0x51d8)
+# fills the render_descriptor_ptr view struct and calls FUN_1000_80ac (0x80ac) SEVEN
+# times — once per HUD sprite tile.  The function-exit capture sees ONLY the FINAL
+# (cumulative) descriptor.  To gate ALL 7 fills we additionally hook FUN_80ac's ENTRY
+# while inside draw_hud_composite and snapshot the descriptor at each call boundary.
+OFF_DRAW_HUD_COMPOSITE: int = 0x51d8
+OFF_FUN_80AC: int = 0x80ac             # the per-tile B-side render leaf draw_hud_composite calls
+
 # ---------------------------------------------------------------------------
 # Hooked screen / HUD functions (Ghidra seg-1000 offsets).
 # ---------------------------------------------------------------------------
@@ -191,7 +199,12 @@ DAC_PORTS: set = {0x3c8, 0x3c9}
 # Trace format constants
 # ---------------------------------------------------------------------------
 TRACE_MAGIC: bytes = b"SCRTRC01"
-TRACE_VERSION: int = 1
+# v2 (Phase-7 T3): record tail gains, after the io events, a per-fill HUD descriptor
+# SEQUENCE — `u8 n_fills`, then per fill `u8 fill_len + fill_len bytes` (the
+# render_descriptor_ptr struct snapshotted at EACH FUN_80ac call boundary inside
+# draw_hud_composite).  n_fills is 0 for every non-HUD record, so the field is a single
+# zero byte there.  v1 had no such field.  The harness parses on version.
+TRACE_VERSION: int = 2
 # SCRSNAP: see header docstring. 4 bytes + 2 words + 2 bytes + 1 word + 8 name bytes.
 SCRSNAP_FMT: str = "<BBBB" + "HH" + "BB" + "H" + "8B"
 SCRSNAP_SIZE: int = struct.calcsize(SCRSNAP_FMT)
@@ -593,10 +606,15 @@ def main() -> None:
     fn_name_idx = {n: i for i, n in enumerate(fn_name_list)}
     # per-fn aggregate DAC sequences for the model md (first seen per fn).
     dac_io: Dict[int, List[Tuple[int, int, int, int]]] = {}
+    # per-fill HUD descriptor snapshots (Phase-7 T3): a list of render_descriptor_ptr
+    # struct bytes, one per FUN_80ac call boundary, accumulated while inside a
+    # draw_hud_composite call.  hud_depth>0 means "inside draw_hud_composite".
+    hud_state = {"depth": 0, "fills": []}
 
     def emit_record(fn_off: int, entry_snap: bytes, exit_snap: bytes, ret_val: int,
                     render_desc: bytes, p1_sprite: bytes, seed: bytes,
-                    io_events: List[Tuple[int, int, int, int]]) -> None:
+                    io_events: List[Tuple[int, int, int, int]],
+                    hud_fills: List[bytes], args: List[int]) -> None:
         rec = struct.pack("<HH", fn_off, fn_name_idx[FN_NAMES[fn_off]])
         rec += entry_snap + exit_snap
         rec += struct.pack("<H", ret_val & 0xFFFF)
@@ -606,7 +624,22 @@ def main() -> None:
         rec += struct.pack("<H", len(io_events))
         for (d, port, size, value) in io_events:
             rec += struct.pack("<BHBH", d, port, size, value)
+        rec += struct.pack("<B", len(hud_fills))
+        for fill in hud_fills:
+            rec += struct.pack("<B", len(fill)) + fill
+        # the near-call ARGS the scenario passed (read off the stack at entry); lets the
+        # replay harness call the formatter fns (draw_number / draw_number_sprites /
+        # draw_text_at) with the engine's exact inputs.
+        rec += struct.pack("<B", len(args))
+        for a in args:
+            rec += struct.pack("<H", a & 0xFFFF)
         cur_records.append(rec)
+
+    def hook_fun_80ac(uc: Uc, addr: int, size: int, _: object) -> None:
+        # Snapshot the render_descriptor_ptr view struct at each FUN_80ac call boundary,
+        # but ONLY while inside a draw_hud_composite call (the per-fill HUD gate).
+        if hud_state["depth"] > 0:
+            hud_state["fills"].append(read_far_target(OFF_RENDER_DESC_PTR, RENDER_DESC_LEN))
 
     def hook_fn_entry(uc: Uc, addr: int, size: int, _: object) -> None:
         if not capturing["on"]:
@@ -621,12 +654,23 @@ def main() -> None:
             if io_capture["depth"] == 0:
                 io_seq.clear()
             io_capture["depth"] += 1
+        is_hud = fn_off == OFF_DRAW_HUD_COMPOSITE
+        if is_hud:
+            if hud_state["depth"] == 0:
+                hud_state["fills"] = []
+            hud_state["depth"] += 1
         ss = uc.reg_read(UC_X86_REG_SS); sp = uc.reg_read(UC_X86_REG_SP)
         ret_off = struct.unpack("<H", bytes(uc.mem_read(ss * 16 + sp, 2)))[0]
         ret_lin = (CODE_LIN + ret_off) & 0xFFFFF
+        # near-cdecl args sit just above the return address: [SP+2], [SP+4], ...
+        ARG_WORDS = 5
+        args = list(struct.unpack(
+            "<%dH" % ARG_WORDS,
+            bytes(uc.mem_read(ss * 16 + ((sp + 2) & 0xFFFF), 2 * ARG_WORDS))))
         io_mark = len(io_seq) if is_dac else 0
+        hud_mark = len(hud_state["fills"]) if is_hud else 0
         pending_exit.setdefault(ret_lin, []).append(
-            (fn_off, entry_snap, is_dac, io_mark))
+            (fn_off, entry_snap, is_dac, io_mark, is_hud, hud_mark, args))
         if ret_lin not in exit_hook_lins:
             exit_hook_lins.add(ret_lin)
             uc.hook_add(UC_HOOK_CODE, hook_fn_exit, None, ret_lin, ret_lin)
@@ -635,7 +679,7 @@ def main() -> None:
         stack = pending_exit.get(addr)
         if not stack:
             return
-        (fn_off, entry_snap, is_dac, io_mark) = stack.pop()
+        (fn_off, entry_snap, is_dac, io_mark, is_hud, hud_mark, args) = stack.pop()
         exit_snap = snap()
         ret_val = uc.reg_read(UC_X86_REG_AX) & 0xFFFF
         render_desc = read_far_target(OFF_RENDER_DESC_PTR, RENDER_DESC_LEN)
@@ -649,12 +693,20 @@ def main() -> None:
                 io_seq.clear()
             if fn_off not in dac_io and io_events:
                 dac_io[fn_off] = io_events
+        hud_fills: List[bytes] = []
+        if is_hud:
+            hud_fills = list(hud_state["fills"][hud_mark:])
+            hud_state["depth"] -= 1
+            if hud_state["depth"] == 0:
+                hud_state["fills"] = []
         emit_record(fn_off, entry_snap, exit_snap, ret_val,
-                    render_desc, p1_sprite, seed, io_events)
+                    render_desc, p1_sprite, seed, io_events, hud_fills, args)
 
     for off in FN_NAMES:
         lin = CODE_LIN + off
         uc.hook_add(UC_HOOK_CODE, hook_fn_entry, None, lin, lin)
+    uc.hook_add(UC_HOOK_CODE, hook_fun_80ac, None,
+                CODE_LIN + OFF_FUN_80AC, CODE_LIN + OFF_FUN_80AC)
 
     # ---------------------------------------------------------------------------
     # Boot to level 1 (identical approach to sound_oracle.py). This drives the engine
@@ -989,9 +1041,16 @@ def main() -> None:
                 for _i in range(n_io):
                     d, port, sz, val = struct.unpack_from("<BHBH", data, o); o += 6
                     ios.append((d, port, sz, val))
+                n_fills = data[o]; o += 1
+                fills = []
+                for _i in range(n_fills):
+                    fl = data[o]; o += 1
+                    fills.append(data[o:o + fl]); o += fl
+                n_args = data[o]; o += 1
+                fargs = list(struct.unpack_from("<%dH" % n_args, data, o)); o += 2 * n_args
                 recs.append(dict(fn_off=fn_off, fn=names[name_idx], ent=ent, ex=ex,
                                  ret=ret_val, render_desc=render_desc, p1_sprite=p1_sprite,
-                                 seed=seed, io=ios))
+                                 seed=seed, io=ios, fills=fills, args=fargs))
             scenarios.append(dict(id=sid, name=nm, recs=recs))
         assert o == len(data), "trailing bytes: parsed %d of %d" % (o, len(data))
         return dict(names=names, scenarios=scenarios)
@@ -1054,6 +1113,19 @@ def main() -> None:
                  "y (run_main_menu sets it to `cursor_index*0x10 + 0x70` — THIS is how the "
                  "menu cursor LOCAL is observed), word[2]=frame, word[3..4]=source far "
                  "ptr, `*p1_sprite=0x30` in the menu.\n")
+
+    lines.append("\n## Per-fill HUD descriptor capture (draw_hud_composite, trace v2)\n\n")
+    lines.append("`draw_hud_composite` (1000:51d8) fills the render_descriptor_ptr view "
+                 "struct and calls `FUN_1000_80ac` (1000:80ac) SEVEN times, once per HUD "
+                 "sprite tile.  The function-EXIT descriptor captures only the FINAL "
+                 "(cumulative) state.  Trace v2 ALSO hooks FUN_80ac's ENTRY while inside "
+                 "draw_hud_composite and snapshots the descriptor at each call boundary — a "
+                 "per-record list of 7 fills (record tail field `u8 n_fills`, then per fill "
+                 "`u8 len + bytes`).  This gates ALL 7 HUD descriptor builds (src x/y, the "
+                 "tile-source far ptr @+0x10/+0x12, the sub-extent / clip), not just the "
+                 "final.  v2 also records the near-call ARGS (read off the stack at entry) so "
+                 "the replay harness can drive draw_number / draw_number_sprites / "
+                 "draw_text_at with the engine's exact inputs.\n")
 
     lines.append("\n## Menu / name-entry STATE MACHINES\n\n")
     lines.append("`run_main_menu` (1000:35a5) returns `selected_item` (a stack LOCAL). "

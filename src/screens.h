@@ -81,10 +81,27 @@ extern char formatted_number_buf[FORMATTED_NUMBER_LEN];
  *  declarations this task. */
 
 /* ── screen / HUD function prototypes ─────────────────────────────────────────────
- *  UNPORTED this task: every screen fn body remains stubbed in game_stubs.c.  Their
- *  1:1 bodies, and the matching prototypes, land in Phase-7 T3–T5 (text/number
- *  formatters + HUD; title/menu/highscore state machines; level-intro + the iris-wipe
- *  / DAC-upload palette path).  No prototypes are declared here yet — the stubs in
- *  game_stubs.c carry their own (faithful-signature) declarations. */
+ *  PORTED (Phase-7 T3): the text/number primitives + the in-game score HUD.  Their
+ *  1:1 bodies live in screens.c; the matching game_stubs.c stubs are removed.  The
+ *  remaining screen fns (title/menu/highscore/intro — T4/T5) stay stubbed in
+ *  game_stubs.c with their own faithful-signature declarations until ported. */
+
+/* draw_text_at (1000:07f0): set the text clip rect then draw the glyph string at (x,y).
+ *  The two trailing args are the clip extent (clip_w, clip_h); draw_number passes the
+ *  formatted-string far ptr in (x,y). */
+void draw_text_at(u16 x, u16 y, u16 clip_w, u16 clip_h);
+
+/* draw_number (1000:0816): format the 32-bit value (val_hi:val_lo) as a right-justified,
+ *  space-padded decimal string of `width` digits ("OVER FLOW" if width>=8) into
+ *  formatted_number_buf and draw it via draw_text_at (arg_a/arg_c → clip_w/clip_h). */
+void draw_number(u16 val_lo, u16 val_hi, u8 width, u16 arg_a, u16 arg_c);
+
+/* draw_number_sprites (1000:603d): render `width` right-justified decimal digit SPRITES
+ *  via the p1_sprite blit descriptor (frame = digit + 0x17c, x = base_x + i*0x10). */
+void draw_number_sprites(u16 value_lo, u16 value_hi, u8 width, u16 base_x, u16 frame_y);
+
+/* draw_hud_composite (1000:51d8): build the in-game status row — fill the
+ *  render_descriptor_ptr view struct and call FUN_1000_80ac 7× (7 HUD sprite tiles). */
+void draw_hud_composite(void);
 
 #endif /* SCREENS_H */

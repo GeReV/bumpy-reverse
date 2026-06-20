@@ -47,7 +47,7 @@
  *     the harness never references the (absent) symbol and never calls into it.  UNPORTED
  *     is NOT a crash and NOT a hard failure.  In T2 every record is UNPORTED by design.
  *
- * Build/run (also wrapped by tools/validate_screens.sh):
+ * Build/run (also wrapped by tools/validate_screen_fns.sh):
  *     cc -O2 -Wall -Werror -o /tmp/screens_ctest tools/screens_ctest.c && \
  *       /tmp/screens_ctest local/build/render/screens_trace.bin
  * Exit 0 iff the harness parses the trace, runs, and the differential has ZERO failures
@@ -94,6 +94,16 @@ static int      in_queue_n = 0, in_queue_i = 0;
  *  gate MUST then FAIL on a DAC fn that emits at least N+1 OUTs.  Wired from getenv. */
 static int  g_perturb_idx = -1;     /* -1 = disabled */
 static int  g_out_seen    = 0;      /* running OUT counter across the whole run */
+
+/* DESCRIPTOR perturbation knob (proves gates H/B are REAL — not self-consistent).  When
+ *  SCR_PERTURB_DESC=F is set, the comparator corrupts the EXPECTED (captured) byte of HUD
+ *  fill F at offset +0x10 (the tile-source field) by XOR 1, so the per-fill HUD gate MUST
+ *  FAIL on a draw_hud_composite record with > F fills. */
+static int  g_perturb_desc = -1;    /* -1 = disabled; else the HUD fill index to corrupt */
+
+/* NUMBER perturbation knob (proves gate N is REAL).  When SCR_PERTURB_NUM=1 the
+ *  independent reference's last digit is bumped, so draw_number's gate MUST FAIL. */
+static int  g_perturb_num = 0;
 
 static void host_out_sz(u16 port, u16 val, u8 size)
 {
@@ -145,6 +155,38 @@ static u8 host_view_desc[VIEW_DESC_MAX];
 static u8 host_p1_sprite[P1_SPRITE_MAX];
 static u8 host_seed_buf[SEED_BUF_MAX];
 
+/* ── DS-runtime-seg override (descriptor +0x12 / blit_sprite seg) ──────────────────
+ *  draw_hud_composite / draw_number_sprites stamp the engine's RUNTIME DS register into
+ *  their descriptors' far-data segment fields.  Ghidra renders DS as the static 0x203b,
+ *  but the Phase-7 T1 trace loads at PSP_SEG 0x100 -> runtime DGROUP seg 0x103b+0x110 =
+ *  0x114b.  Drive screens.c's SCREENS_DGROUP_RUNTIME_SEG to the captured value so the
+ *  descriptor gate compares against the engine's actual EXIT bytes (mirrors
+ *  anim_chan_ctest.c's ANIM_DGROUP_RUNTIME_SEG). */
+#define SCREENS_DGROUP_RUNTIME_SEG 0x114b
+
+/* ── per-fill HUD descriptor capture (the headline draw_hud_composite gate) ────────
+ *  draw_hud_composite calls FUN_80ac (anim_render_leaf_80ac) SEVEN times, once per HUD
+ *  sprite tile, each after mutating the render_descriptor_ptr view struct.  The engine
+ *  trace captures the descriptor at EACH of the 7 call boundaries (oracle v2).  On the
+ *  host we make anim_render_leaf_80ac SNAPSHOT render_descriptor_ptr into a fills array,
+ *  so the reconstructed builder's per-fill descriptor SEQUENCE is gated against the
+ *  engine's 7 captured fills (not just the final cumulative state). */
+#define HUD_FILL_MAX  16
+static u8  hud_fill[HUD_FILL_MAX][VIEW_DESC_MAX];
+static int hud_fill_n = 0;
+
+/* HOST definitions of the render leaves screens.c calls (engine fns reconstructed as
+ *  faithful-signature stubs in anim.obj; the harness does NOT link anim.obj).  The
+ *  80ac leaf additionally snapshots the live descriptor for the per-fill HUD gate. */
+void anim_render_leaf_80ac(u8 __far *view)
+{
+    if (hud_fill_n < HUD_FILL_MAX) {
+        memcpy(hud_fill[hud_fill_n], view, VIEW_DESC_MAX);
+        hud_fill_n++;
+    }
+}
+void anim_blit_sprite_leaf(u16 obj_off, u16 obj_seg) { (void)obj_off; (void)obj_seg; }
+
 #include "../src/screens.c"
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -179,7 +221,7 @@ HOST_UNUSED u8 __far *p1_sprite;             /* anim.c  0x8884 — blit-descript
  *    u16 score_lo, u16 score_hi, u8 timing_flag_accum, u8 game_state_928d,
  *    u16 palette_mode_word, u8[8] highscore_name0.
  * ════════════════════════════════════════════════════════════════════════════ */
-#define TRACE_VER  1
+#define TRACE_VER  2   /* v2: record tail gains the per-fill HUD descriptor sequence */
 /* SCRSNAP byte size: 4*1 + 2*2 + 2*1 + 1*2 + 8 = 4 + 4 + 2 + 2 + 8 = 20. */
 #define SNAP_SIZE  (4 + 2 * 2 + 2 + 2 + 8)
 
@@ -211,6 +253,11 @@ typedef struct {
     u8     seed[SEED_BUF_MAX];
     u16    n_io;
     io_t  *io;            /* points into a per-record malloc'd array */
+    u8     n_fills;       /* per-fill HUD descriptors (nonzero only for draw_hud_composite) */
+    u8     fill_len[HUD_FILL_MAX];
+    u8     fills[HUD_FILL_MAX][VIEW_DESC_MAX];
+    u8     n_args;        /* near-call args the scenario passed (read off the stack) */
+    u16    args[8];
 } record_t;
 
 static u16 rd16(const u8 *p) { return (u16)(p[0] | (p[1] << 8)); }
@@ -261,20 +308,32 @@ static void seed_globals(const snap_t *s)
  *  builder writes are isolated.  (T2: dormant — wired so T3 lands without edits.) */
 static void seed_descriptors(const record_t *r)
 {
-    memset(host_view_desc, 0, sizeof host_view_desc);
-    memset(host_p1_sprite, 0, sizeof host_p1_sprite);
+    /* Seed the host descriptor buffers from the record's captured EXIT descriptors so
+     *  the bytes the ported builder does NOT rewrite already match the engine's (e.g.
+     *  draw_number_sprites writes only p1_sprite words 0..2, leaving 3..4 as captured;
+     *  draw_hud_composite leaves the +0 / +0xe / +0x14 / +0x16 / +0x1c fields it never
+     *  touches).  The fields the builder DOES write are then the real gate. */
+    memcpy(host_view_desc, r->render_desc,
+           r->render_desc_len <= VIEW_DESC_MAX ? r->render_desc_len : VIEW_DESC_MAX);
+    memcpy(host_p1_sprite, r->p1_sprite,
+           r->p1_sprite_len <= P1_SPRITE_MAX ? r->p1_sprite_len : P1_SPRITE_MAX);
     memset(host_seed_buf, 0, sizeof host_seed_buf);
     if (r->seed_len <= SEED_BUF_MAX)
         memcpy(host_seed_buf, r->seed, r->seed_len);
     render_descriptor_ptr = host_view_desc;
     p1_sprite             = host_p1_sprite;
-    /* fullscreen_buf off/seg: on the host the seg is the host buffer's notional segment;
-     *  the descriptor diff only inspects the bytes the builder writes into host_view_desc,
-     *  so the exact (off,seg) value is immaterial here — seed both to 0 (the builder reads
-     *  them only to compose the image far ptr it stores into the view struct, validated by
-     *  the descriptor comparison itself). */
-    fullscreen_buf     = 0;
-    fullscreen_buf_seg = 0;
+    /* fullscreen_buf off/seg: draw_hud_composite writes the image far ptr into the view
+     *  struct as (fullscreen_buf+99 : fullscreen_buf_seg).  Recover the engine's runtime
+     *  values from the captured descriptor (+2 = off+99, +4 = seg) so the port reproduces
+     *  them exactly (the host cannot otherwise know the runtime image segment). */
+    if (r->render_desc_len >= 6) {
+        fullscreen_buf     = (u16)(rd16(r->render_desc + 2) - 99);
+        fullscreen_buf_seg = rd16(r->render_desc + 4);
+    } else {
+        fullscreen_buf     = 0;
+        fullscreen_buf_seg = 0;
+    }
+    hud_fill_n = 0;
 }
 
 /* ── (A) SEMANTIC-STATE COMPARATOR — live screen globals vs the EXIT snap ──────────
@@ -327,6 +386,88 @@ static const char *cmp_descriptors(const record_t *r, long *got, long *want)
             snprintf(buf, sizeof(buf), "p1_sprite[+0x%02x]", i);
             return buf;
         }
+    }
+    return NULL;
+}
+
+/* ── (H) PER-FILL HUD DESCRIPTOR COMPARATOR — the headline draw_hud_composite gate ──
+ *  draw_hud_composite mutates the view struct and calls FUN_80ac (anim_render_leaf_80ac)
+ *  SEVEN times.  The host leaf snapshots the live descriptor at each call into
+ *  hud_fill[0..hud_fill_n-1]; the engine trace carries the SAME 7 captured fills.  This
+ *  diffs the full per-fill SEQUENCE (count + every byte of every fill), so all 7 HUD
+ *  descriptor builds are gated — not just the final cumulative state. */
+static const char *cmp_hud_fills(const record_t *r, long *got, long *want)
+{
+    static char buf[48];
+    int f;
+    if (hud_fill_n != (int)r->n_fills) {
+        *got = hud_fill_n; *want = r->n_fills; return "hud_fill_count";
+    }
+    for (f = 0; f < (int)r->n_fills && f < HUD_FILL_MAX; f++) {
+        unsigned i;
+        for (i = 0; i < r->fill_len[f] && i < VIEW_DESC_MAX; i++) {
+            u8 want_b = r->fills[f][i];
+            if (g_perturb_desc == f && i == 0x10) want_b ^= 1;  /* corrupt one field */
+            if (hud_fill[f][i] != want_b) {
+                *got = hud_fill[f][i]; *want = want_b;
+                snprintf(buf, sizeof(buf), "fill%d[+0x%02x]", f + 1, i);
+                return buf;
+            }
+        }
+    }
+    return NULL;
+}
+
+/* ── (N) SEMANTIC NUMBER-FORMAT COMPARATOR — draw_number's formatted string ─────────
+ *  draw_number builds the decimal string into formatted_number_buf.  We assert it
+ *  against an INDEPENDENT reference (ref_format_number) — structurally different code:
+ *  the reference fills the field left-to-right from a temp digit array, vs the port's
+ *  back-to-front /10 loop.  A bug in the port (wrong digit, padding, or the width>=8
+ *  OVER FLOW threshold) diverges.  Semantics (from the disasm): width>=8 -> "OVER FLOW";
+ *  else the low `width` decimal digits of the 32-bit value, right-justified, space-padded
+ *  in a width-char field (NUL-terminated). */
+static void ref_format_number(u32 value, u8 width, char *out)
+{
+    if (width >= 8) {
+        strcpy(out, "OVER FLOW");
+        return;
+    }
+    {
+        char digits[16];
+        int  i;
+        for (i = 0; i < width; i++) out[i] = ' ';
+        out[width] = '\0';
+        for (i = 0; i < width; i++) {     /* low `width` digits, LSB-first into digits[] */
+            digits[i] = (char)('0' + (int)(value % 10));
+            value /= 10;
+        }
+        for (i = 0; i < width; i++) {     /* place right-justified: rightmost = digits[0] */
+            out[width - 1 - i] = digits[i];
+        }
+    }
+}
+
+static const char *cmp_number(const record_t *r, long *got, long *want)
+{
+    static char buf[40];
+    char expect[FORMATTED_NUMBER_LEN];
+    u32  value = ((u32)r->args[1] << 16) | (u32)r->args[0];
+    u8   width = (u8)r->args[2];
+    unsigned i;
+    ref_format_number(value, width, expect);
+    if (g_perturb_num && width > 0 && width < 8) {
+        expect[width - 1] = (expect[width - 1] == '9') ? '0'
+                                                       : (char)(expect[width - 1] + 1);
+    }
+    for (i = 0; i < FORMATTED_NUMBER_LEN; i++) {
+        char e = expect[i];
+        char g = formatted_number_buf[i];
+        if (e != g) {
+            *got = (unsigned char)g; *want = (unsigned char)e;
+            snprintf(buf, sizeof(buf), "num_str[%u]", i);
+            return buf;
+        }
+        if (e == '\0') break;
     }
     return NULL;
 }
@@ -390,13 +531,43 @@ static void prime_ports(const record_t *r)
  * ════════════════════════════════════════════════════════════════════════════ */
 typedef struct { u16 off; const char *name; char cmp; void (*fn)(void); } ported_t;
 
+/* ── T3 call WRAPPERS — recover the captured near-call args and invoke the real port ──
+ *  Each wrapper reads g_cur_rec (published by the dispatch loop), recovers the args the
+ *  scenario passed (record_t.args), and calls the reconstructed fn.  The matching
+ *  comparator (selected by the registry `cmp`) then asserts the observable output. */
+static const record_t *g_cur_rec;   /* fwd: set by run_per_function before each wrapper */
+
+static void wrap_draw_number(void)
+{
+    const record_t *r = g_cur_rec;
+    /* draw_number(val_lo, val_hi, width, arg_a, arg_c) */
+    draw_number(r->args[0], r->args[1], (u8)r->args[2], r->args[3], r->args[4]);
+}
+static void wrap_draw_text_at(void)
+{
+    const record_t *r = g_cur_rec;
+    /* draw_text_at(x, y, clip_w, clip_h) — writes no modeled descriptor (BGI text); the
+     *  descriptor gate confirms it leaves the view/p1 descriptors untouched. */
+    draw_text_at(r->args[0], r->args[1], r->args[2], r->args[3]);
+}
+static void wrap_draw_number_sprites(void)
+{
+    const record_t *r = g_cur_rec;
+    /* draw_number_sprites(value_lo, value_hi, width, base_x, frame_y) */
+    draw_number_sprites(r->args[0], r->args[1], (u8)r->args[2], r->args[3], r->args[4]);
+}
+static void wrap_draw_hud_composite(void)
+{
+    draw_hud_composite();
+}
+
 static const ported_t PORTED[] = {
-    /* text / number formatters (T3) — descriptor-level (B). */
-    { 0x0816, "draw_number",            'B', NULL },
-    { 0x07f0, "draw_text_at",           'B', NULL },
-    { 0x603d, "draw_number_sprites",    'B', NULL },
-    /* HUD (T3) — descriptor-level (B). */
-    { 0x51d8, "draw_hud_composite",     'B', NULL },
+    /* text / number formatters (T3). */
+    { 0x0816, "draw_number",            'N', wrap_draw_number },        /* semantic str  */
+    { 0x07f0, "draw_text_at",           'B', wrap_draw_text_at },       /* passthrough   */
+    { 0x603d, "draw_number_sprites",    'B', wrap_draw_number_sprites },/* p1_sprite desc*/
+    /* HUD (T3) — per-fill descriptor sequence (H). */
+    { 0x51d8, "draw_hud_composite",     'H', wrap_draw_hud_composite },
     /* title (T4) — descriptor-level (B) + semantic (A) for show_title_and_init. */
     { 0x2ef8, "init_title_graphics",    'B', NULL },
     { 0x2fac, "show_title_background",  'B', NULL },
@@ -427,7 +598,6 @@ static const ported_t *ported_lookup(u16 off)
 }
 
 typedef struct { long pass, fail, unported, desc_checked, port_checked; } stats_t;
-static const record_t *g_cur_rec = NULL;   /* published for future arg-recovery wrappers */
 
 /* ── PER-FUNCTION semantic / descriptor / port-write differential ───────────────── */
 static int run_per_function(record_t *recs, long nrec, const char *scname, stats_t *st)
@@ -463,6 +633,11 @@ static int run_per_function(record_t *recs, long nrec, const char *scname, stats
             } else if (p->cmp == 'B') {
                 bad = cmp_descriptors(r, &got, &want);
                 if (bad == NULL) st->desc_checked++;
+            } else if (p->cmp == 'H') {
+                bad = cmp_hud_fills(r, &got, &want);
+                if (bad == NULL) st->desc_checked++;
+            } else if (p->cmp == 'N') {
+                bad = cmp_number(r, &got, &want);
             } else { /* 'C' */
                 bad = cmp_ports(r, &got, &want);
                 if (bad == NULL) st->port_checked++;
@@ -498,6 +673,19 @@ int main(int argc, char **argv)
             printf("screens_ctest: PERTURBATION active — corrupting emitted OUT #%d "
                    "(the DAC port-write gate MUST report a FAIL)\n", g_perturb_idx);
         }
+        pe = getenv("SCR_PERTURB_DESC");
+        if (pe && *pe) {
+            g_perturb_desc = atoi(pe);
+            printf("screens_ctest: DESCRIPTOR PERTURBATION active — corrupting captured HUD "
+                   "fill #%d at +0x10 (the per-fill draw_hud_composite gate MUST FAIL)\n",
+                   g_perturb_desc);
+        }
+        pe = getenv("SCR_PERTURB_NUM");
+        if (pe && *pe) {
+            g_perturb_num = atoi(pe);
+            printf("screens_ctest: NUMBER PERTURBATION active — bumping the reference's last "
+                   "digit (the draw_number semantic gate MUST FAIL)\n");
+        }
     }
     if (!f) { fprintf(stderr, "cannot open %s\n", path); return 2; }
     fseek(f, 0, SEEK_END); sz = ftell(f); fseek(f, 0, SEEK_SET);
@@ -520,9 +708,10 @@ int main(int argc, char **argv)
     printf("screens_ctest: replay harness over %s\n", path);
     printf("  trace: SCRTRC01 v%u, %u scenarios, %u fn-names (SNAP=%d B)\n",
            ver, nsc, nfn, SNAP_SIZE);
-    printf("  src/screens.c: Phase-7 T2 SKELETON (globals only) — PORTED[] all NULL, so "
-           "every record is UNPORTED, the 3 comparators (A semantic / B descriptor / "
-           "C DAC port-write) are dormant.  Expected FAIL=0.\n");
+    printf("  src/screens.c: Phase-7 T3 — text/number primitives + in-game HUD PORTED.  "
+           "Comparators: N draw_number semantic string, B draw_text_at/draw_number_sprites "
+           "descriptor, H draw_hud_composite per-fill (7) descriptor sequence.  Remaining "
+           "title/menu/highscore/intro records UNPORTED.  Expected FAIL=0.\n");
 
     for (s = 0; s < nsc; s++) {
         u8 sid, name_len;
@@ -564,6 +753,21 @@ int main(int argc, char **argv)
                 r->io[j].size  = b[o];        o += 1;
                 r->io[j].value = rd16(b + o); o += 2;
             }
+            r->n_fills = b[o++];
+            for (j = 0; j < r->n_fills; j++) {
+                u8 fl = b[o++];
+                unsigned n = fl < VIEW_DESC_MAX ? fl : VIEW_DESC_MAX;
+                if (j < HUD_FILL_MAX) {
+                    r->fill_len[j] = fl;
+                    memcpy(r->fills[j], b + o, n);
+                }
+                o += fl;
+            }
+            r->n_args = b[o++];
+            for (j = 0; j < r->n_args; j++) {
+                if (j < 8) r->args[j] = rd16(b + o);
+                o += 2;
+            }
             n_io_total += r->n_io;
             n_records++;
         }
@@ -597,8 +801,9 @@ int main(int argc, char **argv)
         free(b);
         return 1;
     }
-    printf("PASS: FAIL=0.  %ld records UNPORTED (T2 skeleton: every screen fn body is "
-           "still stubbed in game_stubs.c); %ld PORTED records matched.\n",
+    printf("PASS: FAIL=0.  %ld records UNPORTED (the title/menu/highscore/intro screen fns "
+           "still stubbed in game_stubs.c — Phase-7 T4/T5); %ld PORTED records matched "
+           "(draw_number / draw_text_at / draw_number_sprites / draw_hud_composite).\n",
            st.unported, st.pass);
     free(b);
     return 0;
