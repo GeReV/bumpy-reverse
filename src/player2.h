@@ -79,6 +79,7 @@ extern u16 __far *p2_move_script;  /* DGROUP 0xa0ba/0xa0bc — [anim,dx,dy] scri
 extern u8  __far *p2_sprite;       /* DGROUP 0x9b9e/0x9ba0 — P2 sprite obj ptr     */
 extern u8  __far *p2_state_script_tbl;/* DGROUP 0x2520/0x2522 — per-state script tbl*/
 extern u8  __far *p2_cell_coord_tbl;/* DGROUP 0x0274 — posC cell->pixel coord table */
+extern void (__far * __far *p2_state_handler_tbl)(void);/* DGROUP 0x085c — per-state handler tbl */
 extern s16 p2_grid_x;         /* DGROUP 0x8558 — current grid col (history)       */
 extern s16 p2_grid_y;         /* DGROUP 0x855a — current grid row (history)       */
 extern s16 p2_grid_x_prev;    /* DGROUP 0x928e — previous grid col (history)      */
@@ -122,7 +123,16 @@ void p2_ai_dispatch_move(void);       /* 1000:4f4e — AI dispatch on dir-blocke
 void p2_ai_select_move_a(void);       /* 1000:4f04 — AI rng-branch -> state 1/2/3  */
 void p2_ai_select_move_b(void);       /* 1000:4f89 — AI rng-branch -> state 1/2/4  */
 void p2_ai_select_move_random(void);  /* 1000:4fd3 — state=(rng&3)+(rand()&1)+5    */
+void p2_choose_move_state1(void);     /* 1000:4dfa — pick move favouring state 1   */
+void p2_choose_move_state2(void);     /* 1000:4e7f — pick move favouring state 2   */
+void p2_pick_move_priority_a(void);   /* 1000:4dbf — dispatch (a0e0,a1b2,a0e2,else) */
+void p2_pick_move_priority_b(void);   /* 1000:4e44 — dispatch (a0e1,a0e2,a1b2,else) */
+void p2_pick_move_priority_c(void);   /* 1000:4ec9 — dispatch (a0e2,a0e0,a0e1,else) */
 void p2_run_move_state_handler(void); /* 1000:5003 — dispatch move_state -> handler*/
+void p2_cell_move_up(void);           /* 1000:5025 — p2_cell -= 8 (row up)         */
+void p2_cell_move_down(void);         /* 1000:503f — p2_cell += 8 (row down)       */
+void p2_cell_move_left(void);         /* 1000:5059 — p2_cell -= 1 (col left)       */
+void p2_cell_move_right(void);        /* 1000:506f — p2_cell += 1 (col right)      */
 void check_pvp_collision(void);       /* 1000:50fb — P1/P2 AABB overlap -> flag    */
 void draw_p2_sprite(void);            /* 1000:1cea — build P2 object descriptor    */
 

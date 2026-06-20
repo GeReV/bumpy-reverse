@@ -313,21 +313,18 @@ void handle_gameplay_input(void)     {}
    P1↔P2 collision (check_pvp_collision 1000:50fb) — DEFERRED → Phase-4 T5. */
 void check_pvp_collision(void)       {}
 
-/* ── Phase-4 T3 callees of p2_tile_move_check — faithful-signature stubs ───────
- * p2_tile_move_check (now reconstructed in player2.c) dispatches into three P2
- * AI move-state callees that are NOT yet reconstructed (→ Phase-4 T4):
- *   - p2_run_move_state_handler (1000:5003): per-state cell-move handler dispatch
- *     (routes p2_move_state through the near-ptr handler table at DGROUP 0x85c).
- *   - p2_ai_select_move_random (1000:4fd3): picks a fresh random move-state when
- *     all four directions are blocked (calls rand()/prng_step).
+/* ── Callee of p2_tile_move_check still stubbed after Phase-4 T4 ───────────────
+ * Phase-4 T4 RECONSTRUCTED the P2 AI decision layer in player2.c, including
+ * p2_run_move_state_handler (1000:5003) and p2_ai_select_move_random (1000:4fd3) —
+ * their stubs are REMOVED here (now real symbols in player2.obj).  One callee of
+ * p2_tile_move_check remains stubbed:
  *   - p2_dispatch_move_state_handler: models the engine's indirect call through the
  *     per-state move-state handler table at DGROUP 0x870 (the handler bytes are
- *     T4 data); kept as a stub so the indirect-call site in p2_tile_move_check is
- *     preserved 1:1 without inventing the deferred table.
- * RECONSTRUCTION FIDELITY: faithful-signature no-op stubs so player2.obj links;
- * none are reached on the harness's captured P2 paths.  → Phase-4 T4. */
-void p2_run_move_state_handler(void)      {}  /* 1000:5003 */
-void p2_ai_select_move_random(void)       {}  /* 1000:4fd3 */
+ *     engine level-data, not reached on any captured P2 path); kept as a stub so the
+ *     indirect-call site in p2_tile_move_check is preserved 1:1 without inventing the
+ *     deferred table.
+ * RECONSTRUCTION FIDELITY: faithful-signature no-op stub so player2.obj links;
+ * not reached on the harness's captured P2 paths.  → deferred. */
 void p2_dispatch_move_state_handler(void) {}  /* DGROUP 0x870[move_state] */
 
 /* all_entries_flag_set — level-complete predicate.  Returns 0 ⇒ the do/while

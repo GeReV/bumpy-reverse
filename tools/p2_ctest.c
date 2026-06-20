@@ -7,10 +7,10 @@
  * local/build/render/p2_trace.bin (magic "P2TRACE1", version 1 — layout frozen in
  * the tools/p2_oracle.py header §"TRACE LAYOUT" and local/build/p2_model.md).
  *
- * src/player2.c is a SKELETON this task: it defines the P2 globals but NO function
- * bodies (those port in Phase-4 T3/T4/T5).  So EVERY P2 function is UNPORTED here —
- * the self-check below proves the harness + the trace format work end-to-end with
- * no crash and no hard failure, every record cleanly localised to UNPORTED.
+ * As of Phase-4 T4, src/player2.c reconstructs the move-state/trajectory group [T3]
+ * AND the AI rng-decision group [T4]; check_pvp_collision + draw_p2_sprite remain
+ * UNPORTED [T5].  The PORTED registry below maps each reconstructed fn to its C name;
+ * PORTED records run the per-function differential, UNPORTED records are skipped.
  *
  * ── COMPARATORS ──────────────────────────────────────────────────────────────
  *   (A) PER-FUNCTION TRAJECTORY + AI DIFFERENTIAL (the gate).  For each record of a
@@ -82,6 +82,19 @@ static u16 far_off_of(unsigned long lin) { return (u16)(lin & 0xfu); }
  *  extension point links if a future port references them. */
 u16 prng_state0, prng_state1, prng_state2;  /* globals.c — DGROUP 0x203b           */
 
+/* prng_step (src/prng.c) — the reconstructed 3-word PRNG.  p2_ai_select_move_random
+ * (in player2.c, T4) calls the engine's rand() == prng_step()+low-byte-of-state0; to
+ * replay it deterministically the harness compiles the REAL prng_step here and seeds
+ * prng_state0/1/2 from the v2 capture (seed_ai_prng below).  prng.c #includes
+ * "bumpy.h" (no-op'd via BUMPY_H) and uses the prng_state globals defined above.
+ * src/prng.c is a VERBATIM transcription of the Ghidra decomp (the operator-precedence
+ * idioms are intentional, matching the asm); silence -Wparentheses only for its body
+ * so the harness keeps -Werror for the harness's own code. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wparentheses"
+#include "../src/prng.c"
+#pragma GCC diagnostic pop
+
 /* mode_script_tbl / p2 state-script + handler tables (far/near ptr tables the P2
    move-state fns index).  Not referenced by the skeleton TU; the T3 ports that read
    them will seed a synthetic table here — left as a documented extension point. */
@@ -104,14 +117,13 @@ u8  game_mode;           /* game.c   0x792c */
 u8  physics_frozen;      /* player.c 0xa0ce */
 u8  current_level;       /* level.c  0x79b2 */
 
-/* P2 AI/dispatch callees of p2_tile_move_check that are NOT yet reconstructed
-   (faithful-signature stubs in game_stubs.c for the BUMPY.EXE link → Phase-4 T4).
-   game_stubs.c is not compiled into this harness, so they are shimmed here (the
-   same convention items_ctest/player_ctest use for cross-module callees).  No
-   captured record exercises p2_tile_move_check, so these are link-only. */
-void p2_run_move_state_handler(void)      {}  /* 1000:5003 → T4 */
-void p2_ai_select_move_random(void)       {}  /* 1000:4fd3 → T4 */
-void p2_dispatch_move_state_handler(void) {}  /* DGROUP 0x870[state] → T4 */
+/* p2_dispatch_move_state_handler (the 0x870-table indirect call in p2_tile_move_check)
+   is still a stub in game_stubs.c (deferred — not on any captured P2 path).
+   game_stubs.c is not compiled into this harness, so it is shimmed here (the same
+   convention items_ctest/player_ctest use for cross-module callees).  Phase-4 T4
+   RECONSTRUCTED p2_run_move_state_handler + p2_ai_select_move_random in player2.c,
+   so those are NO LONGER shimmed (they are real symbols via the #include below). */
+void p2_dispatch_move_state_handler(void) {}  /* DGROUP 0x870[state] → deferred */
 
 #include "../src/player2.c"
 
@@ -125,13 +137,15 @@ void p2_dispatch_move_state_handler(void) {}  /* DGROUP 0x870[state] → T4 */
  *  Per record: u16 fn_addr, u16 fn_name_idx, SNAP entry, SNAP exit,
  *              u16 script_off, u16 script_seg, u16 script_len, script_len bytes,
  *              u8 desc_len, desc_len bytes.
- *  P2SNAP (26 B LE, struct.pack "<hhHhh"+"B"*16):
+ *  P2SNAP (v2, 30 B LE, struct.pack "<hhHhh"+"B"*14+"HHH"):
  *    px(s16) py(s16) anim(u16) gcol(s16) grow(s16)
  *    cell(u8) state(u8) steps_left(u8) step_idx(u8) facing(u8) toggle(u8)
  *    rng(u8) thresh(u8) blk0(u8) blk1(u8) blk3(u8) pvp(u8) mode(u8) frozen(u8)
- *    prng0(u8) pad(u8).
+ *    prng0(u16) prng1(u16) prng2(u16).
+ *  v2 (Phase-4 T4) widened the trailing prng0(u8)+pad(u8) to the FULL 3-word prng
+ *  state so p2_ai_select_move_random's rand() is reproducible (AI DETERMINISM).
  * ════════════════════════════════════════════════════════════════════════════ */
-#define SNAP_SIZE 26
+#define SNAP_SIZE 30
 
 typedef struct {
     s16 px, py;
@@ -139,7 +153,7 @@ typedef struct {
     s16 gcol, grow;
     u8  cell, state, steps_left, step_idx, facing, toggle;
     u8  rng, thresh, blk0, blk1, blk3, pvp, mode, frozen;
-    u8  prng0, pad;
+    u16 prng0, prng1, prng2;
 } snap_t;
 
 typedef struct {
@@ -180,8 +194,10 @@ static void parse_snap(const u8 *p, snap_t *s)
     s->step_idx   = p[13]; s->facing = p[14]; s->toggle     = p[15];
     s->rng        = p[16]; s->thresh = p[17]; s->blk0       = p[18];
     s->blk1       = p[19]; s->blk3   = p[20]; s->pvp        = p[21];
-    s->mode       = p[22]; s->frozen = p[23]; s->prng0      = p[24];
-    s->pad        = p[25];
+    s->mode       = p[22]; s->frozen = p[23];
+    s->prng0      = rd16(p + 24);
+    s->prng1      = rd16(p + 26);
+    s->prng2      = rd16(p + 28);
 }
 
 static const char *fn_name(u16 fn_addr)
@@ -311,37 +327,60 @@ static void seed_state_script_tbl(u8 state, u8 steps, u8 facing)
     p2_state_script_tbl = state_tbl;
 }
 
+/* ── T4 host backing for the DGROUP-0x85c move-state HANDLER table ────────────────
+ *  p2_run_move_state_handler (1000:5003) dispatches p2_move_state through a near-ptr
+ *  handler table at DGROUP 0x85c (the cell-move handler group), when p2_step_idx==5.
+ *  That table is RUNTIME-populated engine data (it reads zeros at static-analysis
+ *  time — Ghidra DGROUP 0x203b:085c is uninitialised), so — like the state-script
+ *  table above — the harness seeds the launch state's entry from the CAPTURED effect:
+ *  scenario p2_run_move_state_handler has move_state=2, step_idx=5 and cell 34->42
+ *  (cell += 8), i.e. the engine's 0x85c[2] handler is p2_cell_move_down.  Seeding the
+ *  table this way exercises p2_run_move_state_handler's step_idx==5 gate + index +
+ *  indirect-call 1:1 (the table CONTENTS are engine data, not this fn's logic). The
+ *  table holds host void(*)(void) callables (the far shadow — see player2.c decl). */
+static void (*handler_tbl[16])(void);
+static void seed_state_handler_tbl(u8 state)
+{
+    unsigned i;
+    for (i = 0; i < 16; i++)
+        handler_tbl[i] = NULL;
+    /* The four cell-move handlers (1000:5025/503f/5059/506f).  Only the captured
+       launch state (2 -> cell_move_down, the cell+=8 observed) is exercised; the
+       others are seeded by their natural direction for completeness. */
+    handler_tbl[1] = p2_cell_move_up;       /* cell -= 8 */
+    handler_tbl[2] = p2_cell_move_down;     /* cell += 8  (captured: 34 -> 42) */
+    handler_tbl[3] = p2_cell_move_left;     /* cell -= 1 */
+    handler_tbl[4] = p2_cell_move_right;    /* cell += 1 */
+    (void)state;
+    p2_state_handler_tbl = handler_tbl;
+}
+
 /* ════════════════════════════════════════════════════════════════════════════
- *  AI-DETERMINISM EXTENSION POINT  (forward-looking — Phase-4 Task 4).
+ *  AI-DETERMINISM — Phase-4 Task 4 (RESOLVED).
  *
  *  p2_ai_select_move_random (1000:4fd3) computes
- *      move_state = (rng_frame & 3) + (rand() & 1) + 5
- *  i.e. it reads rng_frame (in the SNAP) AND calls rand() == prng_step(), whose
- *  parity bit (rand() & 1) depends on the PRNG STATE (prng_state0/1/2), NOT on
- *  rng_frame.  So to replay that fn DETERMINISTICALLY on the host, the harness must
- *  seed the prng state to exactly the value the engine held at the call — otherwise
- *  the (rand() & 1) bit (hence the +0/+1 in the resulting move_state) is unknowable.
+ *      base       = rng_frame & 3;
+ *      rng_frame  = rand();                 // == prng_step(); return (u8)prng_state0
+ *      move_state = (rng_frame & 1) + base + 5;
+ *  i.e. the parity bit (rand() & 1) comes from the NEW rng_frame, drawn by the
+ *  engine's rand() from prng_step — it depends on the PRNG STATE (prng_state0/1/2),
+ *  NOT on the entry rng_frame.  To replay that fn DETERMINISTICALLY the harness must
+ *  seed the host prng state to exactly the value the engine held at the call; then
+ *  the REAL prng_step (compiled in above from src/prng.c, the same code path the
+ *  engine's rand() runs) produces the identical draw -> the identical move_state.
  *
- *  T1 captured only prng_state0's LOW BYTE (snap.prng0, for a cross-check) — NOT the
- *  full 3-word prng state.  The captured EXIT move_states for the random scenarios
- *  (p2_model.md: rng0->6, rng1->7, rng2->8, rng3->9) all have (rand() & 1)==1, but
- *  that is a single observed sample, not a seeded-reproducible input.
- *
- *  TODO(T4): make p2_ai_select_move_random's replay deterministic.  EITHER
- *    (a) extend the T1 capture (tools/p2_oracle.py) to record the full prng_state0/
- *        1/2 at the ENTRY of each AI-random record, and seed them here below; OR
- *    (b) if the engine's rand() result is fully determined by a captured input,
- *        derive (rand()&1) from it.
- *  Until then this hook seeds only prng_state0's low byte (the cross-check value)
- *  and the per-fn comparator marks p2_ai_select_move_random's parity-dependent
- *  bit as NOT-yet-deterministic (it is UNPORTED this task regardless).
- * ════════════════════════════════════════════════════════════════════════════ */
+ *  RESOLUTION: the Phase-4 T4 capture (trace v2, tools/p2_oracle.py) records the
+ *  FULL prng_state0/1/2 at every record's ENTRY (snap.prng0/1/2).  This hook seeds
+ *  all three; player2.c's p2_engine_rand() then calls prng_step() and reads
+ *  (u8)prng_state0, reproducing the engine's rand() bit-for-bit.  The resulting
+ *  move_state is asserted by the per-fn comparator (cmp_exit "state") — a true
+ *  seeded-reproducible AI-determinism check, not a derivation from the captured
+ *  output. */
 static void seed_ai_prng(const snap_t *s)
 {
-    /* Cross-check value only (low byte of prng_state0).  T4 replaces this with a
-       full prng_state0/1/2 seed once the capture carries them. */
-    prng_state0 = (prng_state0 & 0xff00u) | s->prng0;
-    /* prng_state1 / prng_state2: NOT in the trace — T4 capture addition (see TODO). */
+    prng_state0 = s->prng0;
+    prng_state1 = s->prng1;
+    prng_state2 = s->prng2;
 }
 
 /* Compare the live P2 globals against an exit SNAP.  Returns NULL if all match,
@@ -431,11 +470,12 @@ static const ported_t PORTED[] = {
     { FN_P2_STEP_SCRIPTED,     (void (*)(void))p2_step_scripted_move },/* T3 */
     { FN_P2_UPDATE_GRID_CELL,  p2_update_grid_cell },                 /* T3 */
     { FN_P2_SET_PIXEL,         p2_set_pixel_from_cell },              /* T3 */
-    { FN_P2_RUN_STATE_HANDLER, NULL },   /* T4 (AI move-state handler dispatch) */
-    { FN_P2_AI_DISPATCH,       NULL },   /* T4 */
-    { FN_P2_AI_SELECT_A,       NULL },   /* T4 */
-    { FN_P2_AI_SELECT_B,       NULL },   /* T4 */
-    { FN_P2_AI_SELECT_RANDOM,  NULL },   /* T4 (prng-determinism — see seed_ai_prng) */
+    /* Phase-4 T4: the AI decision layer is now reconstructed in src/player2.c. */
+    { FN_P2_RUN_STATE_HANDLER, p2_run_move_state_handler },             /* T4 */
+    { FN_P2_AI_DISPATCH,       p2_ai_dispatch_move },                   /* T4 */
+    { FN_P2_AI_SELECT_A,       p2_ai_select_move_a },                   /* T4 */
+    { FN_P2_AI_SELECT_B,       p2_ai_select_move_b },                   /* T4 */
+    { FN_P2_AI_SELECT_RANDOM,  p2_ai_select_move_random },  /* T4 (prng — seed_ai_prng) */
     { FN_CHECK_PVP_COLLISION,  NULL },   /* T5 */
     { FN_DRAW_P2_SPRITE,       NULL },   /* T5 */
 };
@@ -493,7 +533,22 @@ static int run_per_function(record_t *recs, long nrec, const char *scname,
             seed_coord_tbl();              /* p2_cell_coord_tbl (set_pixel_from_cell) */
             seed_sprite_obj();             /* p2_sprite (update_grid_cell origin) */
             if (fn_is_ai_random(r->fn_addr))
-                seed_ai_prng(&r->ent);     /* AI-determinism hook (T4 TODO) */
+                seed_ai_prng(&r->ent);     /* AI-determinism: seed prng to engine entry */
+
+            /* AI selectors (dispatch / select_a / select_b / select_random) all tail
+               into p2_set_move_state(chosen_state) — which loads that state's script
+               header (steps/facing) from the per-state script table.  Seed the table
+               entry for the RESULTING (= EXIT) state from the captured EXIT steps/
+               facing so the internal p2_set_move_state load path resolves 1:1 (the
+               table CONTENTS are engine level-data, not the AI fn's logic).  This
+               mirrors the FN_P2_SET_MOVE_STATE branch below. */
+            if (r->fn_addr == FN_P2_AI_DISPATCH || r->fn_addr == FN_P2_AI_SELECT_A ||
+                r->fn_addr == FN_P2_AI_SELECT_B || r->fn_addr == FN_P2_AI_SELECT_RANDOM)
+                seed_state_script_tbl(r->ex.state, r->ex.steps_left, r->ex.facing);
+            /* p2_run_move_state_handler dispatches through the DGROUP-0x85c handler
+               table (the cell-move handlers); seed it from the captured effect. */
+            if (r->fn_addr == FN_P2_RUN_STATE_HANDLER)
+                seed_state_handler_tbl(r->ent.state);
 
             if (r->fn_addr == FN_P2_SET_MOVE_STATE) {
                 /* p2_set_move_state(state) — the cdecl arg is the LAUNCH state the
@@ -552,7 +607,9 @@ int main(int argc, char **argv)
         fprintf(stderr, "bad magic (want P2TRACE1)\n"); return 2;
     }
     ver = rd16(b + 8); nsc = rd16(b + 10);
-    if (ver != 1) { fprintf(stderr, "unsupported version %u\n", ver); return 2; }
+    if (ver != 2) { fprintf(stderr, "unsupported version %u (want 2 — Phase-4 T4 "
+                                    "regenerated the trace with the full prng state)\n",
+                            ver); return 2; }
     o = 12;
     nfn = rd16(b + o); o += 2;
     /* skip the fn-name string table (we key on fn_addr, not the name index). */
@@ -560,9 +617,9 @@ int main(int argc, char **argv)
 
     printf("p2_ctest: replay harness over %s\n", path);
     printf("  trace: P2TRACE1 v%u, %u scenarios, %u fn-names\n", ver, nsc, nfn);
-    printf("  per-fn diff targets (host-callable): NONE yet — src/player2.c is a "
-           "skeleton (globals only); all eleven P2 fns are UNPORTED (move-state/"
-           "trajectory [T3], AI rng-decision [T4], draw+pvp [T5])\n");
+    printf("  per-fn diff targets (host-callable): the move-state/trajectory group "
+           "[T3] AND the AI rng-decision group [T4] are reconstructed in "
+           "src/player2.c; check_pvp_collision + draw_p2_sprite remain UNPORTED [T5]\n");
 
     for (s = 0; s < nsc; s++) {
         u8 sid, name_len, seeded, level;
@@ -617,9 +674,9 @@ int main(int argc, char **argv)
                st.fail);
         return 1;
     }
-    printf("PASS: harness parsed the trace and ran clean; every record UNPORTED "
-           "(=%ld) — cleanly localised to the skeleton state (no P2 fn body yet; "
-           "T3/T4/T5 port them).  AI-determinism prng hook + draw-descriptor "
-           "comparator wired and waiting on the ports.\n", st.unported);
+    printf("PASS: %ld PORTED records matched the capture (move-state/trajectory [T3] "
+           "+ AI rng-decision [T4], incl. the seeded-prng AI-determinism of "
+           "p2_ai_select_move_random); %ld records UNPORTED (check_pvp_collision + "
+           "draw_p2_sprite — T5).\n", st.pass, st.unported);
     return 0;
 }

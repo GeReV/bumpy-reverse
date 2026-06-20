@@ -96,6 +96,19 @@ u8 __far  *p2_state_script_tbl;/* DGROUP 0x2520/0x2522 (per-state script table) 
    *value* is the only deviation — the indexing arithmetic is 1:1 with the asm. */
 u8 __far  *p2_cell_coord_tbl;/* DGROUP 0x0274 (posC X/Y coord table base) */
 
+/* P2 move-state handler table base (DGROUP 0x85c — near-ptr table of per-state
+   cell-move handlers, indexed by move_state*2).  p2_run_move_state_handler calls
+   (*tbl[move_state])() through it when p2_step_idx==5.
+   RECONSTRUCTION FIDELITY: the engine reads this as a NEAR DS-relative table (asm
+   1000:501f `CALL word ptr [BX+0x85c]`, BX=move_state*2) holding 16-bit near code
+   pointers.  As with p2_state_script_tbl / p2_cell_coord_tbl, the OW build's DGROUP
+   layout is uncontrolled and host function pointers are wider than the engine's
+   16-bit near pointers, so the table is reached through this far shadow base whose
+   entries are host void(*)(void) callables (the cell-move handlers).  The
+   indexing/deref is 1:1 with the asm; the table is populated by engine init (the
+   host harness seeds it with the reconstructed cell-move handlers). */
+void (__far * __far *p2_state_handler_tbl)(void);/* DGROUP 0x085c (per-state handler tbl)*/
+
 /* P2 grid-cell history (p2_advance_grid_history slides new->cur->prev). */
 s16 p2_grid_x;           /* DGROUP 0x8558 — current grid col */
 s16 p2_grid_y;           /* DGROUP 0x855a — current grid row */
@@ -120,36 +133,35 @@ s16 pvp_p2_x1;           /* DGROUP 0x0856 */
 s16 pvp_p2_y0;           /* DGROUP 0x0858 */
 s16 pvp_p2_y1;           /* DGROUP 0x085a */
 
-/* ── cross-module globals the P2 move-state fns read (owned elsewhere) ────────── */
+/* ── cross-module globals the P2 fns read (owned elsewhere; extern only) ──────── */
 extern u8 __far *tilemap;     /* game.c 0xa0d8/0xa0da — level tilemap far pointer */
+extern u8  rng_frame;         /* player.c 0x79b3 — the AI rng-decision input (the AI
+                                 selectors branch on it; select_move_random overwrites
+                                 it with rand()).  Owned by player.c (player.h);
+                                 declared here as the P2 AI layer is the heavy reader. */
 
 /* ════════════════════════════════════════════════════════════════════════════
- *  STUBBED CALLEES (RECONSTRUCTION FIDELITY)
- *  p2_tile_move_check (below) dispatches to three not-yet-ported callees:
- *    - p2_run_move_state_handler (1000:5003) — per-state cell-move handler dispatch
- *      (routes move_state through the near-ptr handler table at DGROUP 0x85c).  → T4.
- *    - p2_ai_select_move_random (1000:4fd3) — picks a fresh random move-state when
- *      all four directions are blocked; calls rand()/prng_step.  → T4 (its prng
- *      determinism is the open AI-replay item, see tools/p2_ctest.c §AI-DETERMINISM).
+ *  CALLEES of p2_tile_move_check / the AI layer (Phase-4 T4)
+ *    - p2_run_move_state_handler (1000:5003) — RECONSTRUCTED below (T4): dispatches
+ *      p2_move_state through the near-ptr handler table at DGROUP 0x85c (the cell-move
+ *      handler group) when p2_step_idx==5.
+ *    - p2_ai_select_move_random (1000:4fd3) — RECONSTRUCTED below (T4): picks a fresh
+ *      random move-state (5..8) via rand()/prng_step.
  *    - the per-state move-state handler at handler-table 0x870 (the `(*tbl[state])()`
- *      indirect call) — the P2 move-state handlers.  → T4.
- *  All three remain faithful-signature stubs in game_stubs.c this task; the harness
- *  exercises p2_tile_move_check via records that do not cross into those callees
- *  (the captured tilemap path), so the un-ported callees do not perturb the gate.
- *  The handler-table indirect call is modelled below as a forward-declared dispatch
- *  helper (p2_dispatch_move_state_handler) so player2.c links without the table data.
+ *      indirect call in p2_tile_move_check) — STILL a stubbed dispatch helper
+ *      (p2_dispatch_move_state_handler) here, since that table's BYTES are engine
+ *      level-data not reached on any captured P2 path (→ deferred; not in the T4 AI
+ *      decision scope).  RECONSTRUCTION FIDELITY: modelled as a stub so the indirect
+ *      call site in p2_tile_move_check is preserved 1:1 without inventing the table.
  * ════════════════════════════════════════════════════════════════════════════ */
-void p2_run_move_state_handler(void);     /* 1000:5003 — stub (game_stubs.c), → T4 */
-void p2_ai_select_move_random(void);      /* 1000:4fd3 — stub (game_stubs.c), → T4 */
+void p2_dispatch_move_state_handler(void);/* DGROUP 0x870[move_state] — stub, deferred */
 
-/* Indirect move-state handler dispatch: the engine calls
- *   (*(void(**)(void))(0x870 + p2_move_state*2))()
- * a near-ptr table of per-state move-state handlers at DGROUP 0x870.  Those
- * handlers are the AI move-state group (→ T4); the table data is not yet
- * reconstructed.  RECONSTRUCTION FIDELITY: modelled as a stubbed dispatch helper so
- * the indirect call site in p2_tile_move_check is preserved 1:1 without inventing
- * the (deferred) handler-table bytes.  → T4. */
-void p2_dispatch_move_state_handler(void);/* DGROUP 0x870[move_state] — stub, → T4 */
+/* P2 cell-direction move handlers — the targets of the DGROUP-0x85c near-ptr handler
+   table that p2_run_move_state_handler dispatches through (ported 1:1 below, T4). */
+void p2_cell_move_up(void);               /* 1000:5025 */
+void p2_cell_move_down(void);             /* 1000:503f */
+void p2_cell_move_left(void);             /* 1000:5059 */
+void p2_cell_move_right(void);            /* 1000:506f */
 
 /* ════════════════════════════════════════════════════════════════════════════
  *  P2 MOVE-STATE MACHINE — Phase-4 Task 3 (ported 1:1 from the Ghidra decomp).
@@ -298,7 +310,7 @@ void p2_tile_move_check(void)
 
     if (p2_move_toggle != 0 && p2_cell != (s8)0xff) {
         if (p2_move_steps_left != 0) {
-            p2_run_move_state_handler();                  /* → T4 stub */
+            p2_run_move_state_handler();                  /* 1000:5003 (T4) */
         } else {
             cell = (u8)p2_cell;
             p2_dir_blocked_3 = 1;
@@ -327,9 +339,9 @@ void p2_tile_move_check(void)
 
             if ((u8)(p2_dir_blocked_0 + p2_dir_blocked_1 +
                      p2_dir_blocked_2 + p2_dir_blocked_3) == 4) {
-                p2_ai_select_move_random();               /* → T4 stub */
+                p2_ai_select_move_random();               /* 1000:4fd3 (T4) */
             } else {
-                p2_dispatch_move_state_handler();         /* (*0x870[state])() → T4 */
+                p2_dispatch_move_state_handler();         /* (*0x870[state])() deferred */
             }
         }
     }
@@ -372,5 +384,353 @@ void p2_advance_grid_history(void)
         p2_grid_x = p2_grid_col;                          /* new col (0xa0ca) -> cur */
         p2_grid_y = p2_grid_row;                          /* new row (0xa0cc) -> cur */
     }
+    return;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  P2 AI DECISION LAYER — Phase-4 Task 4 (ported 1:1 from the Ghidra decomp).
+ *
+ *  P2 is AI-controlled: when its scripted move ends, p2_ai_dispatch_move routes by
+ *  the four dir-blocked flags to one of the rng-threshold move selectors, which pick
+ *  the next move-state and (re)enter it via p2_set_move_state.  All selectors share
+ *  the same rng-branch shape: rng_frame < p2_ai_threshold splits even/odd on
+ *  rng_frame&1, with the dir-blocked flags steering the chosen state.
+ *
+ *  Every fn cited to its Ghidra seg-1000 address (decompile_function_by_address,
+ *  2026-06) and matches local/build/p2_model.md §"AI rng-decision behavior".  The
+ *  Ghidra stack-probe prologue (`if (stack_check_limit <= &stack0xfffe) FUN_ab83()`)
+ *  is the Turbo-C stack-overflow guard emitted on every fn; it is omitted here (a
+ *  pure runtime check, no observable state — same convention as every other ported
+ *  src/ function).
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * p2_engine_rand — 1000:93b1 (rand() thunk)
+ * --------------------------------------------------------------------------
+ * The engine's rand() (1000:93b1) is NOT the CRT rand: it CALLF's prng_step
+ * (1ce5:001f) and returns AL = the low byte of the new prng_state0 (asm: prng_step
+ * ends `MOV [0x5676],AX` = prng_state0, then the caller reads AL).  Modelled here as
+ * a faithful static helper so p2_ai_select_move_random's rand()&1 parity is driven
+ * by the reconstructed src/prng.c state exactly as the engine's is — the AI replay
+ * is deterministic once prng_state0/1/2 are seeded to the engine's entry value.
+ * RECONSTRUCTION FIDELITY: the engine's rand() is a tiny thunk (CALLF prng_step;
+ * RET) with no DGROUP symbol of its own; reconstructed inline here rather than as a
+ * separate TU.  prng_state0/1/2 + prng_step are owned by globals.c/prng.c.
+ */
+static u8 p2_engine_rand(void)
+{
+    prng_step();
+    return (u8)prng_state0;
+}
+
+/*
+ * p2_ai_select_move_a — 1000:4f04
+ * --------------------------------------------------------------------------
+ * rng/flag-driven selection of move-state 1/2/3, then p2_set_move_state.
+ *   rng_frame <  threshold, even -> (dir_blocked_1==0) ? 2 : 3
+ *   rng_frame <  threshold, odd  -> (dir_blocked_0==0) ? set_move_state(1) : 3
+ *   rng_frame >= threshold       -> 3
+ * (the "a" tail-state is 3.)
+ */
+void p2_ai_select_move_a(void)
+{
+    u8 state_id;
+
+    if (rng_frame < p2_ai_threshold) {
+        if ((rng_frame & 1) == 0) {
+            state_id = (p2_dir_blocked_1 == 0) ? 2 : 3;
+        } else {
+            if (p2_dir_blocked_0 == 0) {
+                p2_set_move_state(1);
+                return;
+            }
+            state_id = 3;
+        }
+    } else {
+        state_id = 3;
+    }
+    p2_set_move_state(state_id);
+    return;
+}
+
+/*
+ * p2_ai_select_move_b — 1000:4f89
+ * --------------------------------------------------------------------------
+ * rng/flag-driven selection of move-state 1/2/4, then p2_set_move_state.  Identical
+ * shape to select_move_a except the tail-state is 4 (instead of 3).
+ *   rng_frame <  threshold, even -> (dir_blocked_1==0) ? 2 : 4
+ *   rng_frame <  threshold, odd  -> (dir_blocked_0==0) ? set_move_state(1) : 4
+ *   rng_frame >= threshold       -> 4
+ */
+void p2_ai_select_move_b(void)
+{
+    u8 state_id;
+
+    if (rng_frame < p2_ai_threshold) {
+        if ((rng_frame & 1) == 0) {
+            state_id = (p2_dir_blocked_1 == 0) ? 2 : 4;
+        } else {
+            if (p2_dir_blocked_0 == 0) {
+                p2_set_move_state(1);
+                return;
+            }
+            state_id = 4;
+        }
+    } else {
+        state_id = 4;
+    }
+    p2_set_move_state(state_id);
+    return;
+}
+
+/*
+ * p2_choose_move_state1 — 1000:4dfa
+ * --------------------------------------------------------------------------
+ * Pick the next P2 move favouring state 1: rng parity + the dir-blocked flags
+ * (p2_dir_blocked_3 / p2_dir_blocked_2) choose set_move_state(1/3/4).
+ *   rng_frame <  threshold, even -> (dir_blocked_3==0) ? 4 : 1
+ *   rng_frame <  threshold, odd  -> (dir_blocked_2==0) ? set_move_state(3) : 1
+ *   rng_frame >= threshold       -> 1
+ */
+void p2_choose_move_state1(void)
+{
+    u8 state_id;
+
+    if (rng_frame < p2_ai_threshold) {
+        if ((rng_frame & 1) == 0) {
+            state_id = (p2_dir_blocked_3 == 0) ? 4 : 1;
+        } else {
+            if (p2_dir_blocked_2 == 0) {
+                p2_set_move_state(3);
+                return;
+            }
+            state_id = 1;
+        }
+    } else {
+        state_id = 1;
+    }
+    p2_set_move_state(state_id);
+    return;
+}
+
+/*
+ * p2_choose_move_state2 — 1000:4e7f
+ * --------------------------------------------------------------------------
+ * Pick the next P2 move favouring state 2: same shape as p2_choose_move_state1 but
+ * the favoured state is 2 (instead of 1).
+ *   rng_frame <  threshold, even -> (dir_blocked_3==0) ? 4 : 2
+ *   rng_frame <  threshold, odd  -> (dir_blocked_2==0) ? set_move_state(3) : 2
+ *   rng_frame >= threshold       -> 2
+ */
+void p2_choose_move_state2(void)
+{
+    u8 state_id;
+
+    if (rng_frame < p2_ai_threshold) {
+        if ((rng_frame & 1) == 0) {
+            state_id = (p2_dir_blocked_3 == 0) ? 4 : 2;
+        } else {
+            if (p2_dir_blocked_2 == 0) {
+                p2_set_move_state(3);
+                return;
+            }
+            state_id = 2;
+        }
+    } else {
+        state_id = 2;
+    }
+    p2_set_move_state(state_id);
+    return;
+}
+
+/*
+ * p2_ai_select_move_random — 1000:4fd3
+ * --------------------------------------------------------------------------
+ * Pick a fresh random move-state in 5..8 when all four directions are blocked:
+ *   base       = rng_frame & 3;          (low 2 bits of the CURRENT rng_frame)
+ *   rng_frame  = rand();                 (OVERWRITES rng_frame with the new draw)
+ *   move_state = (rng_frame & 1) + base + 5;
+ * then p2_set_move_state(move_state).
+ *
+ * RECONSTRUCTION FIDELITY (AI DETERMINISM): the parity bit (rand()&1) comes from the
+ * NEW rng_frame value, which the engine's rand() (1000:93b1) draws from prng_step —
+ * NOT from the entry rng_frame.  asm 1000:4fe1-4ff4: AND AL,3 (base) ; CALL rand ;
+ * MOV [0x79b3],AL (rng_frame = rand) ; AND AL,1 ; ADD AL,base ; ADD AL,5.  Replaying
+ * this deterministically therefore requires the host prng_state0/1/2 to equal the
+ * engine's at this call (the T4 capture records them at the AI-random record's ENTRY;
+ * see tools/p2_oracle.py + tools/p2_ctest.c §AI-DETERMINISM).
+ */
+void p2_ai_select_move_random(void)
+{
+    u8 base_offset;
+    u8 state_id;
+
+    base_offset = (u8)(rng_frame & 3);
+    rng_frame   = p2_engine_rand();                       /* rng_frame = rand() */
+    state_id    = (u8)((rng_frame & 1) + base_offset + 5);
+    p2_set_move_state(state_id);
+    return;
+}
+
+/*
+ * p2_ai_dispatch_move — 1000:4f4e
+ * --------------------------------------------------------------------------
+ * Top P2-AI dispatcher: route to one of four move selectors by the dir-blocked
+ * flags, in priority order.
+ *   dir_blocked_3==0 -> p2_ai_select_move_b
+ *   dir_blocked_1==0 -> p2_choose_move_state2
+ *   dir_blocked_0==0 -> p2_choose_move_state1
+ *   else             -> p2_ai_select_move_a
+ */
+void p2_ai_dispatch_move(void)
+{
+    if (p2_dir_blocked_3 == 0) {
+        p2_ai_select_move_b();
+    } else if (p2_dir_blocked_1 == 0) {
+        p2_choose_move_state2();
+    } else if (p2_dir_blocked_0 == 0) {
+        p2_choose_move_state1();
+    } else {
+        p2_ai_select_move_a();
+    }
+    return;
+}
+
+/*
+ * p2_pick_move_priority_a — 1000:4dbf
+ * --------------------------------------------------------------------------
+ * Alternate AI dispatcher: select the next P2 move by the dir-blocked flags in the
+ * priority order a0e0, a1b2, a0e2, else (dispatches to the four direction choosers).
+ *   dir_blocked_0==0 -> p2_choose_move_state1
+ *   dir_blocked_3==0 -> p2_ai_select_move_b
+ *   dir_blocked_2==0 -> p2_ai_select_move_a
+ *   else             -> p2_choose_move_state2
+ */
+void p2_pick_move_priority_a(void)
+{
+    if (p2_dir_blocked_0 == 0) {
+        p2_choose_move_state1();
+    } else if (p2_dir_blocked_3 == 0) {
+        p2_ai_select_move_b();
+    } else if (p2_dir_blocked_2 == 0) {
+        p2_ai_select_move_a();
+    } else {
+        p2_choose_move_state2();
+    }
+    return;
+}
+
+/*
+ * p2_pick_move_priority_b — 1000:4e44
+ * --------------------------------------------------------------------------
+ * Alternate AI dispatcher: priority order a0e1, a0e2, a1b2, else.
+ *   dir_blocked_1==0 -> p2_choose_move_state2
+ *   dir_blocked_2==0 -> p2_ai_select_move_a
+ *   dir_blocked_3==0 -> p2_ai_select_move_b
+ *   else             -> p2_choose_move_state1
+ */
+void p2_pick_move_priority_b(void)
+{
+    if (p2_dir_blocked_1 == 0) {
+        p2_choose_move_state2();
+    } else if (p2_dir_blocked_2 == 0) {
+        p2_ai_select_move_a();
+    } else if (p2_dir_blocked_3 == 0) {
+        p2_ai_select_move_b();
+    } else {
+        p2_choose_move_state1();
+    }
+    return;
+}
+
+/*
+ * p2_pick_move_priority_c — 1000:4ec9
+ * --------------------------------------------------------------------------
+ * Alternate AI dispatcher: priority order a0e2, a0e0, a0e1, else.
+ *   dir_blocked_2==0 -> p2_ai_select_move_a
+ *   dir_blocked_0==0 -> p2_choose_move_state1
+ *   dir_blocked_1==0 -> p2_choose_move_state2
+ *   else             -> p2_ai_select_move_b
+ */
+void p2_pick_move_priority_c(void)
+{
+    if (p2_dir_blocked_2 == 0) {
+        p2_ai_select_move_a();
+    } else if (p2_dir_blocked_0 == 0) {
+        p2_choose_move_state1();
+    } else if (p2_dir_blocked_1 == 0) {
+        p2_choose_move_state2();
+    } else {
+        p2_ai_select_move_b();
+    }
+    return;
+}
+
+/*
+ * p2_run_move_state_handler — 1000:5003
+ * --------------------------------------------------------------------------
+ * When p2_step_idx == 5, invoke the per-state move-state handler from the near-ptr
+ * handler table at DGROUP 0x85c, indexed by p2_move_state (asm: `MOV BX, state*2 ;
+ * CALL word ptr [BX+0x85c]`).  The handlers are the cell-direction moves
+ * (p2_cell_move_up/down/left/right).
+ *
+ * RECONSTRUCTION FIDELITY (indirect handler dispatch): the engine's table holds
+ * 16-bit NEAR code pointers in DGROUP; reached here through the p2_state_handler_tbl
+ * far shadow (host void(*)(void) callables — see its decl), the index/deref 1:1 with
+ * the asm.  No state mutation of its own; the dispatched handler does the work.
+ */
+void p2_run_move_state_handler(void)
+{
+    if (p2_step_idx == 5) {
+        (*p2_state_handler_tbl[p2_move_state])();          /* (*tbl[state])() @0x85c */
+    }
+    return;
+}
+
+/*
+ * p2_cell_move_up — 1000:5025
+ * --------------------------------------------------------------------------
+ * P2 step up: p2_cell -= 8 (one grid row up); decrement the row counter (0x8565).
+ */
+void p2_cell_move_up(void)
+{
+    p2_cell        = (s8)(p2_cell - 8);
+    p2_set_cell_row = (u8)(p2_set_cell_row - 1);
+    return;
+}
+
+/*
+ * p2_cell_move_down — 1000:503f
+ * --------------------------------------------------------------------------
+ * P2 step down: p2_cell += 8 (one grid row down); increment the row counter (0x8565).
+ */
+void p2_cell_move_down(void)
+{
+    p2_cell        = (s8)(p2_cell + 8);
+    p2_set_cell_row = (u8)(p2_set_cell_row + 1);
+    return;
+}
+
+/*
+ * p2_cell_move_left — 1000:5059
+ * --------------------------------------------------------------------------
+ * P2 step left: p2_cell -= 1 (one column left); decrement the column counter (0x8564).
+ */
+void p2_cell_move_left(void)
+{
+    p2_cell        = (s8)(p2_cell - 1);
+    p2_set_cell_col = (u8)(p2_set_cell_col - 1);
+    return;
+}
+
+/*
+ * p2_cell_move_right — 1000:506f
+ * --------------------------------------------------------------------------
+ * P2 step right: p2_cell += 1 (one column right); increment the column counter (0x8564).
+ */
+void p2_cell_move_right(void)
+{
+    p2_cell        = (s8)(p2_cell + 1);
+    p2_set_cell_col = (u8)(p2_set_cell_col + 1);
     return;
 }
