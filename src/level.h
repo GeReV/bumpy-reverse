@@ -111,4 +111,11 @@ void start_level(u8 world, u8 level);
 void copyprotect_challenge(void);
 #endif
 
+/* all_entries_flag_set (1000:3e8a, Phase-9 T3) — level-complete predicate the
+   game_loop round exit polls.  Walks the per-level move-descriptor table (the
+   runtime-populated far ptr move_descriptor_table @ DGROUP 0x8246) ANDing each
+   record's [0] flag; returns 1 iff all set. */
+extern u8 __far *move_descriptor_table;  /* DGROUP 0x8246/0x8248 */
+u8 all_entries_flag_set(void);
+
 #endif /* LEVEL_H_INCLUDED */

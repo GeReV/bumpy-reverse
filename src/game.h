@@ -121,8 +121,8 @@ void erase_anim_channels_b(void);
 void update_p1_bbox(void);
 void update_p2_bbox(void);
 void rotate_timing_flags_and_wait(void);
-void game_post_present_629c(void);                   /* FUN_1000_629c */
-void game_post_input_233a(void);                     /* FUN_1000_233a */
+void game_post_present(void);                        /* 1000:629c (Phase-9 T3) */
+void game_post_input(void);                          /* 1000:233a (Phase-9 T3) */
 void handle_gameplay_input(void);                    /* 1000:1d26 */
 void p2_tile_move_check(void);
 void check_pvp_collision(void);

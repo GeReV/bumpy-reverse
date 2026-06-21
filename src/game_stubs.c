@@ -229,11 +229,9 @@ void reset_opaque_session_globals(void)
 
 /* ── B. run_game_session (1000:0258) one-time setup ─────────────────────────── */
 
-/* init_view_anim_descriptors 1000:535e — one-time p1/p2 view + anim-channel
-   descriptor setup (a long faithful struct-init; DEFERRED Phase 2). */
-void init_view_anim_descriptors(void)
-{
-}
+/* init_view_anim_descriptors 1000:535e — RECONSTRUCTED in game.c (Phase-9 T3): the
+   one-time p1/p2 view + anim-channel descriptor struct-init.  Stub removed (dup-symbol
+   once game.obj's body links). */
 
 /* sound_select_device 1000:6de3 — RECONSTRUCTED in sound.c (Phase-6 T4); stub removed
  *  (dup-symbol once sound.obj's T4 bodies link). */
@@ -292,12 +290,10 @@ void init_fullscreen_view_desc(u8 mode, u8 flag) { (void)mode; (void)flag; }
    reconstructed; faithful no-op stub for linkability (called by spawn.c). */
 void setup_fullscreen_view(void) {}
 
-/* P1/P2 sprite draw (the engine's draw_p1_sprite/draw_p2_sprite are reconstructed
-   for RENDER as entity.c entity_draw_p1/p2 with explicit args; these zero-arg
-   game-loop entries are stubbed for linkability). */
-void draw_p1_sprite(void)            {}
-/* draw_p2_sprite (1000:1cea) — RECONSTRUCTED in player2.c (Phase-4 T5); stub
-   removed (dup-symbol once player2.obj links). */
+/* P1/P2 sprite draw — the zero-arg game-loop ENTRIES are now RECONSTRUCTED:
+   draw_p1_sprite (1000:1cb2) in player.c (Phase-9 T3), draw_p2_sprite (1000:1cea) in
+   player2.c (Phase-4 T5).  Their stubs are removed (dup-symbol once those objs link).
+   The explicit-arg RENDER helpers (entity_draw_p1/p2, entity.c) are distinct symbols. */
 
 void apply_level_palette(void)       {}
 
@@ -310,10 +306,9 @@ void run_n_frames(u8 n)              { (void)n; }
 void wait_keypress(void)             {}
 
 /* Grid-cell + grid-history updates.  The P2 entries (p2_update_grid_cell 1000:4b4e,
-   p2_advance_grid_history 1000:13b2) are RECONSTRUCTED in player2.c (Phase-4 T3);
-   their stubs are removed (dup-symbol once player2.obj links). */
-void p1_update_grid_cell(void)       {}
-void p1_advance_grid_history(void)   {}
+   p2_advance_grid_history 1000:13b2) are RECONSTRUCTED in player2.c (Phase-4 T3); the
+   P1 entries (p1_update_grid_cell 1000:1473, p1_advance_grid_history 1000:138c) in
+   player.c (Phase-9 T3).  All four stubs are removed (dup-symbol once those objs link). */
 
 /* p2_step_scripted_move (1000:4c14) — RECONSTRUCTED in player2.c (Phase-4 T3). */
 
@@ -322,12 +317,11 @@ void p1_advance_grid_history(void)   {}
    removed (dup-symbol once anim.obj links). */
 
 /* Player-view erase/restore/render (the engine's per-tick view present chain).
-   The P2 entries (erase_p2_view 1000:19a1, render_p2_view 1000:1c41) are
-   RECONSTRUCTED in player2.c (Phase-4 T5); their stubs are removed (dup-symbol
-   once player2.obj links). */
-void erase_p1_view(void)             {}
-void restore_bg_pending(void)        {}
-void render_p1_view(void)            {}
+   The P2 entries (erase_p2_view 1000:19a1, render_p2_view 1000:1c41) are RECONSTRUCTED
+   in player2.c (Phase-4 T5); the P1 entries (erase_p1_view 1000:19e4,
+   render_p1_view 1000:1bd7) + the shared deferred-restore helper
+   (restore_bg_pending 1000:1a20) in player.c (Phase-9 T3).  Their stubs are removed
+   (dup-symbol once those objs link). */
 
 /* Anim-channel DRAW + ERASE (per-tick) — RECONSTRUCTED in anim.c (Phase-5 T4:
    draw_anim_channels_a 1000:165e, draw_anim_channels_b 1000:17c7,
@@ -335,16 +329,16 @@ void render_p1_view(void)            {}
    are removed (dup-symbol once anim.obj's bodies link).  Their BGI-overlay present
    leaves stay faithful-signature stubs INSIDE anim.c (anim_*_leaf). */
 
-/* P1/P2 bounding-box update.  update_p2_bbox (1000:50c0) is RECONSTRUCTED in
-   player2.c (Phase-4 T5); its stub is removed (dup-symbol once player2.obj links). */
-void update_p1_bbox(void)            {}
+/* P1/P2 bounding-box update.  update_p2_bbox (1000:50c0) + update_p1_bbox (1000:5085)
+   are RECONSTRUCTED in player2.c (Phase-4 T5 / Phase-9 T3 — both write the pvp bbox
+   words player2.c owns); their stubs are removed (dup-symbol once player2.obj links). */
 
 /* int8-tick timing wait (rotate timing flags + wait for the frame tick). */
 void rotate_timing_flags_and_wait(void) {}
 
-/* FUN_1000_629c / FUN_1000_233a — post-present / post-input per-tick helpers. */
-void game_post_present_629c(void)    {}
-void game_post_input_233a(void)      {}
+/* game_post_present (1000:629c) / game_post_input (1000:233a) — RECONSTRUCTED in
+   game.c (Phase-9 T3): the per-tick deferred-contact queue step + the level-complete
+   exit-anim tick.  Their stubs are removed (dup-symbol once game.obj's bodies link). */
 
 /* handle_gameplay_input 1000:1d26 — RECONSTRUCTED in player.c (Phase 9 T2): the
    player-spine input dispatch (F1..F7 debug keys + p1_read_tile_under / poll_input /
@@ -368,6 +362,6 @@ void game_post_input_233a(void)      {}
  * not reached on the harness's captured P2 paths.  → deferred. */
 void p2_dispatch_move_state_handler(void) {}  /* DGROUP 0x870[move_state] */
 
-/* all_entries_flag_set — level-complete predicate.  Returns 0 ⇒ the do/while
-   stays in the round (a stub cannot detect completion; DEFERRED). */
-u8 all_entries_flag_set(void)        { return 0; }
+/* all_entries_flag_set (1000:3e8a) — level-complete predicate.  RECONSTRUCTED in
+   level.c (Phase-9 T3): walks the per-level move-descriptor table ANDing each
+   record's flag.  Its stub is removed (dup-symbol once level.obj's body links). */

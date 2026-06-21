@@ -902,3 +902,40 @@ void start_level(u8 world, u8 level)
 }
 
 #endif /* } !BUMPY_COPYPROT_HARNESS — end start_level + render */
+
+/* ══ PHASE 9, TASK 3 — LEVEL-COMPLETE PREDICATE ════════════════════════════════
+ *
+ * all_entries_flag_set (1000:3e8a) — the do/while level-round exit predicate
+ * game_loop (game.c) polls: returns 1 iff EVERY entry in the move-descriptor table
+ * has its [0] flag byte set (i.e. all required entries cleared), else 0 (stay in
+ * the round).  Walks the table at the far ptr move_descriptor_table (DGROUP 0x8246)
+ * from record index 1, in 9-byte strides, ANDing each record's [0] byte, until the
+ * first record whose [0] byte == 0xff (the sentinel terminator).
+ *
+ * Ported 1:1 from the disasm 1000:3e8a..3ed3 (IMUL DX=9 stride; LES BX,[0x8246];
+ * AND [BP-1],AL; CMP ES:[BX],0xff loop guard).  Index 0 is skipped (loop starts at
+ * 1); the accumulator seeds to 1 so an empty table (record 1 is the sentinel)
+ * returns 1.
+ *
+ * Lives in level.c because move_descriptor_table is level state (the per-level
+ * entry list the engine loads at start_level).  The table is RUNTIME-POPULATED
+ * engine level-data (start_level §4 "clear move-descriptor list" is still stubbed —
+ * see the start_level body); move_descriptor_table is the far ptr the engine points
+ * at it.  Previously a game_stubs.c no-op returning 0 (round never completes); now
+ * the real predicate.
+ */
+u8 __far *move_descriptor_table;   /* DGROUP 0x8246/0x8248 — per-level entry list far ptr */
+
+u8 all_entries_flag_set(void)
+{
+    u8 record_idx;
+    u8 all_set;
+
+    record_idx = 1;
+    all_set = 1;
+    while (move_descriptor_table[(u16)record_idx * 9] != 0xff) {
+        all_set = (u8)(all_set & move_descriptor_table[(u16)record_idx * 9]);
+        record_idx = (u8)(record_idx + 1);
+    }
+    return all_set;
+}

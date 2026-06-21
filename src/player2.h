@@ -144,5 +144,6 @@ void draw_p2_sprite(void);            /* 1000:1cea — build P2 object descripto
 void render_p2_view(void);            /* 1000:1c41 — P2 save-under view present     */
 void erase_p2_view(void);             /* 1000:19a1 — P2 prev-cell bg restore        */
 void update_p2_bbox(void);            /* 1000:50c0 — P2 AABB from pixel pos         */
+void update_p1_bbox(void);            /* 1000:5085 — P1 AABB (pvp P1 bbox words; T3) */
 
 #endif /* PLAYER2_H */

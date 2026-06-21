@@ -130,6 +130,10 @@ anim_chan_rec       anim_b_terminator = { 0xff, 0, 0, 0, 0, 0, 0, 0 };
 anim_chan_rec __far *anim_channels_b_tbl[ANIM_B_SLOTS + 1];
 u8                  anim_b_loop_idx;   /* DGROUP 0x8566 = last_contact_action alias */
 
+/* p1_sprite (anim.c — DGROUP 0x8884): player.c's Phase-9 T3 draw_p1_sprite references
+   it extern (OWNED by anim.c, not included here).  Host-defined so the link closes. */
+u8 __far *p1_sprite;
+
 #include "../src/player.c"
 
 /* ── test harness ─────────────────────────────────────────────────────────── */

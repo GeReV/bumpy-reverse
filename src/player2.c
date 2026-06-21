@@ -159,6 +159,9 @@ extern u8  game_mode;             /* game.c   0x792c — '0'(0x30) gate         
 extern u8  session_continue_flag; /* game.c   0x856d — round/session gate           */
 extern s16 sound_device_state;    /* player.c 0x689c — ==4 -> OPL/charger sound ids */
 extern void play_sound(u8 sound_id); /* 1000:6e11 — audio leaf (stubbed; → Phase 6) */
+/* update_p1_bbox (1000:5085, Phase-9 T3) reads the P1 pixel position (player.c). */
+extern s16 p1_pixel_x;            /* player.c 0x9290 */
+extern s16 p1_pixel_y;            /* player.c 0x9292 */
 
 /* ════════════════════════════════════════════════════════════════════════════
  *  CALLEES of p2_tile_move_check / the AI layer (Phase-4 T4)
@@ -900,6 +903,31 @@ void update_p2_bbox(void)
         pvp_p2_x1 = (s16)(p2_pixel_x + 6);   /* right  0x856 */
         pvp_p2_y0 = (s16)(p2_pixel_y - 5);   /* top    0x858 */
         pvp_p2_y1 = (s16)(p2_pixel_y + 5);   /* bottom 0x85a */
+    }
+    return;
+}
+
+/*
+ * update_p1_bbox — 1000:5085  (Phase-9 T3)
+ * --------------------------------------------------------------------------
+ * Recompute P1's AABB (DGROUP 0x84c/0x84e/0x850/0x852, owned here as the pvp_p1_*
+ * bbox words) from the P1 pixel position, unless physics is frozen.  Mirror of
+ * update_p2_bbox (50c0) — same half-open box, on P1's pixel + P1's bbox words.
+ *   p1_bbox_left   (0x84c) = p1_pixel_x - 5   (asm ADD 0xfffb)
+ *   p1_bbox_right  (0x84e) = p1_pixel_x + 6
+ *   p1_bbox_top    (0x850) = p1_pixel_y - 5   (asm ADD 0xfffb)
+ *   p1_bbox_bottom (0x852) = p1_pixel_y + 5
+ * 1:1 with the asm (1000:5091 MOV AL,[0xa0ce] freeze gate; the four ADD/MOV writes).
+ * Lives in player2.c because it writes the pvp P1 bbox words this module owns (the
+ * same words check_pvp_collision tests).
+ */
+void update_p1_bbox(void)
+{
+    if (physics_frozen == 0) {
+        pvp_p1_x0 = (s16)(p1_pixel_x - 5);   /* left   0x84c */
+        pvp_p1_x1 = (s16)(p1_pixel_x + 6);   /* right  0x84e */
+        pvp_p1_y0 = (s16)(p1_pixel_y - 5);   /* top    0x850 */
+        pvp_p1_y1 = (s16)(p1_pixel_y + 5);   /* bottom 0x852 */
     }
     return;
 }

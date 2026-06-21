@@ -118,6 +118,10 @@ u8  rng_frame;           /* player.c 0x79b3 — the AI rng-decision input       
 u8  game_mode;           /* game.c   0x792c */
 u8  physics_frozen;      /* player.c 0xa0ce */
 u8  current_level;       /* level.c  0x79b2 */
+/* Phase-9 T3: update_p1_bbox (1000:5085) — now reconstructed in player2.c — reads the
+   P1 pixel position (player.c globals).  Host-defined here for this harness's link. */
+s16 p1_pixel_x;          /* player.c 0x9290 */
+s16 p1_pixel_y;          /* player.c 0x9292 */
 
 /* Phase-4 T5: check_pvp_collision (1000:50fb) reads two more cross-module globals
    and the audio leaf play_sound.  Host-provided here (the same convention as the

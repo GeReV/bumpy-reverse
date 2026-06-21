@@ -737,6 +737,81 @@ The host cannot relocate a bare near offset to a reconstructed function, so `dis
   `validate_screens` need regenerable assets `SPROUT.BIN` / `*.PLN` absent from this checkout —
   pre-existing, unrelated; `validate_composite` needs sandbox-disabled uv.)
 
+## Phase-9 T3 module audit (P1 per-tick spine — `player.c` / `player2.c` / `level.c` / `game.c`)
+
+The symmetric Player-1 counterparts of the already-validated P2 per-tick functions,
+reconstructed 1:1 so `game_loop` drives the real P1 path (the P1 callees were the last
+per-tick stubs in `game_stubs.c`).  Each is the structural mirror of its P2 sibling in
+`player2.c`, cross-checked function-for-function; the one consistent difference is that P1
+has **no `p1_cell != 0xff` presence guard** (P1 is always present — that guard is
+P2-specific, since P2 may be absent on a 1-player level).  Validation splits the same way as
+the rest of `src/`: the scalar fns at the **semantic-state** level, the render fns at the
+**view-descriptor** level over the already-plane-exact Phase-0 blitter.
+
+| Module / function set | Fidelity | Notes |
+|---|---|---|
+| `p1_update_grid_cell` (1473) / `p1_advance_grid_history` (138c) | Transcription | Grid-cell recompute (p1 pixel − sprite origin, SAR-4−1 / SAR-3, clamp 0..0x12 / 0..0x16) + history slide.  Mirror of `p2_update_grid_cell` 4b4e / `p2_advance_grid_history` 13b2, minus the presence guard.  Semantic-state validated (the grid scalars). |
+| `render_p1_view` (1bd7) / `erase_p1_view` (19e4) | Transcription | View scroll compute + the 4 descriptor field-writes (render +6/+8/+1e/+20; erase +14/+16/+1e/+20) then the present/restore leaf.  Mirror of `render_p2_view` 1c41 / `erase_p2_view` 19a1.  Descriptor-level validated over the plane-exact blitter; the present leaf is a faithful-signature stub (`p1_render_view_leaf` / `p1_restore_view_leaf`), same convention as the P2 wrappers + `anim.c`. |
+| `draw_p1_sprite` (1cb2) | Transcription | Build the `p1_sprite` obj descriptor (+0 px, +2 py, +4 frame=p1_move_anim) then `blit_sprite(0x792e,0x203b)`; skipped on the hidden sentinel (p1_move_anim==100).  Mirror of `draw_p2_sprite` 1cea.  **Reconciliation:** `draw_p1_sprite` is the ZERO-ARG game-loop ENTRY (reads live globals, writes the engine's p1_sprite obj); `entity.c`'s `entity_draw_p1` is the EXPLICIT-ARG render helper used by the validated spawn/composite path.  Two distinct symbols (exactly as P2: `draw_p2_sprite` vs `entity_draw_p2`); no duplicate.  Descriptor-level validated. |
+| `update_p1_bbox` (5085) | Transcription | P1 AABB from pixel pos (x∈[px−5,px+6], y∈[py−5,py+5]) unless physics frozen.  Mirror of `update_p2_bbox` 50c0.  **Lives in `player2.c`** because it writes the pvp P1 bbox words (0x84c/0x84e/0x850/0x852) that module owns — the same words `check_pvp_collision` tests.  Semantic-state validated. |
+| `restore_bg_pending` (1a20) | Transcription | Deferred bg-restore: if `pending_erase_count != 0`, decrement + write the saved cell into the pending-erase view (+6/+8/+14/+16) + restore leaf.  No P1/P2 analog (shared deferred-erase helper, staged by `p1_collect_item_score`).  Owns the pending-erase DGROUP globals in `player.c`.  Scalar + descriptor validated. |
+| `all_entries_flag_set` (3e8a) | Transcription | Level-complete predicate the `game_loop` round-exit polls: walk the per-level move-descriptor table (9-byte stride from index 1 until a 0xff sentinel) ANDing each record's [0] flag → 1 iff all set.  Was a `game_stubs.c` no-op returning 0 (round never completed); now the real predicate.  **Lives in `level.c`** (move_descriptor_table is level state).  Semantic-state validated (the AL return). |
+| `init_view_anim_descriptors` (535e) | Transcription | `run_game_session` one-time setup of all 15 view descriptor structs (P1/P2 render+erase, channel-A/B anim clear/draw/erase for both player sides, the status-row render descriptor, the pending-erase view).  Ported 1:1 from the disasm field-by-field.  **Lives in `game.c`** (session-setup; references view far ptrs owned across modules).  Descriptor-level validated (the words it writes per view). |
+| `game_post_present` (629c) | Transcription | Per-tick post-present helper — **REAL game logic, reconstructed** (decompiled fresh; the Ghidra auto-decompiler failed on the far-ptr walk but the disasm is clean).  Drives a deferred-contact event queue: a far ptr walks a near event buffer; a per-event countdown gates a delayed `apply_contact_action(0x18)` + device-dependent contact sound.  No port I/O / CRTC.  **Lives in `game.c`.** |
+| `game_post_input` (233a) | Transcription | Per-tick post-input helper — REAL game logic: the level-complete EXIT-animation tick (counts `level_complete_anim_counter` up to 9, then relocates `anim_target_cell = level_exit_cell` + fires `apply_cell_animation('Z')`).  **Lives in `game.c`.** |
+
+**Phase-9 T3 deviations (all in-code RECONSTRUCTION FIDELITY notes present):**
+
+- **Present/blit leaf stubs.** `render_p1_view` / `erase_p1_view` / `restore_bg_pending` /
+  `draw_p1_sprite` issue the engine's far-ptr present/blit leaf (`render_player_view` 93b8 /
+  `restore_bg_view` 80bc / `blit_sprite` 942a) as a faithful-signature stub
+  (`p1_render_view_leaf` / `p1_restore_view_leaf` / `p1_blit_sprite_leaf`) — the descriptor
+  field-writes are the validated output, over the already-plane-exact Phase-0 blitter (same
+  convention as `player2.c`'s P2 wrappers and `anim.c`'s `anim_*_leaf`).
+- **DS-register seg store.** `init_view_anim_descriptors` writes the view far-ptr SEG halves
+  as the runtime DS register; the source default is the static-image DGROUP literal `0x203b`
+  via `GAME_DGROUP_RUNTIME_SEG`, the descriptor gate overrides it to the captured runtime
+  `0x114b` (same mechanism as `anim.c`'s `ANIM_DGROUP_RUNTIME_SEG`).  `render_descriptor_ptr`'s
+  +0x22..+0x25 writes fall outside the oracle's 0x22-byte capture window and are not gated
+  (documented in the harness).
+- **Four unnamed P2-side anim views.** The view descriptors at DGROUP 0x8c8/0x8cc/0x8d8/0x8dc
+  are unnamed in the engine (no Ghidra symbol; written only by init); owned + named in `game.c`.
+- **`game_post_present` / `game_post_input` not independently gated.** Both reconstruct REAL
+  game logic and host-compile (the validate script extracts their verbatim bodies for the
+  harness), but their effects flow only through stubbed leaves (`apply_contact_action`,
+  `play_sound`, `apply_cell_animation`) — so they are link- + compile-validated, not gated by a
+  per-fn differential.  Stated plainly (the blitter/sound-L5 precedent for documented-but-not-
+  runtime-gated reconstructions).
+- **`deferred_contact_buf` reset target.** `game_post_present` resets its queue cursor to the
+  engine's literal DS:0x886 near offset; reconstructed as the module-owned `deferred_contact_buf`
+  head (functionally identical — the cursor walks the buffer; the literal offset is not
+  load-bearing for the walk).
+
+**Phase-9 T3 validation method:** per-function semantic-state + view-descriptor differential
+(`tools/p1_spine_oracle.py` boots the real `BUMPY.EXE`, loads level 1, hooks the 9 captured P1
+fns entry+exit, captures the P1 grid/bbox scalars + the all_entries predicate return + the
+view/obj descriptor bytes; `tools/p1_spine_ctest.c` seeds each record's entry, calls the real
+reconstructed C fn, asserts the exit scalars / the descriptor fields the fn writes).  The
+descriptor gate is over the already-plane-exact Phase-0 blitter (no a000/a200 re-litigation).
+**Gate: `validate_p1_spine` PASS=30 FAIL=0 DESC_CHECKED=17**, perturbation-proven (the
+`--perturb` run corrupts a seeded field per record and the gate catches 25 — a genuine
+differential).
+
+## Phase-9 T3 status (P1 per-tick spine)
+
+- **Reconstructed 1:1**: `p1_update_grid_cell` (1473), `p1_advance_grid_history` (138c),
+  `render_p1_view` (1bd7), `erase_p1_view` (19e4), `update_p1_bbox` (5085), `draw_p1_sprite`
+  (1cb2), `restore_bg_pending` (1a20) [all `player.c`/`player2.c`], `all_entries_flag_set`
+  (3e8a) [`level.c`], `init_view_anim_descriptors` (535e), `game_post_present` (629c),
+  `game_post_input` (233a) [all `game.c`] — verified via Ghidra MCP + raw disasm; un-stubbed
+  from `game_stubs.c` (no duplicate symbols).  `game_loop` now drives the real P1 path.
+- **Gate**: `validate_p1_spine` PASS=30 FAIL=0 DESC_CHECKED=17 (perturbation-proven).
+- **No-regression (2026-06-21)**: `validate_physics` PASS=17357 FAIL=0 UNPORTED=0;
+  `validate_player` PASS; `validate_p2` PASS=74 FAIL=0 UNPORTED=0 DESC_CHECKED=1;
+  `validate_anim` PASS=45 FAIL=0 UNPORTED=1 DESC_CHECKED=28; `validate_spawn` FAIL=0.
+  `BUMPY.EXE` links clean (227.8K, Open Watcom 16-bit DOS; the P1 spine bodies now in
+  `player.obj`/`player2.obj`/`level.obj`/`game.obj`, no duplicate symbols).
+
 ## Phase-1 slice status (vertical slice — session → loop → modules)
 
 As of Phase-1 Task 7 the reconstructed `src/` tree forms a complete, **linkable**

@@ -362,4 +362,36 @@ extern u8 contact_sound_lut_opl_272e[0x30];/* 0x272e */
 extern u8 contact_sound_lut_std_274e[0x30];/* 0x274e */
 extern u8 contact_tiledef_tbl[256 * 4];    /* 0x3256/0x3258 (action*4 -> far ptr) */
 
+/* ══ PHASE 9, TASK 3 — PLAYER-1 PER-TICK SPINE (grid / view / draw) ════════════
+ * The symmetric P1 counterparts of the validated P2 per-tick fns in player2.c.
+ * Thin game-loop wrappers (run once per tick by game_loop): grid-cell recompute,
+ * grid-history slide, view present (render/erase), sprite draw, deferred bg restore.
+ * Reconstructed 1:1 in player.c; each cites its engine address there. */
+void p1_update_grid_cell(void);       /* 1000:1473 (mirror p2_update_grid_cell 4b4e) */
+void p1_advance_grid_history(void);   /* 1000:138c (mirror p2_advance_grid_history 13b2) */
+void render_p1_view(void);            /* 1000:1bd7 (mirror render_p2_view 1c41) */
+void erase_p1_view(void);             /* 1000:19e4 (mirror erase_p2_view 19a1) */
+void restore_bg_pending(void);        /* 1000:1a20 (deferred bg-restore helper) */
+void draw_p1_sprite(void);            /* 1000:1cb2 (mirror draw_p2_sprite 1cea; zero-arg
+                                         game-loop ENTRY — distinct from entity_draw_p1) */
+
+/* P1 grid-cell history / view-scroll DGROUP globals (DEFINED in player.c). */
+extern s16 p1_grid_x_new;       /* DGROUP 0x9d36 */
+extern s16 p1_grid_y_new;       /* DGROUP 0x9d38 */
+extern s16 p1_grid_x;           /* DGROUP 0x857a */
+extern s16 p1_grid_y;           /* DGROUP 0x857c */
+extern s16 p1_grid_x_prev;      /* DGROUP 0x8882 */
+extern s16 p1_grid_y_prev;      /* DGROUP 0x8e88 */
+extern s16 p1_scroll_x;         /* DGROUP 0x9ba4 */
+extern s16 p1_scroll_y;         /* DGROUP 0x9b9c */
+/* P1 sprite-object + render/erase view-descriptor far pointers (DEFINED in player.c). */
+extern u8 __far *p1_sprite;     /* DGROUP 0x8884/0x8886 */
+extern u8 __far *p1_view;       /* DGROUP 0x8b8/0x8ba */
+extern u8 __far *p1_erase_view; /* DGROUP 0x8c4/0x8c6 */
+/* Deferred background-restore (pending-erase) globals (DEFINED in player.c). */
+extern u8       pending_erase_count;  /* DGROUP 0xa1a8 */
+extern s16      pending_erase_x;      /* DGROUP 0x9b9a */
+extern s16      pending_erase_y;      /* DGROUP 0x9ba2 */
+extern u8 __far *pending_erase_view;  /* DGROUP 0x8e4/0x8e6 */
+
 #endif /* PLAYER_H */

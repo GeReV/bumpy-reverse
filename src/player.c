@@ -2707,3 +2707,269 @@ void handle_gameplay_input(void)
     }
     return;
 }
+
+/* ══ PHASE 9, TASK 3 — PLAYER-1 PER-TICK SPINE (grid / view / draw) ═════════════
+ *
+ * The symmetric P1 counterparts of the VALIDATED P2 per-tick functions in
+ * player2.c (cross-checked structure-for-structure against them).  These are THIN
+ * game-loop wrappers run once per tick by game_loop (src/game.c): recompute P1's
+ * grid cell from its pixel position, slide the grid history, compute the view
+ * scroll + present the P1 view (render/erase), draw the P1 sprite, and run any
+ * deferred background restore.  Each is ported 1:1 from the live Ghidra decomp +
+ * raw disassembly (addresses cited per-fn); the engine's Turbo-C stack-probe
+ * prologue (`if (stack_check_limit <= &stack...) borland_stack_overflow()`) is the
+ * per-fn stack-overflow guard, omitted here as elsewhere in src/ (a pure runtime
+ * check, no observable state).
+ *
+ * P1 has NO `p1_cell != 0xff` presence guard (P1 is always present; that guard is
+ * P2-specific — P2 may be absent on a 1-player level).  This is the one consistent
+ * structural difference vs the p2_* versions: P1 runs unconditionally.
+ *
+ * RECONSTRUCTION FIDELITY (the present/blit leaf calls) — identical to player2.c's
+ * P2 render wrappers: the engine's render leaves are FAR-POINTER calls taking the
+ * descriptor's (off,seg):
+ *     render_p1_view  -> render_player_view(p1_view off,seg)   (1000:93b8)
+ *     erase_p1_view   -> restore_bg_view  (p1_erase_view off,seg)(1000:80bc)
+ *     restore_bg_pending -> restore_bg_view(pending_erase_view off,seg)(1000:80bc)
+ *     draw_p1_sprite  -> blit_sprite(0x792e, DS=0x203b)        (1000:942a)
+ * Phase-0 reconstructed those render leaves as behavior-faithful semantic
+ * reconstructions driven by host WORK BUFFERS (see src/bgi_overlay.h /
+ * src/entity.c); `blit_sprite` was inlined into its validated pipeline stages and
+ * has no callable symbol.  These game-loop wrappers do not hold that work-buffer
+ * render context, so the present/blit LEAF is modeled here as a faithful-signature
+ * stub (p1_render_view_leaf / p1_restore_view_leaf / p1_blit_sprite_leaf)
+ * preserving the call site 1:1; the OBSERVABLE output — the descriptor field-writes
+ * into the view / p1_sprite struct — IS produced here and is the validated gate
+ * (tools/p1_spine_ctest.c, over the plane-exact Phase-0 blitter).  This mirrors
+ * draw_p2_sprite / render_p2_view / erase_p2_view in player2.c exactly.
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/* P1 grid-cell history + view-scroll DGROUP globals (DEFINED here).  Addresses read
+   live from the disassembly operands of the P1 fns (Ghidra DGROUP 0x203b offsets). */
+s16 p1_grid_x_new;       /* DGROUP 0x9d36 — freshly-computed col (p1_update_grid_cell) */
+s16 p1_grid_y_new;       /* DGROUP 0x9d38 — freshly-computed row */
+s16 p1_grid_x;           /* DGROUP 0x857a — current col (after grid-history advance)  */
+s16 p1_grid_y;           /* DGROUP 0x857c — current row */
+s16 p1_grid_x_prev;      /* DGROUP 0x8882 — previous col */
+s16 p1_grid_y_prev;      /* DGROUP 0x8e88 — previous row */
+s16 p1_scroll_x;         /* DGROUP 0x9ba4 — P1 view scroll X (render/erase view) */
+s16 p1_scroll_y;         /* DGROUP 0x9b9c — P1 view scroll Y */
+
+/* P1 sprite-object + render/erase view-descriptor far pointers.  p1_sprite is the
+   P1 object struct (DGROUP 0x8884/0x8886); p1_update_grid_cell reads its origin
+   words at +0x14 (x) / +0x16 (y); draw_p1_sprite writes its x/y/frame fields.  It is
+   OWNED by anim.c (the channel-A draw path also stamps it) — extern only here.
+   p1_view (0x8b8/0x8ba) / p1_erase_view (0x8c4/0x8c6) are the render/restore view
+   descriptors, owned here.  All set up by init_view_anim_descriptors (game.c). */
+extern u8 __far *p1_sprite; /* anim.c — DGROUP 0x8884/0x8886 — P1 sprite/object far ptr */
+u8 __far *p1_view;       /* DGROUP 0x8b8/0x8ba — render_player_view descriptor far ptr  */
+u8 __far *p1_erase_view; /* DGROUP 0x8c4/0x8c6 — restore_bg_view descriptor far ptr     */
+
+/* Deferred background-restore (pending-erase) DGROUP globals (restore_bg_pending). */
+u8       pending_erase_count;  /* DGROUP 0xa1a8 — # pending cell restores               */
+s16      pending_erase_x;      /* DGROUP 0x9b9a — pending cell col                       */
+s16      pending_erase_y;      /* DGROUP 0x9ba2 — pending cell row                       */
+u8 __far *pending_erase_view;  /* DGROUP 0x8e4/0x8e6 — restore_bg_view descriptor far ptr */
+
+/* Present/blit leaves — faithful-signature stubs (see the FIDELITY note above). */
+void p1_render_view_leaf(u8 __far *view);   /* render_player_view 1000:93b8 — leaf */
+void p1_restore_view_leaf(u8 __far *view);  /* restore_bg_view    1000:80bc — leaf */
+void p1_blit_sprite_leaf(u16 obj_off, u16 obj_seg); /* blit_sprite 1000:942a — leaf */
+
+/*
+ * p1_update_grid_cell — 1000:1473
+ * --------------------------------------------------------------------------
+ * Recompute P1's working grid cell (p1_grid_x_new/y_new) from the P1 pixel position
+ * minus the sprite origin (read from the P1 sprite object at +0x14 / +0x16), then
+ * clamp col to 0..0x12 and row to 0..0x16.  Mirror of p2_update_grid_cell (4b4e),
+ * minus the P2 presence guard (P1 is always present).
+ *
+ * The X divide is an arithmetic SAR by 4 then -1; the Y divide is SAR by 3 (three
+ * 1-bit SARs in the asm 149f/14a1/14a3) — reproduced as signed >> 4 / >> 3.
+ */
+void p1_update_grid_cell(void)
+{
+    s16 ox = *(s16 __far *)(p1_sprite + 0x14);        /* sprite origin x */
+    s16 oy = *(s16 __far *)(p1_sprite + 0x16);        /* sprite origin y */
+
+    p1_grid_x_new = (s16)(((p1_pixel_x - ox) >> 4) - 1);
+    p1_grid_y_new = (s16)((p1_pixel_y - oy) >> 3);
+
+    if (p1_grid_x_new < 0) {
+        p1_grid_x_new = 0;
+    } else if (p1_grid_x_new > 0x12) {
+        p1_grid_x_new = 0x12;
+    }
+    if (p1_grid_y_new < 0) {
+        p1_grid_y_new = 0;
+    } else if (p1_grid_y_new > 0x16) {
+        p1_grid_y_new = 0x16;
+    }
+    return;
+}
+
+/*
+ * p1_advance_grid_history — 1000:138c
+ * --------------------------------------------------------------------------
+ * Slide P1's grid-cell history one step (cur -> prev, new -> cur).  Mirror of
+ * p2_advance_grid_history (13b2), minus the P2 presence guard.
+ *   p1_grid_x_prev = p1_grid_x; p1_grid_y_prev = p1_grid_y;
+ *   p1_grid_x = p1_grid_x_new;  p1_grid_y = p1_grid_y_new;
+ */
+void p1_advance_grid_history(void)
+{
+    p1_grid_x_prev = p1_grid_x;
+    p1_grid_y_prev = p1_grid_y;
+    p1_grid_x = p1_grid_x_new;                        /* new col (0x9d36) -> cur */
+    p1_grid_y = p1_grid_y_new;                        /* new row (0x9d38) -> cur */
+    return;
+}
+
+/*
+ * render_p1_view — 1000:1bd7
+ * --------------------------------------------------------------------------
+ * P1 view-copy (save-under): compute the P1 scroll offsets from the P1 grid cell,
+ * write the view geometry into the render descriptor at p1_view (DGROUP 0x8b8/0x8ba),
+ * then present it via render_player_view.  Mirror of render_p2_view (1c41), minus
+ * the P2 presence guard.
+ *   p1_scroll_x = (p1_grid_x > 0x10) ? 0x14 - p1_grid_x : 4
+ *   p1_scroll_y = (p1_grid_y > 0x15) ? 0x19 - p1_grid_y : 4
+ *   view[+6]  = p1_grid_x   view[+8]  = p1_grid_y
+ *   view[+1e] = p1_scroll_x view[+20] = p1_scroll_y
+ *   render_player_view(p1_view off, seg)                 (present leaf — see note)
+ *
+ * 1:1 with the asm 1bd7.. (MOV [0x9ba4],4 ; CMP [0x857a],0x10 ; ... ; LES BX,[0x8b8] ;
+ * ES:[BX+6/8/1e/20] writes ; PUSH [0x8ba],[0x8b8] ; CALL 0x93b8).
+ */
+void render_p1_view(void)
+{
+    u8 __far *view;
+
+    p1_scroll_x = 4;
+    if (p1_grid_x > 0x10) {
+        p1_scroll_x = (s16)(0x14 - p1_grid_x);
+    }
+    p1_scroll_y = 4;
+    if (p1_grid_y > 0x15) {
+        p1_scroll_y = (s16)(0x19 - p1_grid_y);
+    }
+
+    view = p1_view;
+    *(s16 __far *)(view + 0x06) = p1_grid_x;
+    *(s16 __far *)(view + 0x08) = p1_grid_y;
+    *(s16 __far *)(view + 0x1e) = p1_scroll_x;
+    *(s16 __far *)(view + 0x20) = p1_scroll_y;
+    p1_render_view_leaf(p1_view);                                /* present leaf */
+    return;
+}
+
+/*
+ * erase_p1_view — 1000:19e4
+ * --------------------------------------------------------------------------
+ * Restore the background under P1's PREVIOUS cell: write the previous-cell grid
+ * coords + the current scroll offsets into the erase descriptor at p1_erase_view
+ * (DGROUP 0x8c4/0x8c6), then restore via restore_bg_view.  Mirror of erase_p2_view
+ * (19a1), minus the P2 presence guard.
+ *   view[+14] = p1_grid_x_prev   view[+16] = p1_grid_y_prev
+ *   view[+1e] = p1_scroll_x      view[+20] = p1_scroll_y
+ *   restore_bg_view(p1_erase_view off, seg)              (present leaf — see note)
+ *
+ * 1:1 with the asm 19f0 LES BX,[0x8c4] ; ES:[BX+14]=[0x8882] ; ES:[BX+16]=[0x8e88] ;
+ * ES:[BX+1e/20]=scroll ; PUSH [0x8c6],[0x8c4] ; CALL 0x80bc.
+ */
+void erase_p1_view(void)
+{
+    u8 __far *view;
+
+    view = p1_erase_view;
+    *(s16 __far *)(view + 0x14) = p1_grid_x_prev;
+    *(s16 __far *)(view + 0x16) = p1_grid_y_prev;
+    *(s16 __far *)(view + 0x1e) = p1_scroll_x;
+    *(s16 __far *)(view + 0x20) = p1_scroll_y;
+    p1_restore_view_leaf(p1_erase_view);                         /* restore leaf */
+    return;
+}
+
+/*
+ * restore_bg_pending — 1000:1a20
+ * --------------------------------------------------------------------------
+ * If a deferred background-restore is queued (pending_erase_count != 0), decrement
+ * the count and restore the saved cell (pending_erase_x/y) via restore_bg_view.
+ * The cell coords are written into BOTH the view[+6/+8] (grid) AND view[+14/+16]
+ * (origin) descriptor fields.  No P1/P2 analog — this is the shared deferred-erase
+ * helper (staged by p1_collect_item_score, items.c).
+ *   view[+6]  = pending_erase_x   view[+8]  = pending_erase_y
+ *   view[+14] = pending_erase_x   view[+16] = pending_erase_y
+ *   restore_bg_view(pending_erase_view off, seg)         (restore leaf — see note)
+ *
+ * 1:1 with the asm 1a2c CMP [0xa1a8],0 ; 1a33 DEC [0xa1a8] ; LES BX,[0x8e4] ;
+ * ES:[BX+6]=[0x9b9a] ; ES:[BX+8]=[0x9ba2] ; ES:[BX+14/16] same ; CALL 0x80bc.
+ */
+void restore_bg_pending(void)
+{
+    u8 __far *view;
+
+    if (pending_erase_count != 0) {
+        pending_erase_count = (u8)(pending_erase_count - 1);
+        view = pending_erase_view;
+        *(s16 __far *)(view + 0x06) = pending_erase_x;
+        *(s16 __far *)(view + 0x08) = pending_erase_y;
+        *(s16 __far *)(view + 0x14) = pending_erase_x;
+        *(s16 __far *)(view + 0x16) = pending_erase_y;
+        p1_restore_view_leaf(pending_erase_view);                /* restore leaf */
+    }
+    return;
+}
+
+/*
+ * draw_p1_sprite — 1000:1cb2
+ * --------------------------------------------------------------------------
+ * Build P1's sprite object descriptor at the far ptr p1_sprite (DGROUP 0x8884/0x8886)
+ * from the current P1 state, then blit it.  Skipped when P1 is hidden
+ * (p1_move_anim == 100 / 0x64).  Mirror of draw_p2_sprite (1cea) — the P2 version
+ * gates on p2_cell!=0xff and adds p2_frame_base; the P1 version gates on the hidden
+ * sentinel and uses p1_move_anim directly.
+ *   obj[+4] (word) = p1_move_anim         (frame index)
+ *   obj[+0] (word) = p1_pixel_x
+ *   obj[+2] (word) = p1_pixel_y
+ *   blit_sprite(0x792e, DS=0x203b)        (present leaf — see note)
+ *
+ * 1:1 with the asm 1cbe CMP word[0x824a],0x64 (hidden gate) ; 1cc5 LES BX,[0x8884] ;
+ * +4 = [0x824a] (move_anim) ; +0 = [0x9290] (px) ; +2 = [0x9292] (py) ;
+ * PUSH DS ; PUSH 0x792e ; CALL 0x942a.  draw_p1_sprite reads p1_move_anim as a WORD
+ * (CMP word ptr); the byte global lives at 0x824a (high byte 0 in the hidden test).
+ *
+ * RECONCILIATION with entity.c's entity_draw_p1: entity_draw_p1 is the explicit-arg
+ * RENDER HELPER (planes/dg/bank/view + pixel/anim args) used by the validated
+ * spawn/composite blit path (src/entity.c) — it builds an OBJ_SIZE scratch struct and
+ * runs the full plane-exact pipeline.  This draw_p1_sprite is the ZERO-ARG GAME-LOOP
+ * ENTRY (1000:1cb2): it reads the live P1 globals, writes the engine's p1_sprite obj
+ * descriptor (DGROUP 0x792e pointee via the 0x8884 far ptr), and issues the present
+ * leaf.  Exactly the same split as P2 (draw_p2_sprite here vs entity_draw_p2 in
+ * entity.c).  Only ONE symbol named draw_p1_sprite exists (this one); entity_draw_p1
+ * is a distinct symbol — no duplicate.
+ */
+void draw_p1_sprite(void)
+{
+    u8 __far *obj;
+
+    if (p1_move_anim != 100) {
+        obj = p1_sprite;
+        *(u16 __far *)(obj + 4) = (u16)p1_move_anim;                  /* frame */
+        *(u16 __far *)(obj + 0) = (u16)p1_pixel_x;                    /* x     */
+        *(u16 __far *)(obj + 2) = (u16)p1_pixel_y;                    /* y     */
+        p1_blit_sprite_leaf(0x792e, 0x203b);                         /* present leaf */
+    }
+    return;
+}
+
+/* ── Present/blit leaf stubs (P1 spine) — faithful-signature no-ops; preserve the
+ *    render-core call sites 1:1 without re-driving the Phase-0 work-buffer core (the
+ *    same convention as player2.c's p2_*_leaf / anim.c's anim_*_leaf). */
+void p1_render_view_leaf(u8 __far *view)  { (void)view; return; }
+void p1_restore_view_leaf(u8 __far *view) { (void)view; return; }
+void p1_blit_sprite_leaf(u16 obj_off, u16 obj_seg)
+{
+    (void)obj_off; (void)obj_seg;
+    return;
+}
