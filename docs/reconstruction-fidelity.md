@@ -30,7 +30,7 @@ feasible, bring back toward 1:1. Each module's `.h` carries the detailed in-code
 | `sprite_chain.c` | Transcription | `sprite_blit_object_list` (0e48) + `sprite_blit_clip` (0f50) + `sprite_blit_setup` (103d) reconstructed 1:1 from the clean decomp. `sprite_blit_build_desc` is a thin public wrapper. One documented residual deviation: `sprite_blit_setup` fills the descriptor rather than tail-calling `sprite_blit_planar_vga` (the composite invokes the blitter separately). Validated descriptor-exact (17/17). |
 | `entity.c` | Mixed | Layer-C/A/B placement + `draw_p1/p2_sprite` are transcriptions of the `spawn_and_draw_level_entities` (`1000:2a78`) loops and the draw fns. `entity_blit_object` is a shared helper the engine doesn't have (the engine inlines/repeats the prepare→blit per call). `entity_draw_layer_a/_b` now mirror the engine's full 3-step draw sequence: **erase (`restore_bg_view`) → blit (`blit_sprite`) → save-under (`render_player_view`)** — both erase and save-under are STRUCTURALLY PRESENT, called via `nop_view`, and are effective NOPs (code-embedded views in the engine; see `bgi_overlay.c` entry). Composite unchanged: 54152/64000 (world-8 live page). See [rendering-pipeline.md](rendering-pipeline.md). |
 | `main.c` | **Reimplementation deviation (CRT/startup)** | The original's `main` and ~60 CRT-garble startup functions (TC++ CRT0, `__cstart`, etc.) are NOT reproduced — they are not decompilable and are not meaningful. This reconstruction uses the Open Watcom CRT with a standard `main`. As of Phase-1 Task 7 `main` is WIRED TO THE REAL SESSION: it calls `init_game_session_state()` then `run_game_session()` (both reconstructed in `game.c`); the Task-3 stubs are gone. |
-| `game.c` | Transcription (spine) | The four session/loop functions ported 1:1 from the decomp (cross-checked live via Ghidra MCP): `run_game_session` (1000:0258), `init_game_session_state` (1000:0282), `reset_game_state` (1000:0bf9), `game_loop` (1000:0c18). Control flow, comparisons and call order reproduced verbatim. Owns the cross-module session/round/tick control globals (`round_continue_flag` 0x9d30, `session_continue_flag` 0x856d, `frame_abort_flag` 0x928d), the `tilemap` far pointer (0xa0d8 — no single module home), and the menu/score/level-index scratch. **Deviations** (all noted in-code): (a) the per-function Turbo-C `stack_check_limit`/`FUN_ab83` stack-check prologue is CRT scaffolding, omitted (OW CRT does its own); (b) `init_game_session_state`'s VGA mode set is surfaced via `video_set_mode_0d()` so the boot harness has an observable mode 0x0D (engine sets it inside the FUN_9821 CRTC block); (c) the ~46 trailing UNNAMED `DAT_203b_xxxx` resets in `init_game_session_state` are collapsed into the documented `reset_opaque_session_globals()` stub rather than invented as named externs. |
+| `game.c` | Transcription (spine) | The four session/loop functions ported 1:1 from the decomp (cross-checked live via Ghidra MCP): `run_game_session` (1000:0258), `init_game_session_state` (1000:0282), `reset_game_state` (1000:0bf9), `game_loop` (1000:0c18). Control flow, comparisons and call order reproduced verbatim. Owns the cross-module session/round/tick control globals (`round_continue_flag` 0x9d30, `session_continue_flag` 0x856d, `frame_abort_flag` 0x928d), the `tilemap` far pointer (0xa0d8 — no single module home), and the menu/score/level-index scratch. **Deviations** (all noted in-code): (a) the per-function Turbo-C `stack_check_limit`/`FUN_ab83` stack-check prologue is CRT scaffolding, omitted (OW CRT does its own); (b) `init_game_session_state`'s VGA mode set is surfaced via `video_set_mode_0d()` so the boot harness has an observable mode 0x0D (engine sets it inside the FUN_9821 CRTC block); (c) the ~46 trailing UNNAMED `DAT_203b_xxxx` resets in `init_game_session_state` are collapsed into the documented `reset_opaque_session_globals()` stub rather than invented as named externs. As of Phase-9 T3/T4 `game.c` also owns the reconstructed `init_view_anim_descriptors` / `game_post_present` / `game_post_input` per-tick spine fns, and `game_loop` drives the real P1 path (the carve-out boundary is gated by `validate_integration.sh`); see the Phase-9 sections. |
 | `game_stubs.c` | **Genuine carve-outs (Phase-9 T4)** | NOT a reconstruction. Faithful-SIGNATURE no-op/benign-default stubs for the engine functions the reconstructed call graph references but that are deliberately NOT reconstructed — every remaining symbol is a documented CARVE-OUT, in the same spirit as the self-modifying BGI-overlay blitters and the L5 timer ISR. As of Phase-9 T4 the file holds **58 carve-out function symbols + `mode_script_tbl`**, all in one of these classes: HARDWARE-INIT (the `init_game_session_state` CRTC/audio/resource/IRQ block), CRTC PAGE-FLIP (`present_frame`), int8-TIMING (`run_n_frames`/`rotate_timing_flags_and_wait`/`wait_keypress`), ENGINE STANDALONE LOADER (`load_current_level_data` — slice loads via `level.c start_level`), NEVER-DECOMPILED (`reset_round_counters` = `init_round_state` 0x31de; Ghidra-labelled but decompilation fails), RENDER-CORE LEAVES (`init_sprite_structs`, `init_fullscreen_view_desc`, `setup_fullscreen_view`, `apply_level_palette`, `show_text_screen`, `show_pause_screen`, `fun_75a2_poll_action`), OUT-OF-SCOPE SOUND L4/L6 drivers + player handler-table targets + the P2 indirect-call backend, and the `dos_abort` CRT thunk. Through Phases 2–8 most of the original deferral list was un-stubbed into real module bodies (player/player2/anim/screens/sound/spawn/level); what remains is carve-out-only. **NAMING:** symbols still spelled `FUN_1000_<off>` (e.g. `FUN_1000_6183` = `sweep_active_entities`) have canonical Ghidra labels but are kept `FUN_`-spelled to mark "unported carve-out, link-only" and to avoid churning the validated call sites that reference them; the canonical name is cited in-code. The carve-out boundary (which `game_loop` callees are genuine hardware/CRT/int8-timing leaves vs reconstructed game logic) is ENFORCED by `tools/validate_integration.sh`: it links `BUMPY.EXE` (no dup symbols), asserts every `game_loop` per-tick callee resolves to its real module `.obj` (not `game_stubs.obj`), and asserts `game_stubs.obj`'s symbol set ⊆ the explicit carve-out allowlist; a built-in `--self-test` proves the gate fails when a spine callee regresses to a stub. |
 | `level.c` | Transcription (compile/link) | `start_level` (1000:2d14) level-1 path wired to the validated Phase-0 render API; see prior audit. Owns `current_level` (0x8f40), `copyprotect_flag`, `p1_start_x/y`, `current_entity_index`. **No ownership edits were needed in Task 7** — its globals were already cleanly owned. |
 | `input.c` | Transcription | Pure keyboard-input layer ported 1:1 (install_keyboard_isr 798a, get_key_state 7ab4, flush_keyboard_buffer 7b01, input_state_clear 65d2, poll_input 1dde, read_input_action 75a2). Owns `input_state` (0x8244), `g_key_state_table` (0x4d42), `g_joystick_handler_table` (0x4cf2), `g_keyboard_isr_installed` (0x4dc4). Its `extern int dos_abort(void)` (faithful abort-path control flow) is resolved by a `game_stubs.c` stub for the linked build. **No ownership edits were needed in Task 7.** |
@@ -78,8 +78,8 @@ As of Phase-2 Task 4, the Player-1 physics state machine is **reconstructed and 
 2. **Player 2** — Phase 4.
 3. **Anim-channel / FX allocator** (`apply_cell_animation` 69aa) — Phase 5.
 4. **Sound** (`play_sound`, `play_state_sound`) — Phase 6.
-5. **`p1_movement_dispatch` call-through host model** — the dispatcher's handler table holds raw engine near-offsets; a host-safe call-through table model is needed before end-to-end host replay can drive the full game-mode handler chain. Not a physics gap; deferred.
-6. **int8-synced end-to-end gate** — the Unicorn capture granularity does not match the engine's physics-frame rate. A frame-accurate capture (DOSBox path) is needed before the full game-loop can be replay-validated tick-for-tick. Deferred.
+5. **`p1_movement_dispatch` call-through host model** — **RESOLVED in Phase 9 (T2).** The dispatcher's handler table (`move_step_dispatch_tbl`, DGROUP 0x43c0) holds raw engine near-offsets; a host-safe call-through model was needed before end-to-end host replay could drive the full game-mode handler chain. Phase-9 T2 added `move_step_handler_for_offset` (a byte-table-unchanged offset→host-fn resolver), making `dispatch_move_step` / `p1_movement_dispatch` host-callable; the 624 `UNPORTED` records converted to PASS (`validate_physics` UNPORTED 624→0). See the Phase-9 T2 section.
+6. **int8-synced end-to-end gate** — the Unicorn capture granularity does not match the engine's physics-frame rate. A frame-accurate capture (DOSBox path) is needed before the full game-loop can be replay-validated tick-for-tick. Deferred (still open after Phase 9).
 
 ## Phase-3 module audit (item/scoring/exit game-state — `items.c`)
 
@@ -360,10 +360,14 @@ As of Phase-6 Task 6, the complete sound subsystem is **reconstructed**:
 
 **Deferred from Phase 6:** none specific to sound — the complete subsystem
 (dispatch + device + tone-engine + hardware drivers + ISR sequencer) is reconstructed and
-validated (L1–L4) / documented (L5). The **int8-synced end-to-end gate** remains the single
+validated (L1–L4) / documented (L5). The **int8-synced end-to-end gate** remains the standing
 project-wide deferral (the Unicorn capture granularity does not match the engine's
 physics-frame rate; a frame-accurate DOSBox-path capture is needed before the full game
-loop can be replay-validated tick-for-tick — unchanged from Phases 2/3/4/5).
+loop can be replay-validated tick-for-tick — unchanged from Phases 2/3/4/5). (At the time of
+Phase 6 this was the *single* project-wide deferral, alongside the then-open
+`p1_movement_dispatch` call-through; that call-through was **RESOLVED in Phase 9** — see the
+Phase-9 sections — leaving the int8 end-to-end gate and the separate CODES.EXE registration
+RE as the remaining deferrals.)
 
 ## Phase-7 module audit (front-end + in-game HUD — `src/screens.c`)
 
@@ -811,6 +815,112 @@ differential).
   `validate_anim` PASS=45 FAIL=0 UNPORTED=1 DESC_CHECKED=28; `validate_spawn` FAIL=0.
   `BUMPY.EXE` links clean (227.8K, Open Watcom 16-bit DOS; the P1 spine bodies now in
   `player.obj`/`player2.obj`/`level.obj`/`game.obj`, no duplicate symbols).
+
+## Phase-9 T4 module audit (spine wiring + carve-out boundary — `game.c` / `game_stubs.c`)
+
+Phase-9 T4 wires the `game_loop` per-tick spine to the real reconstructed P1 path (the T1–T3
+bodies), reconciles the remaining `FUN_*`-spelled link symbols to confirmed Ghidra names, and
+formalises the **carve-out boundary**: which `game_loop` callees are genuine
+hardware/CRT/int8-timing leaves vs reconstructed game logic. The T4 work is **behaviour-neutral**
+— the `game.c` / `game.h` edits are comment/documentation-only (the call lines are byte-identical
+both sides); what changes is the framing (`game_stubs.c` reworded DEFERRED → carve-out) and the
+new structural gate that enforces it.
+
+| Item | Class | Note |
+|------|-------|------|
+| `game_loop` spine wiring | Transcription (unchanged code) | The four session/loop fns (`run_game_session` 0258, `init_game_session_state` 0282, `reset_game_state` 0bf9, `game_loop` 0c18) are the Phase-1 1:1 ports; with the T1–T3 bodies un-stubbed, the per-tick callees they invoke now resolve to **real module `.obj` code** (player/player2/level/game/anim/spawn) rather than `game_stubs.c` no-ops. No call line changed in T4 — only the resolution target (stub → real fn) as the bodies landed across Phases 2–9. |
+| `game_stubs.c` (58 carve-out fn symbols + `mode_script_tbl`) | **Genuine carve-outs (not reconstructions)** | Reworded DEFERRED → carve-out. Every remaining symbol is a faithful-signature no-op/benign-default stub in one of the documented carve-out classes (HARDWARE-INIT / CRTC PAGE-FLIP `present_frame` / int8-TIMING `run_n_frames`·`rotate_timing_flags_and_wait`·`wait_keypress` / ENGINE STANDALONE LOADER `load_current_level_data` / NEVER-DECOMPILED `init_round_state` 0x31de / RENDER-CORE LEAVES / OUT-OF-SCOPE SOUND-L4·L6 + player handler-table targets + the P2 indirect-call backend / the `dos_abort` CRT thunk) — the same spirit as the self-modifying BGI-overlay blitters and the L5 timer ISR. Through Phases 2–8 most of the original deferral list was un-stubbed into real bodies; what remains is carve-out-only. |
+| `FUN_*` link-symbol reconciliation | Naming (no code change) | The `FUN_*`-spelled symbols with **confirmed** Ghidra labels were cited inline to their canonical names (`9821`=`set_crtc_window`, `6183`=`sweep_active_entities`, `4802`=`move_step_teleport_exit`, `1e3d`=`game_mode_handler_idx30`, `7563`=`init_sound_tables`, `31de`=`init_round_state`). The link symbols themselves are kept `FUN_*`-spelled to mark "unported carve-out, link-only" and avoid churning the validated call sites; the canonical name is cited in-code (no guessed names — the live sound/player stub symbols whose labels are not confirmed stay `FUN_*` with no invented name). |
+
+**Phase-9 T4 deviations / honest carve-out boundary (in-code notes present):**
+
+- **The carve-out boundary is what is NOT reconstructed**, by design: the
+  `init_game_session_state` CRTC/audio/resource/IRQ hardware-init block, the CRTC page-flip
+  `present_frame`, the int8 timing/wait leaves, the engine standalone loader, the
+  never-decompiled `init_round_state` (Ghidra-labelled but decompilation fails), the
+  render-core BGI-overlay leaves, and the out-of-scope sound-L4/L6 + handler-table tails. These
+  are stated plainly as carve-outs (the blitter / L5-ISR / DAC precedents), not claimed as ports.
+- **The carve-out partition is gated, not asserted.** `tools/validate_integration.sh` proves
+  the boundary mechanically rather than by trust (see the gate description below).
+
+## Phase-9 T4 status (spine wiring + integration gate)
+
+- **`game_loop` drives the real P1 path.** With the T1–T3 bodies un-stubbed, every per-tick
+  spine callee `game_loop` invokes resolves to its real reconstructed module `.obj` (39 spine
+  callees), leaving only the 58 documented carve-outs in `game_stubs.obj`.
+- **New gate — `tools/validate_integration.sh` (structural)**: [1/3] real `wmake` link of
+  `BUMPY.EXE`, failing on any duplicate / multiply-defined symbol; [2/3] parses the `wlink`
+  `option map` per-`.obj` public-symbol listing (`module_of()`), resolves all 39 `game_loop`
+  spine callees, and asserts **none** resolve to `game_stubs.obj` (each is a real reconstructed
+  body); [3/3] asserts `game_stubs.obj`'s 58 fn symbols ⊆ the explicit `CARVEOUT_ALLOWLIST`
+  (no stale / missing carve-out). The 39-spine and 58-stub sets have **zero overlap** (clean
+  partition). A built-in `--self-test` perturbs the map and confirms a victim spine callee
+  routing to `game_stubs.obj` is caught (the gate has teeth).
+- **Gate re-confirmed (2026-06-21)**: `validate_integration` PASS — `BUMPY.EXE` links clean
+  (233 230 bytes, no duplicate symbols); 39 spine callees all in real module `.obj`; 58 stub
+  symbols all allowlisted carve-outs. No-regression across the full gate set (see the Phase-9
+  consolidated status below).
+
+## Phase-9 status (final integration — spine wiring + dispatch resolution)
+
+As of Phase-9 Task 4 (validate gates re-confirmed Phase-9 Task 5), the final-integration work
+is **complete and validated**: the P1 game-mode dispatch knot is resolved, the P1 contact-action
+family and per-tick spine are reconstructed, and `game_loop` drives the real P1 path with the
+carve-out boundary mechanically gated.
+
+- **Reconstructed 1:1 (Phase 9)**: the P1 contact-action handler family + `apply_contact_action`
+  allocator (T1); the `handle_gameplay_input` (1d26) + `begin_physics_freeze` (228d) input
+  handler, the 9 remaining `move_step_dispatch_tbl` micro-handlers, and the `dispatch_move_step`
+  rewire (T2); the 11 P1 per-tick spine fns — grid/view/bbox/draw + `all_entries_flag_set`,
+  `restore_bg_pending`, `init_view_anim_descriptors`, `game_post_present`, `game_post_input`
+  (T3) — all ported 1:1 from the live Ghidra decomp + raw disasm.
+- **The dispatch knot — RESOLVED.** `move_step_handler_for_offset` (T2) is the **single isolated
+  host-execution deviation**: the `move_step_dispatch_tbl` (0x43c0) byte blob is **unchanged**
+  (byte-identical engine dump, no `MV()` diff), and the index arithmetic is 1:1; the resolver
+  only maps each of the 39 distinct near offsets to its 1:1-reconstructed host fn so a bare
+  real-mode near offset can be executed on the host. Precedent: `game_mode_handlers` (0x7ca) was
+  already a host-fn-ptr table; this is the analogous (and last) call-through. The 624 physics
+  `UNPORTED` records (`p1_movement_dispatch` call-through) converted to **0**.
+- **`game_loop` drives the real P1 path** (T4): 39 spine callees → real module `.obj`, 58
+  carve-out-only stubs ⊆ allowlist, enforced by `validate_integration.sh` (`--self-test` proves
+  it fails on a spine→stub regression). `game_stubs.c` reworded DEFERRED → carve-out; `FUN_*`
+  link symbols reconciled to confirmed Ghidra names (no guessed names).
+- **Honest carve-outs / coverage limits (stated plainly):** `game_post_present` /
+  `game_post_input` are reconstructed 1:1 but **not per-fn gated** (their effects flow only
+  through stubbed `apply_contact_action` / `play_sound` / `apply_cell_animation` leaves; they are
+  link- + compile-validated — the blitter / L5-ISR / DAC precedent); `init_view_anim_descriptors`'
+  slot-0 `render_descriptor_ptr` +0x22 write falls outside the oracle's 0x22-byte capture window
+  (other slots gated). The T3 review found + fixed a `game_post_present` sound-id inversion
+  (0x0e/0x11) that was masked by the carve-out — exactly the hazard such carve-outs carry.
+- **New gates added in Phase 9**: `validate_p1_spine` (T3, P1 per-tick spine differential) and
+  `validate_integration` (T4, structural spine-vs-carve-out partition).
+- **Full gate set re-confirmed (2026-06-21)** — all green:
+  - `validate_physics` **PASS=17357 FAIL=0 UNPORTED=0** (was 16584/624; +149 contact-family, 624
+    dispatch-knot records converted) — the headline Phase-9 result.
+  - `validate_p1_spine` **PASS=30 FAIL=0 DESC_CHECKED=17** (perturbation-proven; the `--perturb`
+    self-test flips PASS=5/FAIL=25, proving the differential has teeth).
+  - `validate_integration` **PASS** (`BUMPY.EXE` 233 230 B, no dup symbols; 39 spine callees in
+    real `.obj`; 58 stubs ⊆ allowlist).
+  - `validate_player` PASS; `validate_input` 100/100; `validate_items` PASS=11 FAIL=0 UNPORTED=0;
+    `validate_p2` PASS=74 FAIL=0 UNPORTED=0 DESC_CHECKED=1; `validate_anim` PASS=45 FAIL=0
+    UNPORTED=1 DESC_CHECKED=28; `validate_spawn` PASS (9 runs, 7 with layer-B, FAIL=0);
+    `validate_sound` FAIL=0 PORT_CHECKED=3752 UNPORTED=25; `validate_screen_fns` PASS=884 FAIL=0
+    UNPORTED=0 (DESC_CHECKED=41, PORT_CHECKED=837); `validate_copyprot` PASS=36 FAIL=0.
+  - `validate_blit` 17/17 anim + 17/17 chain + 24/24 blits; `validate_bg` 119/119;
+    `validate_composite` 54152 @ 53858 baseline; `validate_screens` 5/5 VEC pixel-exact;
+    `validate_sprites` PASS (sprite-bank transform 87068 B byte-exact).
+  - `BUMPY.EXE` links clean (233 230 B, Open Watcom 16-bit DOS, no duplicate symbols).
+
+**Deferred from Phase 9 (the remaining open items):**
+
+1. **int8-synced end-to-end (tick-for-tick) gate** — unchanged from Phases 2–8. The Unicorn
+   capture granularity does not match the engine's physics-frame rate; a frame-accurate capture
+   (the roadmap's DOSBox path) is needed before the full game loop can be replay-validated
+   tick-for-tick. All `src/` validation remains at the per-function / move-step / descriptor /
+   port-write granularity; this is the one standing project-wide validation deferral.
+2. **CODES.EXE registration RE** — the separate TinyProg-packed registration binary
+   (`CODES.EXE` + `VS.VSN` + `VGUARD.DAT`), orphaned from `BUMPY.EXE` (Phase 7b finding). Its
+   own effort; deferred.
 
 ## Phase-1 slice status (vertical slice — session → loop → modules)
 

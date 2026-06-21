@@ -146,7 +146,12 @@ The state machine is driven by three central functions:
   Gated by `move_locked` (`DAT_8242`). Modes `5/0xb/0x1c` carry no script.
 - **`dispatch_move_step`** (`238e`) — called at the tail of each move handler;
   continues the sequence via the 2D table **`move_step_dispatch_tbl`**
-  (`0x43c0`, indexed `[game_mode][p1_move_step_idx]`, stride `0x22`).
+  (`0x43c0`, indexed `[game_mode][p1_move_step_idx]`, stride `0x22`). The table holds
+  raw little-endian **near offsets** the engine `CALL`s directly (in real mode the
+  offset *is* the code address). In the `src/` reconstruction the byte table is kept
+  byte-identical and a host `move_step_handler_for_offset` resolver maps each offset to
+  its reconstructed C function (the one isolated host-execution shim; see
+  `docs/reconstruction-fidelity.md` Phase-9 T2).
 - **`exec_move_action(action)`** (`46bb`) — maps an action code to a directional
   primitive: `move_down` (`4747`, randomises via `rng_frame` when the tile above
   is clear), `move_left` (`2634`), `move_settle` (`27de`), etc.
