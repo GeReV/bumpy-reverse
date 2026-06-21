@@ -5,10 +5,12 @@
  * BUMPY.EXE, ported from the Ghidra decomp (local/build/slice_decomp.txt,
  * cross-checked LIVE via Ghidra MCP decompile_function_by_address, 2026-06).
  *
- * This is the top of the Phase-1 link graph: main -> init_game_session_state +
- * run_game_session -> game_loop -> (reconstructed level/input/player modules +
- * the not-yet-reconstructed per-tick callees that live as faithful-signature
- * STUBS in src/game_stubs.c, each citing its engine address / "DEFERRED Phase 2").
+ * This is the top of the link graph: main -> init_game_session_state +
+ * run_game_session -> game_loop.  As of Phase-9 T4 (final integration), game_loop's
+ * per-tick callees resolve to REAL reconstructed module bodies (level/input/player/
+ * player2/anim/screens), EXCEPT a documented set of genuine hardware / CRTC page-flip
+ * / int8-timing / render-core carve-outs that remain faithful-signature stubs in
+ * src/game_stubs.c.  tools/validate_integration.sh enforces that boundary.
  *
  * Engine addresses (code segment 1000; DGROUP segment 203b in the original):
  *   run_game_session         1000:0258
@@ -127,38 +129,40 @@ u8        deferred_contact_buf[16];    /* DGROUP 0x0886 — the event buffer (he
  *       documented reset_opaque_session_globals() stub (game_stubs.c) which
  *       records the exact decomp lines it stands in for.  DEVIATION — see the
  *       fidelity audit.
- *   (2) The hardware-setup sub-calls (FUN_1000_7bad/7563/97a4/97f1/9821/9814/
- *       97c5, set_resource_table, install_interrupt_handler, init_joystick_handlers,
- *       mouse_reset, set_disk_swap_callback) are audio/CRTC/resource hardware init
- *       that cannot run without the full game data + real DOS; they are faithful-
- *       signature stubs in game_stubs.c (DEFERRED Phase 2).  install_keyboard_isr
- *       is the one REAL reconstructed call (input.c).
+ *   (2) The hardware-setup sub-calls (init_timer_resource_table=7bad,
+ *       init_sound_tables=7563, init_display_97a4=97a4 / init_display_97f1=97f1,
+ *       init_crtc_window=set_crtc_window 9821, set_display_page=9814,
+ *       set_palette_mode=97c5, set_resource_table, install_interrupt_handler,
+ *       init_joystick_handlers, mouse_reset, set_disk_swap_callback) are audio/CRTC/
+ *       resource hardware init that cannot run without the full game data + real DOS;
+ *       they are genuine HARDWARE-INIT CARVE-OUT stubs in game_stubs.c.
+ *       install_keyboard_isr is the one REAL reconstructed call (input.c).
  *
- * Boot deviation: the original sets the display via FUN_1000_9821's CRTC block;
- * here we additionally call video_set_mode_0d() so the T3 boot harness can assert
+ * Boot deviation: the original sets the display via set_crtc_window's (1000:9821)
+ * CRTC block; here we additionally call video_set_mode_0d() so the T3 boot harness can assert
  * VGA mode 0x0D is set (the only externally observable boot effect).  DEVIATION.
  * ============================================================================ */
 void init_game_session_state(void)
 {
     set_disk_swap_callback(0x698, 0x6a9);
-    init_timer_resource_table(0x6fac, 0x203b);   /* FUN_1000_7bad */
+    init_timer_resource_table(0x6fac, 0x203b);   /* 1000:7bad bgi_overlay_thunk_adab */
     install_interrupt_handler();
     install_keyboard_isr();                        /* REAL (input.c) */
     init_joystick_handlers();
     mouse_reset();
-    init_sound_tables(0x4c00, 0x4cd0, 0x203b);    /* FUN_1000_7563 */
-    init_misc_7bd7();                              /* FUN_1000_7bd7 */
-    init_display_97a4();                           /* FUN_1000_97a4 */
-    init_misc_7bbd(2);                             /* FUN_1000_7bbd */
-    init_display_97f1();                           /* FUN_1000_97f1 */
-    init_crtc_window(0, 0, 0x13f, 199);            /* FUN_1000_9821 */
-    set_display_page(1);                           /* FUN_1000_9814 */
-    set_palette_mode(0xe, 1);                       /* FUN_1000_97c5 */
+    init_sound_tables(0x4c00, 0x4cd0, 0x203b);    /* 1000:7563 init_sound_tables */
+    init_misc_7bd7();                              /* 1000:7bd7 bgi_overlay_thunk_gfx_init */
+    init_display_97a4();                           /* 1000:97a4 init_display_controller_a */
+    init_misc_7bbd(2);                             /* 1000:7bbd bgi_overlay_thunk_0232 */
+    init_display_97f1();                           /* 1000:97f1 init_display_controller_b */
+    init_crtc_window(0, 0, 0x13f, 199);            /* 1000:9821 set_crtc_window */
+    set_display_page(1);                           /* 1000:9814 set_active_display_page */
+    set_palette_mode(0xe, 1);                       /* 1000:97c5 set_palette_display_mode */
     set_resource_table(0x90, 0x203b);
 
     /* Set VGA mode 0x0D (320x200x16 EGA planar). DEVIATION: see header note —
-       the original does this inside the FUN_1000_9821 CRTC block; surfaced here
-       so the boot harness has an observable mode set. */
+       the original does this inside the set_crtc_window (1000:9821) CRTC block;
+       surfaced here so the boot harness has an observable mode set. */
     video_set_mode_0d();
 
     /* The named, in-scope session-default resets (decomp lines 448-494). */
@@ -205,22 +209,23 @@ void run_game_session(void)
  * entities (2a78), run the post-spawn round-counter reset (31de), then clear the
  * round/session continue flags.
  *
- * Ported 1:1 from the decomp.  All three sub-calls are DEFERRED stubs:
- *   load_current_level_data       1000:32b0 — copies the level header into the
- *                                  tilemap buffer (the engine's standalone loader;
- *                                  in this slice level.c loads via start_level).
- *   spawn_and_draw_level_entities 1000:2a78 — entity spawn + draw (the layer-A/B/C
- *                                  placement; reconstructed for RENDER as entity.c
- *                                  helpers, but not as this standalone game-state
- *                                  entry — stubbed here for linkability).
- *   reset_round_counters          1000:31de — Task-1 UNCERTAIN, never decompiled
- *                                  (address-out-of-bounds); faithful no-op stub.
+ * Ported 1:1 from the decomp.  Sub-call resolution (Phase-9 T4):
+ *   load_current_level_data       1000:32b0 — CARVE-OUT (engine standalone loader):
+ *                                  copies the level header into the tilemap buffer;
+ *                                  this slice loads via level.c start_level, so this
+ *                                  loader stays a game_stubs.c stub.
+ *   spawn_and_draw_level_entities 1000:2a78 — REAL: reconstructed 1:1 in src/spawn.c
+ *                                  (Phase-8 T2; the channel-A/B record populator +
+ *                                  layer-C blitter).  Resolves to spawn.obj.
+ *   reset_round_counters          1000:31de (init_round_state) — CARVE-OUT
+ *                                  (never-decompiled): Ghidra-labelled but its
+ *                                  decompilation fails (UNCERTAIN); no-op stub.
  * ============================================================================ */
 void reset_game_state(void)
 {
     load_current_level_data();
     spawn_and_draw_level_entities();
-    reset_round_counters();          /* FUN_1000_31de — UNCERTAIN, stubbed */
+    reset_round_counters();          /* 1000:31de init_round_state — UNCERTAIN carve-out */
     round_continue_flag = 0;
     session_continue_flag = 0;
     return;
@@ -246,10 +251,14 @@ void reset_game_state(void)
  *       pause-key check
  *     - level-complete / advance-level / title-loop tail
  *
- * Almost every callee below is a faithful-signature STUB in game_stubs.c
- * (DEFERRED Phase 2); the reconstructed ones are p1_step_scripted_move (player.c),
- * get_key_state (input.c), start_level (level.c), reset_game_state (above), and
- * rand (CRT).
+ * Phase-9 T4 — per-tick callee resolution: every callee below resolves to a REAL
+ * reconstructed module body (player.c / player2.c / anim.c / screens.c / level.c /
+ * input.c / spawn.c via reset_game_state / game.c's own post-present/input helpers),
+ * EXCEPT the documented carve-out set that stays a faithful-signature stub in
+ * game_stubs.c: init_sprite_structs, init_fullscreen_view_desc, apply_level_palette,
+ * show_text_screen, show_pause_screen (render-core leaves); present_frame (CRTC
+ * page-flip); run_n_frames / rotate_timing_flags_and_wait / wait_keypress
+ * (int8-timing).  tools/validate_integration.sh asserts exactly this partition.
  *
  * RECONSTRUCTION FIDELITY: the decomp uses raw `DAT_203b_928d` for the
  * frame-abort flag and a local `uVar1`/`uStack_4` pair; here frame_abort_flag is

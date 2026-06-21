@@ -14,12 +14,14 @@
  *   reset_game_state         1000:0bf9   per-round level reload + entity respawn
  *   game_loop                1000:0c18   the per-tick gameplay spine
  *
- * INTEGRATION ROLE: game.c is the top of the Phase-1 link graph.  It OWNS the
- * session/round/tick control flags and the few genuinely cross-module game-state
- * globals that have no single natural module owner (see "owned globals" below).
- * The many not-yet-reconstructed per-tick callees of game_loop / run_game_session
- * / reset_game_state live in src/game_stubs.c (linkability scaffolding, each a
- * faithful-signature stub citing its engine address; DEFERRED to Phase 2).
+ * INTEGRATION ROLE: game.c is the top of the link graph.  It OWNS the session/
+ * round/tick control flags and the few genuinely cross-module game-state globals
+ * that have no single natural module owner (see "owned globals" below).  As of
+ * Phase-9 T4 the per-tick callees of game_loop / run_game_session / reset_game_state
+ * resolve to REAL reconstructed module bodies, EXCEPT a documented set of genuine
+ * hardware / CRTC-page-flip / int8-timing / render-core / never-decompiled
+ * carve-outs that remain faithful-signature stubs in src/game_stubs.c.  The carve-out
+ * boundary is enforced by tools/validate_integration.sh.
  */
 
 #include "bumpy.h"
@@ -50,23 +52,26 @@ void init_game_session_state(void);  /* 1000:0282 */
 void reset_game_state(void);         /* 1000:0bf9 */
 void game_loop(void);                /* 1000:0c18 */
 
-/* ── Deferred callees (bodies = faithful-signature stubs in game_stubs.c) ──────
- * These are the not-yet-reconstructed engine functions the session/loop spine
- * transitively calls; declared here so game.c compiles as a structure-faithful
- * mirror.  Each is DEFERRED to Phase 2 — see game_stubs.c for addresses. */
+/* ── Session/loop spine callees (forward declarations) ────────────────────────
+ * These declare the engine functions the session/loop spine transitively calls,
+ * so game.c compiles as a structure-faithful mirror.  As of Phase-9 T4 MOST have
+ * REAL bodies in their owning module (.obj); only the documented CARVE-OUTS
+ * (hardware-init / CRTC page-flip / int8-timing / render-core / never-decompiled)
+ * still resolve to faithful-signature stubs in game_stubs.c.  Resolution is
+ * enforced by tools/validate_integration.sh; per-symbol notes live in game_stubs.c. */
 
 /* init_game_session_state setup callees */
 void set_disk_swap_callback(u16 int24_handler, u16 callback);
-void init_timer_resource_table(u16 off, u16 seg);   /* FUN_1000_7bad */
+void init_timer_resource_table(u16 off, u16 seg);   /* 1000:7bad bgi_overlay_thunk_adab (carve) */
 void install_interrupt_handler(void);
 void init_joystick_handlers(void);
 void mouse_reset(void);
-void init_sound_tables(u16 a, u16 b, u16 seg);       /* FUN_1000_7563 */
+void init_sound_tables(u16 a, u16 b, u16 seg);       /* 1000:7563 init_sound_tables (carve) */
 void init_misc_7bd7(void);
 void init_display_97a4(void);
 void init_misc_7bbd(u8 mode);
 void init_display_97f1(void);
-void init_crtc_window(u16 x0, u16 y0, u16 x1, u16 y1);/* FUN_1000_9821 */
+void init_crtc_window(u16 x0, u16 y0, u16 x1, u16 y1);/* 1000:9821 set_crtc_window (carve) */
 void set_display_page(u8 page);
 void set_palette_mode(u8 mode, u8 flag);
 void set_resource_table(u16 off, u16 seg);
@@ -80,7 +85,7 @@ void sound_select_device(void);
 /* reset_game_state callees */
 void load_current_level_data(void);
 void spawn_and_draw_level_entities(void);
-void reset_round_counters(void);                     /* FUN_1000_31de */
+void reset_round_counters(void);                     /* 1000:31de init_round_state (carve) */
 
 /* game_loop per-tick callees */
 void init_sprite_structs(void);
