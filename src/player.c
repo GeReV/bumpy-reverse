@@ -29,6 +29,9 @@
  */
 
 #include "player.h"
+#include "sound.h"   /* play_exit_sound/_contact/_pickup/_state_79b9/_event_64c1 (move_step_dispatch_tbl targets) */
+#include "items.h"   /* check_exit_tile_vert (6372), move_step_read_item (6627) */
+#include "input.h"   /* input_state_clear (65d2) */
 
 /* ── DGROUP globals owned by this module ────────────────────────────────────── */
 
@@ -190,16 +193,22 @@ void p1_movement_dispatch(void)
  *
  * The engine computes the slot as a near offset:
  *     game_mode * 0x22 + p1_move_step_idx * 2 + 0x43c0
- * then calls the near function pointer stored there.  The table contents are
- * forward-declared (Task 6b); only the index arithmetic is ported here.
+ * then calls the near function pointer stored there.
+ *
+ * RECONSTRUCTION FIDELITY (Phase 9 T2): the table holds little-endian 16-bit engine
+ * NEAR offsets (move_step_dispatch_tbl bytes are byte-identical to the unpacked
+ * image — see below).  On the host those offsets are not callable code addresses, so
+ * instead of `(*(void(**)())slot)()` we read the raw 16-bit offset and route it to its
+ * reconstructed host function via move_step_handler_for_offset().  This resolver is the
+ * ONLY host-execution deviation here; the index arithmetic and the table bytes stay 1:1.
  */
 void dispatch_move_step(void)
 {
-    void (**slot)(void);
+    u16 off;
 
-    slot = (void (**)(void))(move_step_dispatch_tbl +
-                             (u16)game_mode * 0x22 + (u16)p1_move_step_idx * 2);
-    (*slot)();
+    off = *(u16 *)(move_step_dispatch_tbl +
+                   (u16)game_mode * 0x22 + (u16)p1_move_step_idx * 2);
+    move_step_handler_for_offset(off)();
     return;
 }
 
@@ -1737,6 +1746,22 @@ u8  move_sound_lut_std_25de[0x30] = {
     0x01,0x00,0x0b,0x0b,0x0b,0x0b,0x0b,0x00,0x00,0x01,0x00,0x00,
     0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
 };
+/* DGROUP 0x35be (file 0x149fe) — move_step_first_variant contact-action LUT
+ * (the first-step counterpart of contact_sound_lut_35de @ 0x35de). */
+u8  contact_action_lut_35be[0x30] = {
+    0x00,0x01,0x02,0x03,0x04,0x17,0x05,0x00,0x07,0x08,0x09,0x0a,
+    0x00,0x00,0x0b,0x0c,0x0d,0x0e,0x0f,0x10,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x02,0x03,
+    0x04,0x17,0x00,0x06,0x07,0x08,0x09,0x0a,0x00,0x00,0x0b,0x0c
+};
+/* DGROUP 0x3c7a (file 0x150ba) — move_step_first_variant pending-action anim LUT
+ * (the first-step counterpart of pending_anim_lut_3caa @ 0x3caa). */
+u8  pending_anim_lut_3c7a[0x30] = {
+    0x00,0x01,0x3b,0x05,0x00,0x31,0x32,0x08,0x0b,0x0e,0x14,0x00,
+    0x1a,0x1e,0x35,0x25,0x37,0x28,0x00,0x2c,0x2d,0x2e,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x55,0x00,0x00,0x5c,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
 
 /*
  * run_physics_settle — 1000:22fc
@@ -1993,6 +2018,143 @@ void move_step_landed(void)
     if (g_anim_channel_idx == 0x5b) {
         level_complete_flag = 0;
     }
+    return;
+}
+
+/* ── First/last-step move variants reconstructed in Phase 9 T2 ────────────────────
+ * These nine move-step micro-handlers (6699/6748/6789/67ca/67e2/67fb/6813 + the
+ * 6326/651c siblings of check_exit_tile_vert/cursor_move_right) are targets of
+ * move_step_dispatch_tbl but were not reconstructed in earlier phases.  Ported 1:1
+ * from the live Ghidra decomp + raw disasm (verified fresh via MCP, 2026-06) so the
+ * Phase-9 offset→fn resolver maps EVERY table offset to a real host function. */
+
+/* move_step_first_variant — 1000:6699
+ * First-step counterpart of move_step_last_variant (66d8): unless prev mode 3/0xf,
+ * refresh the pending-action view (pending_anim_lut_3c7a); then, if move_step_count
+ * (p1_step_col_count @ 0x855e) != 0, apply contact_action_lut_35be[p1_contact_code].
+ * Disasm: 66a5 CMP[0x8552],3 / 66ac CMP[0x8552],0xf / 66be CMP[0x855e],0 /
+ * 66c5 [0x8551] index 0x35be / 66d1 CALL 6a89(apply_contact_action). */
+void move_step_first_variant(void)
+{
+    if (prev_game_mode != 0x03 && prev_game_mode != 0x0f) {
+        p1_dispatch_pending_action(pending_anim_lut_3c7a);
+    }
+    if (p1_step_col_count != 0) {
+        apply_contact_action(contact_action_lut_35be[p1_contact_code]);
+    }
+    return;
+}
+
+/* move_step_first_variant_b — 1000:6748
+ * Play the move sound (0x2f on the OPL/charger device, else 8), run the cell FX 0x18,
+ * then if p1_step_col_count (0x855e) != 0 apply contact_action_lut_35fe[p1_contact_code].
+ * Disasm: 6754 CMP[0x689c],4 → 0x2f:8 / 6767 FX 0x18 / 676f CMP[0x855e],0 /
+ * 6776 [0x8551] index 0x35fe / 6782 CALL 6a89. */
+void move_step_first_variant_b(void)
+{
+    u8 sound_id;
+
+    sound_id = (sound_device_state == 4) ? 0x2f : 0x08;
+    play_sound(sound_id);
+    p1_trigger_cell_animation(0x18);
+    if (p1_step_col_count != 0) {
+        apply_contact_action(contact_action_lut_35fe[p1_contact_code]);
+    }
+    return;
+}
+
+/* move_step_last_variant_b — 1000:6789
+ * Last-step counterpart of 6748: play the move sound (0x2f:8), run the cell FX 0x19,
+ * then if p1_step_col_count (0x855e) != 7 apply contact_action_lut_361e[p1_contact_code].
+ * Disasm: 6795 CMP[0x689c],4 / 67a8 FX 0x19 / 67b0 CMP[0x855e],7 /
+ * 67b7 [0x8551] index 0x361e / 67c3 CALL 6a89. */
+void move_step_last_variant_b(void)
+{
+    u8 sound_id;
+
+    sound_id = (sound_device_state == 4) ? 0x2f : 0x08;
+    play_sound(sound_id);
+    p1_trigger_cell_animation(0x19);
+    if (p1_step_col_count != 7) {
+        apply_contact_action(contact_action_lut_361e[p1_contact_code]);
+    }
+    return;
+}
+
+/* move_step_body_c — 1000:67e2
+ * Dispatch the contact action for the current cell via contact_action_lut_363e.
+ * Disasm: 67ef MOV AX,0x363e / 67f3 CALL 686a(p1_dispatch_contact_action). */
+void move_step_body_c(void)
+{
+    p1_dispatch_contact_action(contact_action_lut_363e);
+    return;
+}
+
+/* move_step_first_gate_c — 1000:67ca
+ * First-step gate: if p1_step_col_count (0x855e) != 0, run move_step_body_c.
+ * Disasm: 67ce CMP[0x855e],0 / 67d8 CALL 67e2(move_step_body_c). */
+void move_step_first_gate_c(void)
+{
+    if (p1_step_col_count != 0) {
+        move_step_body_c();
+    }
+    return;
+}
+
+/* move_step_last_body_c — 1000:6813
+ * Save p1_cell_prev = p1_cell, then dispatch the contact action via contact_action_lut_365e.
+ * Disasm: 681f MOV AL,[0x856e] / 6822 MOV[0x8570],AL (p1_cell_prev=p1_cell) /
+ * 6826 MOV AX,0x365e / 682a CALL 686a(p1_dispatch_contact_action). */
+void move_step_last_body_c(void)
+{
+    p1_cell_prev = p1_cell;
+    p1_dispatch_contact_action(contact_action_lut_365e);
+    return;
+}
+
+/* move_step_last_gate_c — 1000:67fb
+ * Last-step gate: if p1_step_col_count (0x855e) != 7, run move_step_last_body_c.
+ * Disasm: 67ff CMP[0x855e],7 / 6809 CALL 6813(move_step_last_body_c). */
+void move_step_last_gate_c(void)
+{
+    if (p1_step_col_count != 7) {
+        move_step_last_body_c();
+    }
+    return;
+}
+
+/* check_exit_tile_horiz — 1000:6326
+ * Horizontal exit-tile detection (sibling of check_exit_tile_vert @ 6372 in items.c):
+ * if move_step_count (p1_step_col_count @ 0x855e) != 0 AND the neighbour tile at
+ * tilemap[p1_cell + 0x2f] (one column back) is the exit tile 0x0c, commit the
+ * end-of-level transition (p1_move_step_idx=0, physics_frozen=1, enter_game_mode(0x2e),
+ * play exit sound 0x0d on the OPL device else 0x03).
+ * Disasm: 6332 CMP[0x855e],0 / 6344 CMP ES:[BX+0x2f],0xc / 634b [0x792a]=0 /
+ * 6350 [0xa0ce]=1 / 6358 CALL enter_game_mode(0x2e) / 635d CMP[0x689c],4 → 0xd:3. */
+void check_exit_tile_horiz(void)
+{
+    u8 sound_id;
+
+    if ((p1_step_col_count != 0) &&
+        ((s8)tilemap[(u16)p1_cell + 0x2f] == '\f')) {
+        p1_move_step_idx = 0;
+        physics_frozen = 1;
+        enter_game_mode(0x2e);
+        sound_id = (sound_device_state == 4) ? 0x0d : 0x03;
+        play_sound(sound_id);
+    }
+    return;
+}
+
+/* cursor_move_left — 1000:651c
+ * Cursor left (sibling of cursor_move_right @ 6535): redraw via input_state_mask_0f,
+ * p1_cell -= 1, decrement the column counter p1_step_col_count (0x855e).
+ * Disasm: 6528 CALL 6611(input_state_mask_0f) / 652b DEC[0x856e] / 652f DEC[0x855e]. */
+void cursor_move_left(void)
+{
+    input_state_mask_0f();
+    p1_cell = (u8)(p1_cell - 1);
+    p1_step_col_count = (u8)(p1_step_col_count - 1);
     return;
 }
 
@@ -2389,5 +2551,159 @@ void move_down_step(void)
     }
     enter_game_mode(0x0d);
     dispatch_move_step();
+    return;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  PHASE 9, TASK 2 — move_step_dispatch_tbl OFFSET → HOST FUNCTION RESOLVER
+ *  --------------------------------------------------------------------------
+ *  move_step_dispatch_tbl (DGROUP 0x43c0, above) is a byte-exact dump of the
+ *  engine's 2D table of little-endian 16-bit NEAR offsets.  dispatch_move_step
+ *  reads the raw offset for [game_mode][p1_move_step_idx] and routes it here.
+ *
+ *  RECONSTRUCTION FIDELITY: the engine `CALL`s through those near offsets directly
+ *  (the offset IS the code address in real mode).  The host cannot relocate a bare
+ *  16-bit near offset to a reconstructed function, so this switch is the single
+ *  isolated host-execution deviation for the move-step dispatch: each distinct
+ *  offset in the table maps to the already-reconstructed host function that lives at
+ *  1000:<offset>.  The table bytes and the dispatch_move_step index arithmetic stay
+ *  byte/structure-identical to the original; only the final indirect call is
+ *  re-expressed as an offset→fn lookup.
+ *
+ *  0x7111 → move_step_noop_sentinel (the common "no per-step action" filler slot;
+ *           no real function exists at 1000:7111 — it is a bare sentinel offset).
+ *  0x0000 → a documented no-op terminator: the trailing 0-padding of each mode row
+ *           (the engine never dispatches a 0 offset; p1_move_step_idx never indexes a
+ *           terminator slot because the move sequence ends first).  Routed to the
+ *           noop sentinel so the host map is total.
+ *  Every other offset maps to its reconstructed host function (verified 1:1 via
+ *  Ghidra MCP get_function_by_address 0x1000:<offset>, 2026-06). */
+void (*move_step_handler_for_offset(u16 off))(void)
+{
+    switch (off) {
+    case 0x0000: return move_step_noop_sentinel; /* terminator (never dispatched) */
+    case 0x7111: return move_step_noop_sentinel; /* common filler slot */
+    case 0x6305: return play_exit_sound;
+    case 0x6326: return check_exit_tile_horiz;
+    case 0x6372: return check_exit_tile_vert;
+    case 0x640c: return play_contact_sound;
+    case 0x645d: return play_pickup_sound;
+    case 0x647e: return play_state_sound_79b9;
+    case 0x64c1: return play_event_sound_64c1;
+    case 0x64e2: return cursor_move_up;
+    case 0x64ff: return cursor_move_down;
+    case 0x651c: return cursor_move_left;
+    case 0x6535: return cursor_move_right;
+    case 0x654e: return p1_try_trigger_pending_action;
+    case 0x6587: return p1_try_jump_action;
+    case 0x65d2: return input_state_clear;
+    case 0x65e5: return input_state_mask_10;
+    case 0x65fb: return input_state_mask_1d;
+    case 0x6611: return input_state_mask_0f;
+    case 0x6627: return move_step_read_item;
+    case 0x6648: return p1_move_step_with_sound;
+    case 0x6699: return move_step_first_variant;
+    case 0x66d8: return move_step_last_variant;
+    case 0x6717: return move_step_landed;
+    case 0x673a: return move_step_noop;
+    case 0x6748: return move_step_first_variant_b;
+    case 0x6789: return move_step_last_variant_b;
+    case 0x67ca: return move_step_first_gate_c;
+    case 0x67e2: return move_step_body_c;
+    case 0x67fb: return move_step_last_gate_c;
+    case 0x6813: return move_step_last_body_c;
+    case 0x6832: return p1_apply_contact_action_main;
+    case 0x684b: return p1_apply_contact_action_prev;
+    case 0x6890: return p1_apply_contact_action_at_start;
+    case 0x68bb: return p1_apply_contact_action_before_end;
+    case 0x68e6: return p1_apply_contact_action_at_start_b;
+    case 0x68fe: return p1_apply_contact_action_tbl_367e;
+    case 0x6922: return p1_apply_contact_action_before_end_b;
+    case 0x693a: return p1_apply_contact_action_tbl_369e;
+    default:     return move_step_noop_sentinel; /* unreachable: table is closed */
+    }
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  PHASE 9, TASK 2 — PLAYER-SPINE INPUT DISPATCH
+ *  Reconstructed 1:1 from the live Ghidra decomp + raw disasm (verified fresh via
+ *  MCP, 2026-06).  These were anticipated to land "with their player-spine callees"
+ *  (see input.h) and un-stub handle_gameplay_input from game_stubs.c.
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/* Cross-module DGROUP globals + leaves consumed by the gameplay-input spine. */
+extern u8  timing_flag_accumulator;   /* screens.c — DGROUP 0x854f (F1..F7 debug accumulator) */
+extern u8  round_continue_flag;       /* game.c     — DGROUP 0x9d30 */
+extern u8  pvp_collision_flag;        /* player2.c  — DGROUP 0xa1aa (Ghidra players_colliding) */
+
+/* begin_physics_freeze — 1000:228d
+ * Freeze physics, clear the move-step sub-index and the P1<->P2 collision flag, and
+ * enter end-of-level game mode 0x2e.
+ * Disasm: 2299 [0xa0ce]=1 (physics_frozen) / 22a0 [0x792a]=0 (p1_move_step_idx) /
+ * 22a3 [0xa1aa]=0 (pvp_collision_flag) / 22a9 CALL enter_game_mode(0x2e). */
+void begin_physics_freeze(void)
+{
+    physics_frozen = 1;
+    p1_move_step_idx = 0;
+    pvp_collision_flag = 0;
+    enter_game_mode(0x2e);
+    return;
+}
+
+/* handle_gameplay_input — 1000:1d26
+ * --------------------------------------------------------------------------
+ * The per-tick gameplay input handler (the player spine of the game loop).
+ *
+ * Debug/cheat function keys (polled via get_key_state, scancodes F1..F7 + 'D'):
+ *   F1 (0x3b) → timing_flag_accumulator = 0
+ *   F2 (0x3c) → timing_flag_accumulator = 0x88
+ *   F3 (0x3d) → timing_flag_accumulator = 0xaa
+ *   F4 (0x3e) → timing_flag_accumulator = 0xee
+ *   F5 (0x3f) → timing_flag_accumulator = 0xff
+ *   F6 (0x01) → run_physics_settle()                       [the raw key code is 0x01]
+ *   D  (0x44) → frame_abort_flag = 1; round_continue_flag = 0; session_continue_flag = 0
+ * The seven probes are an else-if chain (first match wins), matching the engine's
+ * nested JZ ladder at 1d32..1dbb.
+ *
+ * Then: if NOT colliding (pvp_collision_flag == 0): read the tile under P1,
+ * poll input, and either start a fresh movement (p1_move_steps_left == 0 →
+ * p1_movement_dispatch) or continue the scripted move (→ dispatch_move_step).
+ * If colliding: begin_physics_freeze().
+ *
+ * Disasm 1d26..1ddd verified: get_key_state arg ladder 0x3b/0x3c/0x3d/0x3e/0x3f/0x01/
+ * 0x44; 1dbb CMP[0xa1aa],0; 1dc2 CALL begin_physics_freeze; 1dc7 CALL p1_read_tile_under;
+ * 1dca CALL poll_input; 1dcd CMP[0x824d],0 → p1_movement_dispatch : dispatch_move_step.
+ */
+void handle_gameplay_input(void)
+{
+    if (get_key_state(0x3b) != 0) {
+        timing_flag_accumulator = 0x00;
+    } else if (get_key_state(0x3c) != 0) {
+        timing_flag_accumulator = 0x88;
+    } else if (get_key_state(0x3d) != 0) {
+        timing_flag_accumulator = 0xaa;
+    } else if (get_key_state(0x3e) != 0) {
+        timing_flag_accumulator = 0xee;
+    } else if (get_key_state(0x3f) != 0) {
+        timing_flag_accumulator = 0xff;
+    } else if (get_key_state(0x01) != 0) {
+        run_physics_settle();
+    } else if (get_key_state(0x44) != 0) {
+        frame_abort_flag = 1;
+        round_continue_flag = 0;
+        session_continue_flag = 0;
+    }
+
+    if (pvp_collision_flag == 0) {
+        p1_read_tile_under();
+        poll_input();
+        if (p1_move_steps_left == 0) {
+            p1_movement_dispatch();
+        } else {
+            dispatch_move_step();
+        }
+    } else {
+        begin_physics_freeze();
+    }
     return;
 }

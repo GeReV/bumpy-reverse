@@ -60,7 +60,7 @@ feasible, bring back toward 1:1. Each module's `.h` carries the detailed in-code
 - `apply_cell_animation` (69aa, anim-channel allocator) — extern stub throughout; the full channel-A allocator subsystem is out of scope → Phase 5.
 - `play_sound` / `play_state_sound` (6e11/647e) — extern stubs → Phase 6.
 - `check_exit_tile_vert` (6372) / `move_step_read_item` (6627) — exit/item boundary callees stay stubbed → Phase 3.
-- `p1_movement_dispatch` (1e02) call-through — this Phase-1 dispatcher tail-calls `dispatch_move_step` with the raw engine near-offset from `game_mode_handlers`; the host cannot call through that table (engine offsets, not host fn-ptrs). The harness skips these 624 records (`UNPORTED`); the physics validation covers every ported substate directly. Modeling the call-through dispatcher as a host-safe table is deferred (not a physics gap).
+- `p1_movement_dispatch` (1e02) call-through — this Phase-1 dispatcher tail-calls `dispatch_move_step` with the raw engine near-offset from `game_mode_handlers`; the host could not call through that table (engine offsets, not host fn-ptrs), so the harness skipped these 624 records (`UNPORTED`). **RESOLVED in Phase-9 T2:** `move_step_handler_for_offset` makes `dispatch_move_step` host-safe, so `p1_movement_dispatch` is now called for real and all 624 records pass (see the Phase-9 T2 section).
 
 **Phase-2 validation method:** per-function physics differential (seed entry snapshot + captured script/tilemap → call the reconstructed C fn → assert 10 output fields vs the engine's exit snapshot) **plus** trajectory-stitch over 5 scenarios (walk / jump-up→bounce / jump+lateral arc / ledge-fall / land). Validation granularity is the engine's **move-step**, not the int8 tick (the int8 end-to-end gate remains deferred — see Phase-1 status note below). The 624 UNPORTED records are solely the `p1_movement_dispatch` call-through dispatcher entries; every ported substate passes FAIL=0.
 
@@ -695,8 +695,47 @@ validated**:
   `SPROUT.BIN` / `BUMPRESE.PLN` absent from this checkout — pre-existing, unrelated to this task.)
 
 **Deferred from Phase 9 T1:** the offset→fn resolver that converts the 624 UNPORTED
-`p1_movement_dispatch` call-through records (Phase-9 T2); the project-wide **int8-synced
-end-to-end gate** (unchanged from Phases 2–8).
+`p1_movement_dispatch` call-through records (Phase-9 T2 — **now DONE, below**); the
+project-wide **int8-synced end-to-end gate** (unchanged from Phases 2–8).
+
+## Phase-9 T2 module audit (dispatch-knot resolver + `handle_gameplay_input` — `src/player.c`)
+
+The `move_step_dispatch_tbl` (DGROUP 0x43c0) is a **byte-exact** dump of the engine's 2D
+table of little-endian 16-bit NEAR offsets (0x40 modes × 0x11 word entries). The engine
+`CALL`s through those offsets directly (in real mode the offset *is* the code address).
+The host cannot relocate a bare near offset to a reconstructed function, so `dispatch_move_step`
+(238e) previously could not be executed on the host — the root cause of the 624 physics
+`UNPORTED` records (the `p1_movement_dispatch` call-through records, whose handlers tail-call
+`dispatch_move_step`).
+
+| Item | Class | Note |
+|------|-------|------|
+| `move_step_dispatch_tbl` bytes (0x43c0) | **Transcription (unchanged)** | Still the byte-identical engine dump; `git diff` shows NO change to any `MV(...)` entry. The `dispatch_move_step` index arithmetic (`game_mode*0x22 + p1_move_step_idx*2`) is unchanged. |
+| `move_step_handler_for_offset` (NEW) | **Reimplementation-leaning (host execution)** | A `switch(off)` returning the reconstructed host fn for each of the 39 distinct near offsets in the table. `0x7111`→`move_step_noop_sentinel` (the common filler slot; no fn exists at 1000:7111), `0x0000`→ documented no-op terminator (trailing row padding, never dispatched). Every other offset → its 1:1-reconstructed host fn at 1000:`<off>` (each verified via Ghidra MCP `get_function_by_address`). This resolver is the **single isolated host-execution deviation** for move-step dispatch. |
+| `dispatch_move_step` (238e) | Transcription | Rewired to read the raw 16-bit offset from the (unchanged) table and route it: `move_step_handler_for_offset(off)()`. Index arithmetic 1:1. |
+| 9 move-step micro-handlers: `move_step_first_variant` (6699), `_first_variant_b` (6748), `_last_variant_b` (6789), `_first_gate_c` (67ca), `_body_c` (67e2), `_last_gate_c` (67fb), `_last_body_c` (6813), `check_exit_tile_horiz` (6326), `cursor_move_left` (651c) | Transcription | Targets of the table that were not reconstructed in earlier phases; ported 1:1 here from the live decomp + raw disasm so the resolver maps **every** offset to a real host fn. Their two new DGROUP LUTs (`contact_action_lut_35be`, `pending_anim_lut_3c7a`) are byte-exact dumps from `BUMPY_unpacked.exe`. |
+| `handle_gameplay_input` (1d26) | Transcription | The per-tick player-spine input handler. Reconstructed 1:1 (decompiled fresh via MCP): F1–F7 debug keys via `get_key_state(0x3b..0x3f/0x01/0x44)` setting `timing_flag_accumulator` (0/0x88/0xaa/0xee/0xff) / `run_physics_settle` / skip-level (`frame_abort_flag`=1 + clear round/session continue); then if `!pvp_collision_flag`: `p1_read_tile_under`; `poll_input`; `p1_move_steps_left==0 ? p1_movement_dispatch() : dispatch_move_step()`; else `begin_physics_freeze()`. Un-stubbed from `game_stubs.c`. |
+| `begin_physics_freeze` (228d) | Transcription | A leaf `handle_gameplay_input` calls (was neither reconstructed nor stubbed). Ported 1:1: `physics_frozen`=1, `p1_move_step_idx`=0, `pvp_collision_flag`=0, `enter_game_mode(0x2e)`. |
+
+## Phase-9 T2 status (dispatch-knot resolver)
+
+- **624 UNPORTED → 0.** `validate_physics` now PASS=**17357** FAIL=0 **UNPORTED=0** (was
+  PASS=16733 FAIL=0 UNPORTED=624). With the resolver, `dispatch_move_step` and
+  `p1_movement_dispatch` are host-callable: the harness (`tools/physics_ctest.c`) seeds each
+  former-UNPORTED record's entry, calls the real resolver-backed dispatch, and asserts the
+  captured exit SNAP — all 624 convert to PASS. The trajectory-stitch also matches fully.
+- **Perturbation-proven.** `PHYS_PERTURB=1` mis-routes one resolver mapping (offset
+  `0x7111`→`0x65e5`) so dispatch routes records to the wrong host fn — the gate then FAILs on
+  the `input` SNAP field (proving the resolver routing is genuinely exercised). `CONTACT_PERTURB`
+  (Phase-9 T1) still has teeth.
+- **No regression / links clean.** `validate_player` PASS (its E6 + the F-section step-slot
+  installs were updated: dispatch is host-safe now, no pointer injection); `validate_input`,
+  `validate_items`, `validate_p2`, `validate_anim`, `validate_sound`, `validate_spawn`,
+  `validate_blit`, `validate_bg`, `validate_screen_fns`, `validate_copyprot`, `validate_composite`
+  all PASS. `BUMPY.EXE` links clean (Open Watcom 16-bit DOS; `handle_gameplay_input` +
+  `begin_physics_freeze` now in `player.obj`, no duplicate symbols). (`validate_sprites` /
+  `validate_screens` need regenerable assets `SPROUT.BIN` / `*.PLN` absent from this checkout —
+  pre-existing, unrelated; `validate_composite` needs sandbox-disabled uv.)
 
 ## Phase-1 slice status (vertical slice — session → loop → modules)
 

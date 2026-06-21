@@ -346,10 +346,9 @@ void rotate_timing_flags_and_wait(void) {}
 void game_post_present_629c(void)    {}
 void game_post_input_233a(void)      {}
 
-/* handle_gameplay_input 1000:1d26 — the player-spine input dispatch (forward-
-   declared in player.h; its body — p1_movement_dispatch / dispatch_move_step /
-   physics-settle — lands with the player subsystem in Phase 2). */
-void handle_gameplay_input(void)     {}
+/* handle_gameplay_input 1000:1d26 — RECONSTRUCTED in player.c (Phase 9 T2): the
+   player-spine input dispatch (F1..F7 debug keys + p1_read_tile_under / poll_input /
+   p1_movement_dispatch / dispatch_move_step / begin_physics_freeze).  Stub removed. */
 
 /* P2 tile move check (1000:4c99) — RECONSTRUCTED in player2.c (Phase-4 T3).
    P1↔P2 collision (check_pvp_collision 1000:50fb) — RECONSTRUCTED in player2.c

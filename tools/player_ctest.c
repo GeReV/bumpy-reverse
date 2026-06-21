@@ -86,6 +86,24 @@ void FUN_1000_4802(void) { n_fun_4802++; }
 void apply_cell_animation(u8 fx) { (void)fx; }
 /* run_physics_settle (player.c) reads these cross-module DGROUP bytes (game.c). */
 u8 session_continue_flag, frame_abort_flag, settle_countdown;
+
+/* Phase-9 T2: cross-module callees pulled in by the move_step_dispatch_tbl resolver +
+   handle_gameplay_input (sound.c / items.c / input.c / player2.c / game.c / screens.c).
+   Host stubs so the link closes (boundary leaves; out of this harness's scope). */
+void play_exit_sound(void)        { }
+void play_contact_sound(void)     { }
+void play_pickup_sound(void)      { }
+void play_state_sound_79b9(void)  { }
+void play_event_sound_64c1(void)  { }
+void check_exit_tile_vert(void)   { }
+void move_step_read_item(void)    { }
+void input_state_clear(void)      { input_state = 0; }
+u8   get_key_state(u8 sc)         { (void)sc; return 0; }
+void poll_input(void)             { }
+u8   timing_flag_accumulator;
+u8   round_continue_flag;
+u8   pvp_collision_flag;
+
 /* NOTE: move_down, p1_move_left/right, p1_handle_move_input, read_tile_*,
  * p1_enter_walk_*_mode, p1_begin_move, exec_move_action and the *_step_resolve /
  * *_walk_contact leaves are now SCOPE functions DEFINED in player.c (6c) — NOT
@@ -117,22 +135,16 @@ u8                  anim_b_loop_idx;   /* DGROUP 0x8566 = last_contact_action al
 /* ── test harness ─────────────────────────────────────────────────────────── */
 static int failures = 0;
 
-/* Routing probe: handlers/step-slots are pointed at this to observe dispatch. */
+/* Routing probe: game_mode_handlers[] slots are pointed at this to observe
+   p1_movement_dispatch's table dispatch (E2/E3). */
 static int g_routed;
 static void route_probe(void) { g_routed = 1; }
-static void step_noop(void) { }   /* safe filler for dispatch_move_step slots */
 
-/* dispatch_move_step reads a pointer-sized value at move_step_dispatch_tbl +
-   mode*0x22 + step*2 and calls it.  The real table holds 2-byte near offsets
-   (not host-valid pointers), so before any test that reaches dispatch_move_step
-   we overwrite the exact slot with a full host function pointer.
-   (Writing sizeof(ptr) bytes at a 2-byte stride overlaps neighbours; harmless for
-   isolated single-slot tests.)  `probe` selects an observing vs a no-op stub. */
-static void install_step_slot(unsigned mode, unsigned step, void (*fn)(void))
-{
-    unsigned off = mode * 0x22 + step * 2;
-    memcpy(&move_step_dispatch_tbl[off], &fn, sizeof(fn));
-}
+/* Phase-9 T2: dispatch_move_step is now host-safe — it reads the raw 16-bit near offset
+   at move_step_dispatch_tbl + mode*0x22 + step*2 and routes it through the src/ resolver
+   move_step_handler_for_offset().  The earlier install_step_slot/step_noop machinery
+   (which overwrote table slots with host pointers to dodge the raw-offset call-through) is
+   gone; the table stays byte-exact and the reconstructed substates run for real. */
 
 #define CHECK(cond, ...) do {                                   \
     if (!(cond)) { printf("  FAIL: " __VA_ARGS__); printf("\n"); failures++; } \
@@ -328,8 +340,7 @@ int main(void)
         p1_cell = 0;                   /* < 8 -> land_on_tile_below enters mode 6 */
         p1_pending_action = 0;         /* != 0x11 -> land_on_tile_below path */
         /* move_settle -> land_on_tile_below sets game_mode=6, THEN dispatch_move_step
-           runs on mode 6's slot — install a safe host stub there (not mode 0x10). */
-        install_step_slot(6, 0, step_noop);
+           runs for real on mode 6's slot (Phase-9 T2: resolver-backed, host-safe). */
         p1_movement_dispatch();
         CHECK(g_routed == 0, "E3 override bypassed game_mode_handlers");
         CHECK(game_mode == 6, "E3 override ran move_settle->land (mode->6): got 0x%x",
@@ -363,7 +374,8 @@ int main(void)
         game_mode = 0x23;
         input_state = 2;               /* right held */
         anim_b_loop_idx = 0;
-        install_step_slot(1, 9, step_noop);   /* p1_begin_walk_right uses step_idx 9, mode 1 */
+        /* Phase-9 T2: p1_begin_walk_right's tail dispatch_move_step (mode 1, step_idx 9)
+           runs for real via the resolver — no step-slot pre-install needed. */
         gamemode_23_walk();
         CHECK(game_mode == 1, "E5b right-held -> begin_walk_right set mode 1: got 0x%x",
               game_mode);
@@ -374,16 +386,34 @@ int main(void)
               anim_b_loop_idx);
     }
 
-    /* E6: dispatch_move_step index arithmetic lands on the exact table slot.
-       Install a probe at [mode=2][step=3] and confirm dispatch calls it. */
+    /* E6: Phase-9 T2 — dispatch_move_step index arithmetic + the offset->fn resolver.
+       dispatch_move_step reads the raw 16-bit near offset at move_step_dispatch_tbl +
+       mode*0x22 + step*2 and routes it via move_step_handler_for_offset().  Assert the
+       index arithmetic + resolver agree with an independent read of the table, then call
+       dispatch FOR REAL on a slot with an OBSERVABLE effect (mode 2 / step 5 = 0x6535
+       cursor_move_right, which advances p1_cell). */
     {
-        g_routed = 0;
-        install_step_slot(2, 3, route_probe);
+        u16 off23 = (u16)(move_step_dispatch_tbl[2*0x22 + 3*2] |
+                          (move_step_dispatch_tbl[2*0x22 + 3*2 + 1] << 8));
+        u16 off25 = (u16)(move_step_dispatch_tbl[2*0x22 + 5*2] |
+                          (move_step_dispatch_tbl[2*0x22 + 5*2 + 1] << 8));
+        /* slot[2][3] is the filler sentinel (0x7111); slot[2][5] is cursor_move_right. */
+        CHECK(off23 == 0x7111, "E6a slot[2][3] offset == 0x7111: got 0x%04x", off23);
+        CHECK(move_step_handler_for_offset(off23) == move_step_noop_sentinel,
+              "E6a resolver(0x7111) == move_step_noop_sentinel");
+        CHECK(off25 == 0x6535, "E6b slot[2][5] offset == 0x6535: got 0x%04x", off25);
+        CHECK(move_step_handler_for_offset(off25) == cursor_move_right,
+              "E6b resolver(0x6535) == cursor_move_right");
+        /* call dispatch_move_step for real at [2][5] and observe cursor_move_right's
+           p1_cell advance (resolver routing exercised end-to-end). */
         reset_state();
         game_mode = 2;
-        p1_move_step_idx = 3;
+        p1_move_step_idx = 5;
+        p1_cell = 0x20;
+        input_state = 0;
         dispatch_move_step();
-        CHECK(g_routed == 1, "E6 dispatch_move_step[2][3] routed to probe");
+        CHECK(p1_cell == 0x21,
+              "E6c dispatch[2][5]->cursor_move_right advanced p1_cell: got 0x%02x", p1_cell);
     }
 
     /* ══ F. TILE-COLLISION cell-resolution (Task 6c) ═════════════════════════
@@ -395,15 +425,10 @@ int main(void)
      * tilemap[cell].  The resolvers end in dispatch_move_step, so we install safe
      * step slots for any game_mode they can enter before calling them. */
 
-    /* Install safe step-slots for EVERY mode (the dispatch table is the full 0x40
-       rows after the 6c bound-correction), so the resolvers' tail dispatch_move_step
-       never jumps to a raw near offset regardless of which mode they enter. */
-    {
-        unsigned m;
-        for (m = 0; m < 0x40; m++) {
-            install_step_slot(m, 0, step_noop);
-        }
-    }
+    /* Phase-9 T2: dispatch_move_step is now host-safe (resolver-backed) — the resolvers'
+       tail dispatch_move_step routes raw near offsets to reconstructed host fns via the
+       src/ resolver, so NO step-slot pre-installation is needed.  The table stays
+       byte-exact and the real substates run. */
     /* enter_game_mode reads mode_script_tbl[mode*4] far ptr for modes not in
        {5,0xb,0x1c}; the host MK_FP yields a host pointer, and script[0/1] reads
        index into the zeroed mode_script_tbl backing — harmless (sets steps/facing
@@ -529,10 +554,9 @@ int main(void)
     /* F9: exec_move_action dispatch — action 0->move_down, 1->move_left,
        2->move_right, 3->move_settle, default->p1_begin_move(action).  Probe the
        default arm: action 0x07 (not a special) enters mode 0x07 via p1_begin_move
-       (= enter_game_mode(7)+dispatch).  install step slot for mode 7. */
+       (= enter_game_mode(7)+dispatch; dispatch is host-safe, Phase-9 T2). */
     {
         reset_state();
-        install_step_slot(0x07, 0, step_noop);
         exec_move_action(0x07);
         CHECK(game_mode == 0x07,
               "F9 exec_move_action(0x07) -> p1_begin_move mode 7: got 0x%02x",
@@ -544,7 +568,6 @@ int main(void)
        default arm -> p1_begin_move(0x10) -> mode 0x10. */
     {
         reset_state();
-        install_step_slot(0x10, 0, step_noop);
         p1_pending_action = 0x12;
         CHECK(action_tbl_left[0x12] == 0x10, "F10 action_tbl_left[0x12]==0x10");
         p1_move_left();
@@ -557,7 +580,6 @@ int main(void)
     {
         memset(synth_tilemap, 0, TILEMAP_SIZE);
         reset_state();
-        install_step_slot(0x11, 0, step_noop);
         p1_cell = 0x40;
         synth_tilemap[0x40 - 8] = 0x05;       /* tile below */
         CHECK(down_action_lut[0x05] == 0x11, "F11 down_action_lut[5]==0x11");

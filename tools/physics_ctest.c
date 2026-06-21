@@ -99,6 +99,28 @@ void apply_cell_animation(u8 fx) { (void)fx; }                      /* FX alloca
 void FUN_1000_4802(void) { }                                       /* pending==0x0f teleport leaf */
 /* run_physics_settle (player.c) reads these cross-module DGROUP bytes (game.c). */
 u8 session_continue_flag, frame_abort_flag, settle_countdown;
+
+/* ── Phase-9 T2 cross-module callees pulled in by the move_step_dispatch_tbl
+   resolver + handle_gameplay_input.  In the real build these live in sound.c /
+   items.c / input.c / player2.c / game.c / screens.c; the host replay stubs them
+   so the link closes.  They are boundary leaves (sound/item/FX/exit-tile) that do
+   NOT touch the validated physics SNAP fields (px/py/anim/mode/step/facing/
+   steps_left/input/override/locked), so the per-fn differential stays exact.  The
+   move-step substates that DO mutate SNAP fields (cursor/contact/landing) are
+   reconstructed in player.c and reached through the real resolver. */
+void play_exit_sound(void)        { }   /* sound.c 6305 */
+void play_contact_sound(void)     { }   /* sound.c 640c */
+void play_pickup_sound(void)      { }   /* sound.c 645d */
+void play_state_sound_79b9(void)  { }   /* sound.c 647e */
+void play_event_sound_64c1(void)  { }   /* sound.c 64c1 */
+void check_exit_tile_vert(void)   { }   /* items.c 6372 (level-exit; sets physics_frozen — not a SNAP field) */
+void move_step_read_item(void)    { }   /* items.c 6627 (item pickup; layer-C read) */
+void input_state_clear(void)      { input_state = 0; }   /* input.c 65d2 */
+u8   get_key_state(u8 sc)         { (void)sc; return 0; } /* input.c 7ab4 (no debug keys in capture) */
+void poll_input(void)             { }   /* input.c 1dde (input already seeded from the SNAP) */
+u8   timing_flag_accumulator;           /* screens.c 0x854f */
+u8   round_continue_flag;               /* game.c 0x9d30 */
+u8   pvp_collision_flag;                /* player2.c 0xa1aa (Ghidra players_colliding) */
 /* Out-of-scope handler-table targets — host stubs so the table links. */
 void move_walk_right_anim_step(void) { }
 void enter_mode_0b_jump_start(void) { }
@@ -275,30 +297,8 @@ static void seed_mode_script_tbl(const record_t *r)
  * ════════════════════════════════════════════════════════════════════════════ */
 typedef struct { u16 off; void (*fn)(void); const char *name; } hostmap_t;
 
-/* Phase-1-ported, host-callable physics fns reachable from the per-tick chain.
-   (gamemode_default_idle / gamemode_03_move are reached via the handler table;
-   p1_movement_dispatch + dispatch_move_step are the spine entry points.) */
-static const hostmap_t HOSTMAP[] = {
-    { 0x28f9, gamemode_default_idle, "gamemode_default_idle" },
-    { 0x23b6, gamemode_03_move,      "gamemode_03_move" },
-    { 0x1e5e, gamemode_21_start,     "gamemode_21_start" },
-    { 0x1e90, gamemode_22,           "gamemode_22" },
-    { 0x1ec2, gamemode_23_walk,      "gamemode_23_walk" },
-    { 0x1f3e, gamemode_24_walk,      "gamemode_24_walk" },
-    { 0x2138, gamemode_25_contact,   "gamemode_25_contact" },
-    { 0x21e7, gamemode_26_contact,   "gamemode_26_contact" },
-    { 0x22c1, run_physics_settle_wrap, "run_physics_settle_wrap" },
-    { 0x22b0, FUN_1000_22b0,           "run_physics_settle_wrap(22b0)" },
-};
-#define HOSTMAP_N (sizeof(HOSTMAP) / sizeof(HOSTMAP[0]))
-
-static void (*hostmap_lookup(u16 off))(void)
-{
-    unsigned i;
-    for (i = 0; i < HOSTMAP_N; i++)
-        if (HOSTMAP[i].off == off) return HOSTMAP[i].fn;
-    return NULL;
-}
+/* Phase-9 T2: p1_movement_dispatch + dispatch_move_step are now called for real
+   (resolver-backed), so the old HOSTMAP coverage table the stitch consulted is gone. */
 
 /* ── Phase-2 T4: the move-step SUBSTATE map (engine offset -> reconstructed C fn).
  *  dispatch_move_step routes through move_step_dispatch_tbl[mode*0x22 + step*2],
@@ -342,6 +342,43 @@ static const char *SUBSTATE_MAP_name(u16 off)
     return "?";
 }
 
+/* ── Phase-9 T2 PERTURBATION PROOF ───────────────────────────────────────────────
+   The headline conversion is the 624 records that now execute the real, resolver-backed
+   dispatch_move_step.  To prove that routing is actually EXERCISED (not bypassed), the
+   PHYS_PERTURB env corrupts ONE offset→fn mapping as seen by the resolver: it rewrites
+   the slots holding offset 0x7111 (move_step_noop_sentinel — a do-nothing handler reached
+   by thousands of records) to 0x65e5 (input_state_mask_10, which masks input_state &= 0x10).
+   The sentinel preserves the entry input; the mis-route masks it to bit 0x10 only, so every
+   record whose captured input is a non-zero value without bit 0x10 (e.g. 0x01 / 0x08) now
+   exits with input==0 ≠ captured → the gate MUST FAIL.  If the gate still passed, the
+   resolver-backed dispatch wouldn't be exercised — so this is a genuine teeth check on the
+   routing path.  Only the in-memory table is touched for this one-shot run; the on-disk
+   source table is byte-exact. */
+static int g_phys_perturb;                 /* set in main from getenv("PHYS_PERTURB") */
+#define PERTURB_FROM_OFF 0x7111            /* move_step_noop_sentinel (do-nothing; reached ~4442x) */
+#define PERTURB_TO_OFF   0x65e5            /* mis-routed to input_state_mask_10 (input &= 0x10) */
+
+/* Under PHYS_PERTURB, rewrite every move_step_dispatch_tbl slot holding the FROM offset
+   to the TO offset, so dispatch_move_step (which reads the table + routes via the src/
+   resolver) mis-routes those slots.  Returns the number of slots corrupted (>0 means the
+   perturbation is actually reachable in the table).  This mutates the in-memory table for
+   the duration of this one-shot harness run only — the on-disk source table is untouched. */
+static long apply_phys_perturb(void)
+{
+    long n = 0;
+    unsigned i;
+    if (!g_phys_perturb) return 0;
+    for (i = 0; i + 1 < sizeof(move_step_dispatch_tbl); i += 2) {
+        u16 off = (u16)(move_step_dispatch_tbl[i] | (move_step_dispatch_tbl[i + 1] << 8));
+        if (off == PERTURB_FROM_OFF) {
+            move_step_dispatch_tbl[i]     = (u8)(PERTURB_TO_OFF & 0xff);
+            move_step_dispatch_tbl[i + 1] = (u8)(PERTURB_TO_OFF >> 8);
+            n++;
+        }
+    }
+    return n;
+}
+
 /* Read the raw engine offset move_step_dispatch_tbl holds for [mode][step]. */
 static u16 dispatch_slot_offset(u8 mode, u8 step)
 {
@@ -350,33 +387,11 @@ static u16 dispatch_slot_offset(u8 mode, u8 step)
                  (move_step_dispatch_tbl[off + 1] << 8));
 }
 
-/* Host-safe dispatch interception (the call-through wrinkle).  dispatch_move_step
-   reads a host function pointer from move_step_dispatch_tbl + mode*0x22 + step*2 and
-   calls it; the table holds RAW ENGINE OFFSETS so a real call-through crashes.  When
-   the harness drives the check_tile_below delegate chain (p1_exec_pending_action ->
-   exec_move_action -> ... -> p1_begin_move -> enter_game_mode(M) + dispatch_move_step),
-   the mode transition M is set by enter_game_mode BEFORE the trailing dispatch — the
-   only state the delegate's exit SNAP records — so the trailing dispatch's substate
-   side-effects are NOT part of the captured leaf exit.  We make that single trailing
-   dispatch host-safe by overwriting the slot it reads (resolved mode M, step S) with a
-   host no-op pointer for the duration of the call, then restoring the raw bytes.
-   This neutralises only the trailing dispatch's call-through; the mode transition the
-   record actually captures is reproduced 1:1. */
-static u8 saved_disp_tbl[0x40 * 0x22];
-static void host_noop(void) { }
-static void install_noop_slot(u8 mode, u8 step)
-{
-    unsigned off = (unsigned)mode * 0x22 + (unsigned)step * 2;
-    void (*np)(void) = host_noop;
-    memcpy(saved_disp_tbl, move_step_dispatch_tbl, sizeof(saved_disp_tbl));
-    /* write the host pointer at the slot (overlaps the next few slots, restored after). */
-    if (off + sizeof(np) <= sizeof(saved_disp_tbl))
-        memcpy(move_step_dispatch_tbl + off, &np, sizeof(np));
-}
-static void restore_disp_tbl(void)
-{
-    memcpy(move_step_dispatch_tbl, saved_disp_tbl, sizeof(saved_disp_tbl));
-}
+/* Phase-9 T2: dispatch_move_step is now host-safe — it reads the raw 16-bit engine
+   offset from move_step_dispatch_tbl + mode*0x22 + step*2 and routes it through the
+   src/ resolver move_step_handler_for_offset().  The earlier slot-pointer-injection
+   neutralisation (install_noop_slot/restore_disp_tbl) is gone: every trailing dispatch
+   now runs for real through the resolver. */
 
 /* Is the hooked-fn at this engine offset PORTED + host-callable as a per-fn
    differential target?  p1_step_scripted_move, enter_game_mode and (Phase-2 T3)
@@ -405,18 +420,22 @@ static const char *fn_name(u16 fn_addr)
 /* Per-fn comparator stat accumulators. */
 typedef struct { long pass, fail, unported, skipped_mode; } stats_t;
 
-/* dispatch_move_step slot-arithmetic probe (call-through is unsafe).  Verifies
-   the slot address dispatch_move_step computes lands on exactly
-   move_step_dispatch_tbl + mode*0x22 + step*2 (like player_ctest E6, but here we
-   confirm the address math against the record's entry mode/step). */
-static int g_routed;
-static void route_probe(void) { g_routed = 1; }
-static int check_dispatch_slot_arith(const record_t *r)
+/* dispatch_move_step ROUTING probe (Phase-9 T2: dispatch_move_step is now host-safe).
+   dispatch_move_step reads the raw 16-bit engine offset at move_step_dispatch_tbl +
+   mode*0x22 + step*2 and routes it through move_step_handler_for_offset() (the host
+   resolver).  This probe asserts:
+     (a) the mode-row invariant (mode < 0x40),
+     (b) the resolver maps the slot's offset to the SAME host function the harness's
+         independent SUBSTATE_MAP names for that offset (when the offset is in the
+         reached set), proving dispatch's index arithmetic + the resolver agree and
+         that the resolver is genuinely exercised (perturb-sensitive).
+   Returns 1 = routed correctly, 0 = routing mismatch, -1 = hard invariant violation. */
+static int check_dispatch_routes(const record_t *r)
 {
     unsigned mode = r->ent.mode, step = r->ent.step;
-    unsigned off;
-    void (*saved_fn)(void);
-    void *slot;
+    u16 soff;
+    void (*resolved)(void);
+    void (*expected)(void);
     /* a real engine table only has 0x40 mode rows; all captured modes (idle/walk
        /jump/fall) are < 0x40 — assert the invariant so inflated PASS counts are
        impossible; hard-fail if a future capture ever violates it. */
@@ -425,19 +444,16 @@ static int check_dispatch_slot_arith(const record_t *r)
                 "(invariant violated — should never happen in this capture)\n", mode);
         return -1;   /* caller treats negative as a hard failure */
     }
-    off = mode * 0x22 + step * 2;
-    slot = &move_step_dispatch_tbl[off];
-    /* install a host probe at the exact slot, run the slot-address path, restore. */
-    memcpy(&saved_fn, slot, sizeof(saved_fn));
-    {
-        void (*probe)(void) = route_probe;
-        memcpy(slot, &probe, sizeof(probe));
+    soff = dispatch_slot_offset((u8)mode, (u8)step);
+    resolved = move_step_handler_for_offset(soff);   /* the src/ resolver under test */
+    if (resolved == NULL) return 0;                  /* resolver must be total */
+    expected = substate_lookup(soff);
+    if (expected != NULL && resolved != expected) {
+        /* the resolver routed this offset to a DIFFERENT fn than the harness's
+           independent map expects — a routing regression (e.g. corrupted mapping). */
+        return 0;
     }
-    g_routed = 0;
-    seed_globals(&r->ent);
-    dispatch_move_step();
-    memcpy(slot, &saved_fn, sizeof(saved_fn));   /* restore raw engine offset */
-    return g_routed == 1;
+    return 1;
 }
 
 /* ── PRIMARY: per-function differential over every record ────────────────────── */
@@ -450,66 +466,88 @@ static int run_per_function(record_t *recs, long nrec, const char *scname,
     for (i = 0; i < nrec; i++) {
         record_t *r = &recs[i];
         if (r->fn_addr == FN_DISPATCH_MOVE_STEP) {
-            /* (1) slot-address arithmetic: dispatch_move_step lands on exactly
-               move_step_dispatch_tbl + mode*0x22 + step*2. */
-            int arith = check_dispatch_slot_arith(r);
-            if (arith < 0) {
+            /* Phase-9 T2: dispatch_move_step is now HOST-SAFE (resolver-backed).
+               (1) ROUTING: assert the resolver routes this record's slot offset to the
+                   expected host fn (mode-row invariant + resolver/map agreement). */
+            int routed = check_dispatch_routes(r);
+            if (routed < 0) {
                 st->fail++; scen_fail = 1;
                 if (printed++ < 8)
                     printf("    FAIL [%s #%ld] dispatch_move_step mode=%#x >= 0x40 "
                            "(invariant violation)\n", scname, i, r->ent.mode);
                 continue;
             }
-            if (arith == 0) {
+            if (routed == 0) {
                 st->fail++; scen_fail = 1;
                 if (printed++ < 8)
-                    printf("    FAIL [%s #%ld] dispatch_move_step slot-arith "
-                           "mode=%#x step=%u did not route\n",
+                    printf("    FAIL [%s #%ld] dispatch_move_step resolver routing "
+                           "mode=%#x step=%u offset mismatch\n",
                            scname, i, r->ent.mode, r->ent.step);
                 continue;
             }
-            /* (2) Phase-2 T4: the slot-arith above already validates the dispatch fn
-               itself (PASS).  When the routed move-step SUBSTATE is one of the
-               host-callable Task-4 ports, ALSO call it for real and assert the exit
-               SNAP — a stronger check on top of slot-arith.  Substates behind the
-               slot that are boundary stubs (item/sound/FX micro-handlers, e.g.
-               0x6326/0x645d/0x6627/0x647e) are not in the map; the dispatch record
-               still PASSes on slot-arith (the dispatch fn is ported), and the
-               substate body is the documented boundary stub. */
+            /* (2) Call dispatch_move_step() FOR REAL through the resolver and assert the
+               exit SNAP.  When the routed substate mutates SNAP fields (cursor / contact /
+               landing), this is a full exit diff; when it is a boundary leaf (item / sound /
+               FX / exit-tile — no SNAP-field side effect), the seeded entry == exit by
+               construction, so the same diff confirms the no-op faithfully. */
             {
-                u16 soff = dispatch_slot_offset(r->ent.mode, r->ent.step);
-                void (*sub)(void) = substate_lookup(soff);
-                if (sub != NULL) {
-                    const char *bad; long got, want;
-                    seed_tilemap(r);
-                    seed_globals(&r->ent);
-                    seed_script(r);
-                    /* p1_pending_action is NOT in the SNAP; reconstruct it as the
-                       tile under p1_cell (the p1_read_tile_under value the engine
-                       latched), so pending-action-keyed substates take the captured
-                       branch. */
-                    p1_pending_action = synth_tilemap[r->ent.cell];
-                    sub();
-                    bad = cmp_exit(&r->ex, &got, &want);
-                    if (bad != NULL) {
-                        st->fail++; scen_fail = 1;
-                        if (printed++ < 8)
-                            printf("    FAIL [%s #%ld] dispatch_move_step->%s "
-                                   "field %s: got %ld want %ld (mode=%#x step=%u)\n",
-                                   scname, i, SUBSTATE_MAP_name(soff), bad, got, want,
-                                   r->ent.mode, r->ent.step);
-                    }
+                const char *bad; long got, want;
+                seed_tilemap(r);
+                seed_globals(&r->ent);
+                seed_script(r);
+                /* p1_pending_action is NOT in the SNAP; reconstruct it as the tile under
+                   p1_cell (the p1_read_tile_under value the engine latched), so
+                   pending-action-keyed substates take the captured branch. */
+                p1_pending_action = synth_tilemap[r->ent.cell];
+                dispatch_move_step();
+                bad = cmp_exit(&r->ex, &got, &want);
+                if (bad != NULL) {
+                    u16 soff = dispatch_slot_offset(r->ent.mode, r->ent.step);
+                    st->fail++; scen_fail = 1;
+                    if (printed++ < 8)
+                        printf("    FAIL [%s #%ld] dispatch_move_step->%s "
+                               "field %s: got %ld want %ld (mode=%#x step=%u)\n",
+                               scname, i, SUBSTATE_MAP_name(soff), bad, got, want,
+                               r->ent.mode, r->ent.step);
+                    continue;
                 }
             }
             st->pass++;
             continue;
         }
+        if (r->fn_addr == FN_P1_MOVEMENT_DISPATCH) {
+            /* Phase-9 T2: p1_movement_dispatch is now FULLY host-callable — its
+               game_mode_handlers[] tail-call dispatch_move_step, which is now
+               resolver-backed (host-safe) instead of a raw-offset call-through.  Seed
+               the entry SNAP + tilemap + script, call it for real, and assert the exit
+               SNAP.  This converts the 624 records that were UNPORTED purely because the
+               dispatch knot could not be executed on the host. */
+            const char *bad; long got, want;
+            seed_tilemap(r);
+            seed_globals(&r->ent);
+            seed_script(r);
+            seed_mode_script_tbl(r);
+            p1_pending_action = synth_tilemap[r->ent.cell];
+            p1_movement_dispatch();
+            bad = cmp_exit(&r->ex, &got, &want);
+            if (bad == NULL) {
+                st->pass++;
+            } else {
+                st->fail++; scen_fail = 1;
+                if (printed++ < 8)
+                    printf("    FAIL [%s #%ld] p1_movement_dispatch field %s: "
+                           "got %ld want %ld (mode=%#x step=%u cell=%u)\n",
+                           scname, i, bad, got, want,
+                           r->ent.mode, r->ent.step, r->ent.cell);
+            }
+            continue;
+        }
         if (!fn_is_diff_ported(r->fn_addr)) {
-            /* The only non-diff-ported records left are p1_movement_dispatch — a
-               call-through dispatcher whose game_mode_handlers tail-call
-               dispatch_move_step (raw engine offsets, host-unsafe).  Counted UNPORTED
-               (re-anchored, not a hard failure); its routing is covered by the
-               dispatch_move_step slot-arith + the substate diffs above. */
+            /* Phase-9 T2: after dispatch_move_step + p1_movement_dispatch were made
+               host-callable (above), every captured fn_addr is now a diff target — this
+               UNPORTED fallback should no longer fire.  Kept as a safety net: any future
+               capture introducing a not-yet-ported hooked fn lands here (UNPORTED, not a
+               hard failure) instead of crashing. */
             st->unported++;
             continue;
         }
@@ -618,9 +656,9 @@ static int run_per_function(record_t *recs, long nrec, const char *scname,
                    resolved mode, so we seed rng_frame to the bucket that reproduces
                    it (faithful: rng_frame is a real engine input the trace's exit
                    pins down), seed mode_script_tbl[ex.mode] so enter_game_mode
-                   reproduces steps_left/facing, neutralise the single trailing
-                   dispatch (host no-op at slot (ex.mode, ent.step)), call the leaf
-                   through, restore, then full-diff the exit. */
+                   reproduces steps_left/facing, then call the leaf through and full-diff
+                   the exit.  Phase-9 T2: the trailing dispatch_move_step is now host-safe
+                   (resolver-backed), so it runs FOR REAL — no slot neutralisation needed. */
                 switch (r->ex.mode) {
                     case 0x3c: rng_frame = 0xff; break;   /* >=0xec */
                     case 0x3d: rng_frame = 0xe0; break;   /* [0xd8,0xec) */
@@ -628,9 +666,7 @@ static int run_per_function(record_t *recs, long nrec, const char *scname,
                     case 0x3f: rng_frame = 0xb8; break;   /* [0xb0,0xc4) */
                     default:   rng_frame = 0x00; break;   /* <0xb0 -> move_action 0 -> mode 0 */
                 }
-                install_noop_slot(r->ex.mode, r->ent.step);
                 check_tile_below_ladder_or_land();
-                restore_disp_tbl();
                 bad = cmp_exit(&r->ex, &got, &want);
             }
             if (bad == NULL) {
@@ -700,52 +736,35 @@ static stitch_result_t run_trajectory_stitch(record_t *recs, long nrec, const ch
                 case 0x3f: rng_frame = 0xb8; break;
                 default:   rng_frame = 0x00; break;
             }
-            install_noop_slot(r->ex.mode, r->ent.step);
+            /* Phase-9 T2: the trailing dispatch_move_step is host-safe — run for real. */
             check_tile_below_ladder_or_land();
-            restore_disp_tbl();
         } else if (r->fn_addr == FN_DISPATCH_MOVE_STEP) {
-            /* Phase-2 T4: resolve the routed move-step SUBSTATE from
-               move_step_dispatch_tbl[mode][step] and call the real C fn (the
-               substates are now host-callable).  p1_pending_action keys the
-               pending-action substates and is reconstructed from the tile under
-               p1_cell.  Substates outside the ported set leave state unchanged
-               (the captured records for them are filler/no-op slots anyway). */
+            /* Phase-9 T2: dispatch_move_step is now host-safe (resolver-backed) — call
+               it through for real.  p1_pending_action keys the pending-action substates
+               and is reconstructed from the tile under p1_cell. */
             if (r->ent.mode < 0x40) {
-                u16 soff = dispatch_slot_offset(r->ent.mode, r->ent.step);
-                void (*sub)(void) = substate_lookup(soff);
-                if (sub != NULL) {
-                    p1_pending_action = synth_tilemap[r->ent.cell];
-                    sub();
-                }
+                p1_pending_action = synth_tilemap[r->ent.cell];
+                dispatch_move_step();
             }
+        } else if (r->fn_addr == FN_P1_MOVEMENT_DISPATCH) {
+            /* Phase-9 T2: p1_movement_dispatch is fully host-callable now (its handlers'
+               tail-call dispatch_move_step is resolver-backed).  Its branch selection
+               depends on engine inputs NOT in the 16-byte SNAP (e.g. the jump/move input
+               bits + rng_frame the mode-handler reads), so — as the PRIMARY per-fn diff
+               does — seed this record's full captured ENTRY before calling, then compare
+               to its captured EXIT.  This keeps the stitch a per-step delta check
+               (re-anchored each step) rather than drifting on unseeded non-SNAP state. */
+            seed_globals(&r->ent);
+            seed_mode_script_tbl(r);
+            p1_pending_action = synth_tilemap[r->ent.cell];
+            p1_movement_dispatch();
         } else {
-            /* p1_movement_dispatch / landing leaves.  p1_movement_dispatch's
-               handlers (game_mode_handlers[]) tail-call dispatch_move_step, which
-               on the host would call-through a RAW ENGINE OFFSET and crash — so we
-               do NOT call-through any handler here.  We re-anchor from the captured
-               exit and count this as a skipped dispatch record (not matched),
-               distinguishing genuinely-executed steps from re-anchored-only ones.
-               Landing leaves have no host map entry at all -> the UNPORTED stop. */
-            if (r->fn_addr == FN_P1_MOVEMENT_DISPATCH) {
-                static const u16 mode_handler_off[0x40] = {
-                    /* dumped game_mode_handlers offsets for the host-mapped modes */
-                    [0x00]=0x28f9, [0x01]=0x28f9, [0x02]=0x28f9, [0x03]=0x23b6,
-                    [0x04]=0x28f9, [0x0f]=0x23b6, [0x21]=0x1e5e, [0x22]=0x1e90,
-                    [0x23]=0x1ec2, [0x24]=0x1f3e, [0x25]=0x2138, [0x26]=0x21e7,
-                };
-                u16 hoff = (game_mode < 0x40) ? mode_handler_off[game_mode] : 0;
-                (void)hostmap_lookup(hoff);   /* confirm host-map coverage; no call */
-                /* Count as skipped (not matched): re-anchor and move on. */
-                res.skipped_dispatch++;
-                seed_globals(&r->ex);
-                continue;
-            } else {
-                /* landing leaf (land_on_tile_below / check_tile_below) — UNPORTED. */
-                printf("    STITCH stop [%s] step %ld: UNPORTED fn %s "
-                       "(expected until T3/T4)\n", scname, i, fn_name(r->fn_addr));
-                res.stop_step = i;
-                return res;
-            }
+            /* No remaining UNPORTED hooked fn on the captured path (landing leaves are
+               handled above).  Any future not-yet-ported fn lands here -> localised stop. */
+            printf("    STITCH stop [%s] step %ld: UNPORTED fn %s\n",
+                   scname, i, fn_name(r->fn_addr));
+            res.stop_step = i;
+            return res;
         }
         /* compare the produced trajectory fields against the captured exit. */
         if (p1_pixel_x != r->ex.px || p1_pixel_y != r->ex.py ||
@@ -1035,9 +1054,23 @@ int main(int argc, char **argv)
     printf("  trace: PHYSTRC1 v%u, %u scenarios, %u fn-names\n", ver, nsc, nfn);
     printf("  per-fn diff targets (host-callable): p1_step_scripted_move, "
            "enter_game_mode, landing leaves (T3), the 0x63xx move-step substates "
-           "(T4, via the dispatch slot map) + check_tile_below delegates; "
-           "dispatch_move_step = slot-arith + substate diff; p1_movement_dispatch "
-           "(call-through dispatcher) = UNPORTED\n");
+           "(T4) + check_tile_below delegates; dispatch_move_step = resolver routing "
+           "+ substate exit diff (Phase-9 T2, host-safe); p1_movement_dispatch = full "
+           "exit diff (Phase-9 T2, resolver-backed dispatch)\n");
+
+    /* Phase-9 T2 perturbation: under PHYS_PERTURB, mis-route one resolver mapping so the
+       resolver-backed dispatch routes records to the wrong host fn — the gate MUST fail. */
+    g_phys_perturb = (getenv("PHYS_PERTURB") != NULL);
+    if (g_phys_perturb) {
+        long pc = apply_phys_perturb();
+        printf("  PHYS_PERTURB active: corrupted %ld dispatch slot(s) %#x->%#x "
+               "(expect the gate to FAIL)\n", pc, PERTURB_FROM_OFF, PERTURB_TO_OFF);
+        if (pc == 0) {
+            fprintf(stderr, "PHYS_PERTURB: FROM offset %#x not present in the table — "
+                    "perturbation unreachable\n", PERTURB_FROM_OFF);
+            return 2;
+        }
+    }
 
     for (s = 0; s < nsc; s++) {
         u8 sid, name_len, level, start_cell;
@@ -1124,9 +1157,9 @@ int main(int argc, char **argv)
                st.fail);
         return 1;
     }
-    printf("PASS: every PORTED record matched its exit; UNPORTED (%ld) cleanly "
-           "localised to the p1_movement_dispatch call-through dispatcher (its "
-           "handlers tail-call dispatch_move_step's raw engine offsets)\n",
+    printf("PASS: every record matched its exit; UNPORTED=%ld (Phase-9 T2 made "
+           "dispatch_move_step + p1_movement_dispatch host-callable via the offset->fn "
+           "resolver — the 624 former dispatch-knot UNPORTED records now execute for real)\n",
            st.unported);
     return 0;
 }

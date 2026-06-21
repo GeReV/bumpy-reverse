@@ -110,6 +110,11 @@ char p1_step_scripted_move(void);   /* 1000:13df */
 void enter_game_mode(u8 mode);      /* 1000:4263 */
 void p1_movement_dispatch(void);    /* 1000:1e02 */
 void dispatch_move_step(void);      /* 1000:238e */
+/* Phase 9 T2: host resolver mapping a move_step_dispatch_tbl 16-bit near offset to
+ * its reconstructed host function (the single host-execution deviation — see player.c). */
+void (*move_step_handler_for_offset(u16 off))(void);
+void begin_physics_freeze(void);    /* 1000:228d */
+void handle_gameplay_input(void);   /* 1000:1d26 — player-spine input dispatch (also in game.h) */
 
 /* ══ TASK 6b — game-mode handler state machine ════════════════════════════════
  *
@@ -277,7 +282,9 @@ extern u8 level_complete_flag;    /* 0xa1b1 — cleared by move_step_landed on t
 extern u8 tile_followup_action_lut[0x30]; /* 0x4396 */
 extern u8 pending_anim_lut_3cda[0x30];    /* 0x3cda */
 extern u8 pending_anim_lut_3caa[0x30];    /* 0x3caa */
+extern u8 pending_anim_lut_3c7a[0x30];    /* 0x3c7a (move_step_first_variant) */
 extern u8 pending_anim_lut_3d0a[0x30];    /* 0x3d0a */
+extern u8 contact_action_lut_35be[0x30];  /* 0x35be (move_step_first_variant) */
 extern u8 pending_action_lut_36be[0x30];  /* 0x36be */
 extern u8 contact_sound_lut_35de[0x30];   /* 0x35de */
 extern u8 move_sound_lut_opl_25ae[0x30];  /* 0x25ae */
@@ -306,14 +313,23 @@ void input_state_mask_1d(void);           /* 1000:65fb */
 void input_state_mask_0f(void);           /* 1000:6611 */
 void cursor_move_up(void);                /* 1000:64e2 */
 void cursor_move_down(void);              /* 1000:64ff */
+void cursor_move_left(void);              /* 1000:651c */
 void cursor_move_right(void);             /* 1000:6535 */
 void p1_try_trigger_pending_action(void); /* 1000:654e */
 void p1_try_jump_action(void);            /* 1000:6587 */
 void p1_move_step_with_sound(void);       /* 1000:6648 */
+void move_step_first_variant(void);       /* 1000:6699 */
 void move_step_last_variant(void);        /* 1000:66d8 */
 void move_step_landed(void);              /* 1000:6717 */
 void move_step_noop(void);                /* 1000:673a */
+void move_step_first_variant_b(void);     /* 1000:6748 */
+void move_step_last_variant_b(void);      /* 1000:6789 */
+void move_step_first_gate_c(void);        /* 1000:67ca */
+void move_step_body_c(void);              /* 1000:67e2 */
+void move_step_last_gate_c(void);         /* 1000:67fb */
+void move_step_last_body_c(void);         /* 1000:6813 */
 void move_step_noop_sentinel(void);       /* 1000:7111 (sentinel filler slot) */
+void check_exit_tile_horiz(void);         /* 1000:6326 */
 
 /* the two move-step delegates check_tile_below_ladder_or_land tail-calls. */
 void p1_exec_pending_action(void);        /* 1000:465e */
