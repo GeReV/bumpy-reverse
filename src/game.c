@@ -402,7 +402,7 @@ LAB_0c2c:
  *   62a8 LES BX,[0x9ba6]; 62ac CMP ES:[BX],0xff; 62b2 MOV [0x9ba6],0x886 / [0x9ba8],DS;
  *   62c0 MOV ES:[BX],0xff; 62c6 AL=[0x79b7]; 62cd JNZ dec; 62cf MOV [0x79b7],0xa;
  *   62db MOV [0x8570],*ptr (p1_cell_prev); 62e1 CALL 6a89(0x18); 62e6 CMP [0x689c],4 ->
- *   0x11 : 0x0e; 62f4 CALL 6e11 (play_sound); 62f9 INC word [0x9ba6]; 62ff DEC [0x79b7].
+ *   0x0e : 0x11; 62f4 CALL 6e11 (play_sound); 62f9 INC word [0x9ba6]; 62ff DEC [0x79b7].
  *
  * RECONSTRUCTION FIDELITY (the DS:0x886 reset target): the engine writes the literal
  * near offset 0x886 + the live DS into the far ptr.  Here the reset points the ptr at
@@ -419,7 +419,7 @@ void game_post_present(void)
         deferred_contact_countdown = 0x0a;                         /* re-arm delay            */
         p1_cell_prev = *deferred_contact_ptr;                      /* queued event cell       */
         apply_contact_action(0x18);                                /* 1000:6a89               */
-        play_sound((sound_device_state == 4) ? 0x11 : 0x0e);       /* device-dependent id     */
+        play_sound((sound_device_state == 4) ? 0x0e : 0x11);       /* ==4 ? 0x0e : 0x11 per disasm 62eb */
         deferred_contact_ptr = deferred_contact_ptr + 1;           /* advance cursor          */
     } else {
         deferred_contact_countdown = (u8)(deferred_contact_countdown - 1);
