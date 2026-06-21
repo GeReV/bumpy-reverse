@@ -829,7 +829,7 @@ void start_level(u8 world, u8 level)
        default).  With it OFF the hook compiles OUT — level-advance to levels 2+
        flows with no challenge, matching the cracked-build runtime (copyprotect_flag
        stays 0; nothing ever writes -1, so the reset can never fire).  See the
-       copyprotect_challenge() note above; faithful un-cracked body → Phase 7b. */
+       copyprotect_challenge() note above for the reconstructed (un-cracked) body. */
 #ifdef BUMPY_COPY_PROTECTION
     if ((1u < (u16)current_level) && (copyprotect_flag == 0u)) {
         copyprotect_challenge();
