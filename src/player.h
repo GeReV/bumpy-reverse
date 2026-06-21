@@ -236,7 +236,8 @@ extern void apply_cell_animation(u8 fx_code);    /* 1000:69aa — anim-channel/F
 /* Other leaves the handlers call (sound/anim helpers; not tile-collision). */
 extern void play_sound(u8 sound_id);             /* 1000:6e11 */
 extern void play_action_sound(void);             /* move_left/right action sound */
-extern void apply_contact_action(u8 code);       /* p1_begin_walk_* contact-action+sound */
+/* apply_contact_action is RECONSTRUCTED in player.c (Phase-9 T1) — see the contact-
+   action handler family declarations below; no longer a game_stubs.c no-op. */
 extern void play_walk_anim_default(void);        /* 1000:4361 — enter_mode_1c_walk anim */
 extern void step_walk_anim(u8 anim_base, u8 period, u16 frame_off, u16 frame_seg); /* 1000:495c */
 extern void FUN_1000_4802(void);                 /* handle_move_input pending==0x0f leaf */
@@ -261,8 +262,9 @@ extern void FUN_1000_1e3d(void);                 /* 1000:1e3d  idx 0x30 */
  * (dispatched via move_step_dispatch_tbl), the run_physics_settle handler, and the
  * two delegates check_tile_below_ladder_or_land tail-calls.  Ported 1:1 in
  * player.c; each cites its engine address there.  The boundary callees
- * (apply_cell_animation, play_sound, apply_contact_action, FUN_1000_4802) stay
- * stubbed with RECONSTRUCTION FIDELITY notes.
+ * (apply_cell_animation, play_sound, FUN_1000_4802) stay stubbed with
+ * RECONSTRUCTION FIDELITY notes; apply_contact_action is now RECONSTRUCTED
+ * (Phase-9 T1, see the contact-action family declarations near the end of this file).
  */
 
 /* DGROUP move-step substate globals (DEFINED in player.c). */
@@ -316,5 +318,32 @@ void move_step_noop_sentinel(void);       /* 1000:7111 (sentinel filler slot) */
 /* the two move-step delegates check_tile_below_ladder_or_land tail-calls. */
 void p1_exec_pending_action(void);        /* 1000:465e */
 void move_down_step(void);                /* 1000:253f */
+
+/* ══ PHASE 9, TASK 1 — PLAYER-1 CONTACT-ACTION HANDLER FAMILY ══════════════════
+ * The move_step_dispatch_tbl contact-action micro-handlers + the apply_contact_action
+ * leaf (RECONSTRUCTED in player.c, no longer game_stubs.c no-ops).  Each maps
+ * p1_contact_code through a dumped DGROUP byte LUT to an action code, then runs
+ * apply_contact_action (channel-B anim-slot claim + contact sound + tilemap stamp). */
+void apply_contact_action(u8 action_code);          /* 1000:6a89 */
+void p1_dispatch_contact_action(u8 *action_table);  /* 1000:686a */
+void p1_apply_contact_action_main(void);            /* 1000:6832 (mode 0x29) */
+void p1_apply_contact_action_prev(void);            /* 1000:684b (mode 0x2a) */
+void p1_apply_contact_action_at_start(void);        /* 1000:6890 (mode 0x38/0x3a) */
+void p1_apply_contact_action_before_end(void);      /* 1000:68bb (mode 0x39/0x3b) */
+void p1_apply_contact_action_at_start_b(void);      /* 1000:68e6 (mode 0x34/0x36) */
+void p1_apply_contact_action_before_end_b(void);    /* 1000:6922 (mode 0x35/0x37) */
+void p1_apply_contact_action_tbl_367e(void);        /* 1000:68fe (mode 0x1a) */
+void p1_apply_contact_action_tbl_369e(void);        /* 1000:693a (mode 0x1b) */
+
+/* DGROUP contact LUTs/tables (DEFINED dumped-real in player.c). */
+extern u8 contact_action_lut_35fe[0x30];   /* 0x35fe */
+extern u8 contact_action_lut_361e[0x30];   /* 0x361e */
+extern u8 contact_action_lut_363e[0x30];   /* 0x363e */
+extern u8 contact_action_lut_365e[0x30];   /* 0x365e */
+extern u8 contact_action_lut_367e[0x30];   /* 0x367e */
+extern u8 contact_action_lut_369e[0x30];   /* 0x369e */
+extern u8 contact_sound_lut_opl_272e[0x30];/* 0x272e */
+extern u8 contact_sound_lut_std_274e[0x30];/* 0x274e */
+extern u8 contact_tiledef_tbl[256 * 4];    /* 0x3256/0x3258 (action*4 -> far ptr) */
 
 #endif /* PLAYER_H */

@@ -87,7 +87,8 @@ void FUN_1000_8b0d(void)         {}   /* 1000:8b0d dispatch_d backend → T6 */
 void FUN_1000_8e58(void)         {}   /* 1000:8e58 dispatch_d backend → T6 */
 void FUN_1000_7fef(void)         {}   /* 1000:7fef timer teardown/restore → T5/T6 */
 void FUN_1000_6183(void)         {}   /* 1000:6183 out-of-scope entity sweep (→ entity) */
-void apply_contact_action(u8 code)          { (void)code; }
+/* apply_contact_action (1000:6a89) — RECONSTRUCTED in player.c (Phase-9 T1); the
+   no-op stub is removed (it would now be a duplicate symbol against player.obj). */
 void play_walk_anim_default(void)           {}  /* 1000:4361 */
 /* p1_set_pixel_from_cell 1000:4906 — set p1_pixel_x/y + move_step_count from the
    cell-coord table at DGROUP 0x274/0x276.  A player.c leaf (move/teleport spine)

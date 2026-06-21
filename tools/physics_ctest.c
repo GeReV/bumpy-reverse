@@ -85,9 +85,14 @@ u8 __far *tilemap = synth_tilemap;
    DEFINED in player.c — no longer host stubs here.  Only the boundary callees
    (FX allocator apply_cell_animation; sound play_sound/apply_contact_action; the
    teleport leaf FUN_1000_4802) remain stubbed below. */
-void play_sound(u8 id) { (void)id; }
+/* play_sound: record the last id apply_contact_action emitted so the contact-family
+   differential (run_contact_family, below) can assert the device-selected sound id. */
+u8 g_last_play_sound_id;
+int g_play_sound_calls;
+void play_sound(u8 id) { g_last_play_sound_id = id; g_play_sound_calls++; }
 void play_action_sound(void) { }
-void apply_contact_action(u8 c) { (void)c; }
+/* apply_contact_action (1000:6a89) is now RECONSTRUCTED in src/player.c (Phase-9 T1)
+   and pulled in via the #include below — no host stub here (would be a dup symbol). */
 void play_walk_anim_default(void) { }
 void step_walk_anim(u8 a, u8 p, u16 fo, u16 fs) { (void)a;(void)p;(void)fo;(void)fs; }
 void apply_cell_animation(u8 fx) { (void)fx; }                      /* FX allocator → Phase 5/6 */
@@ -105,6 +110,17 @@ void p1_input_dispatch_bit10(void) { }
 void FUN_1000_4437(void) { }
 void advance_physics_freeze(void) { }
 void FUN_1000_1e3d(void) { }
+
+/* ── channel-B anim globals apply_contact_action (player.c, Phase-9 T1) references.
+   OWNED by anim.c in the real build; defined here for the host replay so the
+   reconstructed apply_contact_action can claim a channel-B slot.  anim.h declares
+   them extern + the anim_chan_rec type (its include guard makes player.c's later
+   #include a no-op). */
+#include "../src/anim.h"
+anim_chan_rec       anim_b_records[ANIM_B_SLOTS];
+anim_chan_rec       anim_b_terminator = { 0xff, 0, 0, 0, 0, 0, 0, 0 };
+anim_chan_rec __far *anim_channels_b_tbl[ANIM_B_SLOTS + 1];   /* 4 slots + 0xFF term */
+u8                  anim_b_loop_idx;   /* DGROUP 0x8566 = last_contact_action alias */
 
 #include "../src/player.c"
 
@@ -753,6 +769,242 @@ static stitch_result_t run_trajectory_stitch(record_t *recs, long nrec, const ch
     return res;
 }
 
+/* ════════════════════════════════════════════════════════════════════════════
+ *  PHASE 9, TASK 1 — CONTACT-ACTION HANDLER FAMILY DIFFERENTIAL
+ *  --------------------------------------------------------------------------
+ *  The contact handlers map p1_contact_code through a DGROUP byte LUT to an action
+ *  code, then run apply_contact_action(action) = play the device-selected contact
+ *  sound + claim a channel-B anim slot keyed by p1_cell_prev + stamp the action's
+ *  tile into tilemap[p1_cell_prev+0x30].  These functions are NOT in the physics
+ *  16-byte SNAP, so this is a SELF-CONTAINED differential whose GROUND TRUTH is the
+ *  engine's own byte-exact tables read DIRECTLY from BUMPY_unpacked.exe (NOT from
+ *  player.c's arrays) + the engine-verified channel-B slot-allocator semantics
+ *  (the structural twin of apply_cell_animation, anim.c 69aa).  A real differential:
+ *  player.c's reconstructed arrays/logic vs the engine image; perturbation-proven
+ *  (set CONTACT_PERTURB=1 to corrupt a seeded input → the gate MUST fail).
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/* DGROUP file base in BUMPY_unpacked.exe (see player.c table comments). */
+#define DGROUP_FILE_BASE 0x11440
+
+/* The six dispatch LUTs' DGROUP offsets, paired with the handler that reads each. */
+typedef struct { u16 dgroup_off; const char *name; } lut_ref_t;
+static const lut_ref_t CONTACT_LUTS[6] = {
+    { 0x35fe, "at_start(35fe)" }, { 0x361e, "before_end(361e)" },
+    { 0x363e, "main(363e)"     }, { 0x365e, "prev(365e)"       },
+    { 0x367e, "tbl_367e(367e)" }, { 0x369e, "tbl_369e(369e)"   },
+};
+/* player.c's reconstructed copies (the thing under test). */
+static u8 *contact_lut_recon[6];          /* filled in main from player.c symbols */
+
+/* Read a window of the engine image; returns 1 on success. */
+static int read_exe(const char *exe, u32 off, u8 *dst, unsigned n)
+{
+    FILE *f = fopen(exe, "rb");
+    if (!f) return 0;
+    if (fseek(f, (long)off, SEEK_SET) != 0) { fclose(f); return 0; }
+    if (fread(dst, 1, n, f) != n) { fclose(f); return 0; }
+    fclose(f);
+    return 1;
+}
+
+/* Reset the 4 channel-B slots to a known free state and re-wire the slot table. */
+static void contact_reset_b_slots(void)
+{
+    int i;
+    memset(anim_b_records, 0, sizeof(anim_b_records));
+    for (i = 0; i < ANIM_B_SLOTS; i++)
+        anim_channels_b_tbl[i] = &anim_b_records[i];
+    anim_b_terminator.active = 0xff;        /* the 0xFF scan terminator (DGROUP 0x4cb0) */
+    anim_channels_b_tbl[ANIM_B_SLOTS] = &anim_b_terminator;
+}
+
+/* run_contact_family: drive every handler; assert against the engine image. */
+static int run_contact_family(const char *exe, stats_t *st)
+{
+    u8 lut_eng[6][0x30];        /* engine-image dispatch LUTs                   */
+    u8 sound_opl[0x30], sound_std[0x30];   /* engine-image contact-sound LUTs   */
+    u8 tiledef_eng[0x18 * 4];   /* engine-image contact tile-def far-ptr table  */
+    int i, t, perturb = (getenv("CONTACT_PERTURB") != NULL);
+    long printed = 0;
+
+    /* ── 1. load engine ground truth directly from the unpacked image ── */
+    for (i = 0; i < 6; i++) {
+        if (!read_exe(exe, DGROUP_FILE_BASE + CONTACT_LUTS[i].dgroup_off,
+                      lut_eng[i], 0x30)) {
+            fprintf(stderr, "contact: cannot read %s LUT from %s\n",
+                    CONTACT_LUTS[i].name, exe);
+            return -1;
+        }
+    }
+    if (!read_exe(exe, DGROUP_FILE_BASE + 0x272e, sound_opl, 0x30) ||
+        !read_exe(exe, DGROUP_FILE_BASE + 0x274e, sound_std, 0x30) ||
+        !read_exe(exe, DGROUP_FILE_BASE + 0x3256, tiledef_eng, sizeof(tiledef_eng))) {
+        fprintf(stderr, "contact: cannot read sound/tiledef tables from %s\n", exe);
+        return -1;
+    }
+
+    /* Seed the engine's DGROUP image into far_mem at the static DGROUP segment
+       (0x103b) so the far ptrs in the tiledef table (0x103b:offset) deref the REAL
+       tile-def records for BOTH the reconstruction and this oracle's recomputation.
+       DGROUP file 0x11440 -> linear (0x103b<<4); copy a generous window. */
+    {
+        static u8 dgroup_img[0x6000];
+        u32 dg_lin = (u32)0x103b << 4;
+        unsigned n = sizeof(dgroup_img);
+        if (read_exe(exe, DGROUP_FILE_BASE, dgroup_img, n) &&
+            dg_lin + n <= sizeof(far_mem)) {
+            memcpy(far_mem + dg_lin, dgroup_img, n);
+        } else {
+            fprintf(stderr, "contact: cannot seed DGROUP image into far_mem\n");
+            return -1;
+        }
+    }
+
+    /* Optional perturbation: corrupt the engine-image baseline that EVERY gate below
+       compares against (the LUT byte-compare, the device-selected sound, the tiledef
+       far ptr, the dispatch-handler action resolution), proving the comparators have
+       teeth (CONTACT_PERTURB=1 -> the gate MUST FAIL). */
+    if (perturb) {
+        lut_eng[2][5] ^= 0xFF;   /* main(363e) LUT, contact_code 5 -> action resolve */
+        lut_eng[4][7] ^= 0xFF;   /* tbl_367e LUT, dispatch-handler action resolve     */
+        sound_opl[5]  ^= 0xFF;   /* device-selected contact sound id                  */
+        tiledef_eng[4*2] ^= 0xFF;/* action 2 tile-def far-ptr off                     */
+    }
+
+    /* ── 2. ASSERT player.c's reconstructed LUTs == the engine image bytes ──
+       (a table transcription error -> immediate FAIL; this is the byte-exact gate). */
+    for (i = 0; i < 6; i++) {
+        if (memcmp(contact_lut_recon[i], lut_eng[i], 0x30) != 0) {
+            st->fail++;
+            printf("    FAIL contact LUT %s: reconstructed bytes != engine image\n",
+                   CONTACT_LUTS[i].name);
+        } else { st->pass++; }
+    }
+    if (memcmp(contact_sound_lut_opl_272e, sound_opl, 0x30) != 0) {
+        st->fail++; printf("    FAIL contact sound LUT (OPL 272e) != engine image\n");
+    } else { st->pass++; }
+    if (memcmp(contact_sound_lut_std_274e, sound_std, 0x30) != 0) {
+        st->fail++; printf("    FAIL contact sound LUT (std 274e) != engine image\n");
+    } else { st->pass++; }
+    if (memcmp(contact_tiledef_tbl, tiledef_eng, sizeof(tiledef_eng)) != 0) {
+        st->fail++; printf("    FAIL contact tiledef tbl (3256) != engine image\n");
+    } else { st->pass++; }
+
+    /* ── 3. drive apply_contact_action over a sweep; assert its effects against an
+       INDEPENDENT recomputation from the engine-image tiledef + sound tables ──
+       For each tile-def-bearing action (2..0x17), seed a fresh free B table + a
+       known p1_cell_prev, set the device, call apply_contact_action, and assert:
+         - last_contact_action (anim_b_loop_idx 0x8566) == action,
+         - the device-selected contact sound was played (id from engine sound LUT),
+         - slot 0 claimed: active==1, cell==p1_cell_prev,
+         - the stream far ptr copied from tile_def[2..5],
+         - tilemap[p1_cell_prev+0x30] == tile_def[0].
+       tile_def is rebuilt from the ENGINE-IMAGE tiledef table (independent of the
+       reconstruction's array). */
+    for (t = 0; t < 2; t++) {                 /* t=0: std device, t=1: OPL device */
+        int action;
+        sound_device_state = (t == 1) ? 4 : 0;
+        for (action = 2; action <= 0x17; action++) {
+            u16 td_off = (u16)(tiledef_eng[action*4+0] | (tiledef_eng[action*4+1] << 8));
+            u16 td_seg = (u16)(tiledef_eng[action*4+2] | (tiledef_eng[action*4+3] << 8));
+            const u8 *td = (const u8 *)MK_FP(td_seg, td_off);  /* engine far ptr */
+            u8 cell_prev = (u8)(0x10 + action);    /* arbitrary distinct key cell  */
+            u8 want_tile = td[0];
+            u16 want_soff = (u16)(td[2] | (td[3] << 8));
+            u16 want_sseg = (u16)(td[4] | (td[5] << 8));
+            u8 want_sound = (t == 1) ? sound_opl[action] : sound_std[action];
+            const char *bad = NULL; long got = 0, want = 0;
+
+            /* tilemap shadow (cell_prev+0x30 must be in synth_tilemap range). */
+            memset(synth_tilemap, 0, TILEMAP_SIZE);
+            contact_reset_b_slots();
+            p1_cell_prev = cell_prev;
+            g_last_play_sound_id = 0xAA; g_play_sound_calls = 0;
+            anim_b_loop_idx = 0;
+
+            apply_contact_action((u8)action);
+
+            if (anim_b_loop_idx != (u8)action) {
+                bad = "last_contact_action"; got = anim_b_loop_idx; want = action;
+            } else if (want_sound != 0 &&
+                       (g_play_sound_calls != 1 || g_last_play_sound_id != want_sound)) {
+                bad = "contact_sound"; got = g_last_play_sound_id; want = want_sound;
+            } else if (want_sound == 0 && g_play_sound_calls != 0) {
+                bad = "contact_sound(silent)"; got = g_play_sound_calls; want = 0;
+            } else if (anim_b_records[0].active != 1) {
+                bad = "slot.active"; got = anim_b_records[0].active; want = 1;
+            } else if (anim_b_records[0].cell != cell_prev) {
+                bad = "slot.cell"; got = anim_b_records[0].cell; want = cell_prev;
+            } else if (anim_b_records[0].stream_off != want_soff) {
+                bad = "slot.stream_off"; got = anim_b_records[0].stream_off; want = want_soff;
+            } else if (anim_b_records[0].stream_seg != want_sseg) {
+                bad = "slot.stream_seg"; got = anim_b_records[0].stream_seg; want = want_sseg;
+            } else if (synth_tilemap[(u16)cell_prev + 0x30] != want_tile) {
+                bad = "tilemap_stamp";
+                got = synth_tilemap[(u16)cell_prev + 0x30]; want = want_tile;
+            }
+            if (bad) {
+                st->fail++;
+                if (printed++ < 12)
+                    printf("    FAIL apply_contact_action[dev=%d action=%#x] %s: "
+                           "got %ld want %ld\n", t, action, bad, got, want);
+            } else { st->pass++; }
+        }
+    }
+
+    /* ── 4. drive each dispatch handler: assert it resolves the action code via the
+       reconstructed LUT == the engine-image LUT, applies it, and clears input_state.
+       The handlers gate on move_step_count (0/7); cover both branches. ── */
+    {
+        static const struct { u16 off; const char *nm; int lut; int guard; }
+        H[] = {
+            /* guard: 0 = unconditional, 1 = move_step_count!=0, 7 = move_step_count!=7 */
+            { 0x6890, "at_start",      0, 1 },   /* lut 35fe */
+            { 0x68bb, "before_end",    1, 7 },   /* lut 361e */
+            { 0x68fe, "tbl_367e",      4, 0 },   /* lut 367e */
+            { 0x693a, "tbl_369e",      5, 0 },   /* lut 369e */
+        };
+        int h, cc;
+        for (h = 0; h < (int)(sizeof(H)/sizeof(H[0])); h++) {
+            for (cc = 0; cc < 0x18; cc++) {       /* sweep contact codes 0..0x17 */
+                u8 want_action = lut_eng[H[h].lut][cc];
+                const char *bad = NULL; long got = 0, want = 0;
+                memset(synth_tilemap, 0, TILEMAP_SIZE);
+                contact_reset_b_slots();
+                p1_contact_code = (u8)cc;
+                p1_cell_prev = (u8)(0x10 + cc);
+                input_state = 0x7f;
+                move_step_count = (H[h].guard == 7) ? 3 : 1;   /* take the active branch */
+                sound_device_state = 0;
+                anim_b_loop_idx = 0xEE;
+
+                switch (H[h].off) {
+                    case 0x6890: p1_apply_contact_action_at_start();   break;
+                    case 0x68bb: p1_apply_contact_action_before_end(); break;
+                    case 0x68fe: p1_apply_contact_action_tbl_367e();   break;
+                    case 0x693a: p1_apply_contact_action_tbl_369e();   break;
+                }
+                /* the handler must have applied action = LUT[cc] (last_contact_action
+                   latches it) and zeroed input_state. */
+                if (anim_b_loop_idx != want_action) {
+                    bad = "resolved_action"; got = anim_b_loop_idx; want = want_action;
+                } else if (input_state != 0) {
+                    bad = "input_state"; got = input_state; want = 0;
+                }
+                if (bad) {
+                    st->fail++;
+                    if (printed++ < 12)
+                        printf("    FAIL %s[cc=%#x] %s: got %ld want %ld\n",
+                               H[h].nm, cc, bad, got, want);
+                } else { st->pass++; }
+            }
+        }
+    }
+
+    return 0;
+}
+
 /* ════════════════════════════════════════════════════════════════════════════ */
 int main(int argc, char **argv)
 {
@@ -837,6 +1089,32 @@ int main(int argc, char **argv)
         st.pass += sst.pass; st.fail += sst.fail; st.unported += sst.unported;
         st.skipped_mode += sst.skipped_mode;
         free(recs);
+    }
+
+    /* ── Phase-9 T1: contact-action handler family differential ── */
+    {
+        stats_t cst = { 0, 0, 0, 0 };
+        const char *exe = "local/build/unpack/BUMPY_unpacked.exe";
+        int rc;
+        contact_lut_recon[0] = contact_action_lut_35fe;
+        contact_lut_recon[1] = contact_action_lut_361e;
+        contact_lut_recon[2] = contact_action_lut_363e;
+        contact_lut_recon[3] = contact_action_lut_365e;
+        contact_lut_recon[4] = contact_action_lut_367e;
+        contact_lut_recon[5] = contact_action_lut_369e;
+        printf("\n== Phase-9 T1: contact-action handler family "
+               "(ground truth = %s) ==\n", exe);
+        rc = run_contact_family(exe, &cst);
+        if (rc < 0) {
+            fprintf(stderr, "contact: ground-truth image unavailable — gate cannot run\n");
+            hard_fail = 1;
+        } else {
+            printf("  contact-family: PASS=%ld  FAIL=%ld%s\n",
+                   cst.pass, cst.fail,
+                   getenv("CONTACT_PERTURB") ? "  (CONTACT_PERTURB active)" : "");
+            st.pass += cst.pass; st.fail += cst.fail;
+            if (cst.fail) hard_fail = 1;
+        }
     }
 
     printf("\n=== TOTAL per-fn: PASS=%ld  FAIL=%ld  UNPORTED=%ld  SKIPPED_MODE=%ld ===\n",

@@ -85,14 +85,15 @@ typedef struct anim_chan_rec {
 /* ── slot tables — OWNED BY anim.c (far-ptr tables; each entry -> a record) ──────
    A table = ANIM_A_SLOTS+1 entries: 3 usable slots + a 0xFF-terminator record
    (engine 0x4c64) the allocator scan stops on (see anim.c). */
-extern anim_chan_rec __far *anim_channels_a_tbl[ANIM_A_SLOTS + 1]; /* DGROUP 0x4c70/0x4c72 */
-extern anim_chan_rec __far *anim_channels_b_tbl[ANIM_B_SLOTS];     /* DGROUP 0x4cbc/0x4cbe */
+extern anim_chan_rec __far *anim_channels_a_tbl[ANIM_A_SLOTS + 1]; /* DGROUP 0x4c70/0x4c72 (3 slots + 0xFF term) */
+extern anim_chan_rec __far *anim_channels_b_tbl[ANIM_B_SLOTS + 1]; /* DGROUP 0x4cbc/0x4cbe (4 slots + 0xFF term) */
 
 /* The records the slot tables point at (one fixed record per slot) + the A
    scan-terminator record (active=0xFF) the allocator stops on. */
 extern anim_chan_rec anim_a_records[ANIM_A_SLOTS];
 extern anim_chan_rec anim_b_records[ANIM_B_SLOTS];
 extern anim_chan_rec anim_a_terminator;
+extern anim_chan_rec anim_b_terminator;
 
 /* ── per-action / per-frame far-ptr tables — OWNED BY anim.c ─────────────────────
    Tables of 4-byte FAR POINTERS (off-half @ N*4+0, seg-half @ N*4+2), indexed by

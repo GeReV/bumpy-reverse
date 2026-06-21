@@ -2014,6 +2014,336 @@ void move_step_noop_sentinel(void)
     return;
 }
 
+/* ════════════════════════════════════════════════════════════════════════════
+ *  PHASE 9, TASK 1 — PLAYER-1 CONTACT-ACTION HANDLER FAMILY
+ *  --------------------------------------------------------------------------
+ *  The move_step_dispatch_tbl (DGROUP 0x43c0, above) routes a number of mode/step
+ *  slots to this family of contact-action micro-handlers (engine offsets, dumped
+ *  into the table verbatim): p1_apply_contact_action_main (6832, mode 0x29),
+ *  _prev (684b, 0x2a), _at_start (6890, 0x38/0x3a), _before_end (68bb, 0x39/0x3b),
+ *  _at_start_b (68e6, 0x34/0x36), _before_end_b (6922, 0x35/0x37),
+ *  _tbl_367e (68fe, 0x1a), _tbl_369e (693a, 0x1b); plus move_step_*_variant
+ *  (66d8 etc.) all funnel into apply_contact_action.  Each contact handler maps
+ *  p1_contact_code through a DGROUP byte LUT to an *action code*, then runs
+ *  apply_contact_action(action), which plays the contact sound + claims a
+ *  channel-B animation slot keyed by p1_cell_prev + stamps the action's tile into
+ *  the +0x30 tilemap layer.
+ *
+ *  Ported 1:1 from the live Ghidra decomp + raw disassembly (verified fresh via
+ *  MCP, 2026-06).  Each fn cites its engine address.  This un-stubs the no-op
+ *  apply_contact_action that was a game_stubs.c placeholder (Phases 2–8): every
+ *  move_step_dispatch_tbl target offset now resolves to a real function (the
+ *  prerequisite for the Phase-9 T2 offset->fn resolver).
+ *
+ *  The six dispatch LUTs (35fe/361e/363e/365e/367e/369e) + the two contact-sound
+ *  LUTs (272e/274e) + the contact tile-def far-ptr table (3256/3258) are dumped
+ *  byte-exact from BUMPY_unpacked.exe (DGROUP file base 0x11440); see the blobs
+ *  below.
+ *
+ *  RECONSTRUCTION FIDELITY (channel-B record/table access):
+ *    - apply_contact_action is the channel-B analogue of apply_cell_animation
+ *      (anim.c, 69aa): it scans anim_channels_b_tbl (4 slots, DGROUP 0x4cbc/0x4cbe,
+ *      OWNED by anim.c) for a slot whose cell == p1_cell_prev (or a free slot), and
+ *      on claim writes slot->cell = p1_cell_prev, slot->stream ptr = tile_def[+2..+5],
+ *      slot->active = 1, and stamps tilemap[p1_cell_prev + 0x30] = tile_def[0].
+ *    - The engine stores the action code into DGROUP byte 0x8566 as last_contact_action
+ *      at function entry.  That byte is the SAME DGROUP byte the channel-B stepper
+ *      reuses as its loop index (anim.c labels it anim_b_loop_idx; the decomp labels
+ *      it last_contact_action in step_anim_channels_b).  To keep one owner per global
+ *      we write that engine store through the anim.c-owned anim_b_loop_idx symbol;
+ *      see the alias note at anim.c:268.  No new symbol is introduced.
+ *    - contact_tiledef_tbl (0x3256/0x3258, action*4 -> far ptr) is modeled as a raw
+ *      byte blob (the same representation anim.c's anim_a_tiledef_tbl / player.c's
+ *      mode_script_tbl use); an entry's far ptr is rebuilt with MK_FP at the use
+ *      site.  Its seg halves are the static-image link-time DGROUP seg 0x103b; like
+ *      anim.c's far-ptr tables the host harness seeds/relocates them for the gate.
+ *    - p1_dispatch_contact_action takes the action_table as a far-pointer argument
+ *      (the engine passes DS:0x363e / DS:0x365e); the _main/_prev wrappers pass a
+ *      pointer to the corresponding dumped LUT.  The remaining handlers index the
+ *      LUT as a near DGROUP read (p1_contact_code + 0x35fe etc.) — modeled as a
+ *      direct array index, identical result.
+ *    - play_sound (6e11) stays the Phase-6 sound leaf (already linked from sound.c).
+ * ════════════════════════════════════════════════════════════════════════════ */
+#include "anim.h"   /* anim_chan_rec, anim_channels_b_tbl (0x4cbc), anim_b_loop_idx (0x8566) */
+
+/* ── DGROUP contact-action dispatch LUTs (p1_contact_code -> action code) ──────────
+ * Six overlapping 0x30-byte byte tables at DGROUP 0x35fe..0x369e+0x30 (file base
+ * 0x11440).  In the engine these overlap in memory; each handler reads only
+ * table[p1_contact_code] (p1_contact_code < 0x30), so reproducing each as its own
+ * 0x30-byte array yields identical index results (same idiom as player.c's
+ * tile_followup_action_lut / contact_sound_lut_35de).  Dumped byte-exact. */
+/* DGROUP 0x35fe (file 0x14a3e) — p1_apply_contact_action_at_start LUT. */
+u8  contact_action_lut_35fe[0x30] = {
+    0x00,0x01,0x02,0x03,0x04,0x17,0x05,0x00,0x00,0x08,0x09,0x0a,
+    0x00,0x00,0x0b,0x0c,0x0d,0x0e,0x0f,0x10,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x02,0x03,
+    0x04,0x17,0x00,0x06,0x00,0x08,0x09,0x0a,0x00,0x00,0x0b,0x0c
+};
+/* DGROUP 0x361e (file 0x14a5e) — p1_apply_contact_action_before_end LUT. */
+u8  contact_action_lut_361e[0x30] = {
+    0x00,0x01,0x02,0x03,0x04,0x17,0x00,0x06,0x00,0x08,0x09,0x0a,
+    0x00,0x00,0x0b,0x0c,0x0d,0x0e,0x0f,0x10,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x11,0x12,
+    0x13,0x17,0x14,0x00,0x00,0x08,0x09,0x0a,0x00,0x00,0x0b,0x0c
+};
+/* DGROUP 0x363e (file 0x14a7e) — p1_apply_contact_action_main LUT. */
+u8  contact_action_lut_363e[0x30] = {
+    0x00,0x01,0x11,0x12,0x13,0x17,0x14,0x00,0x00,0x08,0x09,0x0a,
+    0x00,0x00,0x0b,0x0c,0x0d,0x0e,0x0f,0x10,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x11,0x12,
+    0x13,0x17,0x00,0x15,0x00,0x08,0x09,0x0a,0x00,0x00,0x0b,0x0c
+};
+/* DGROUP 0x365e (file 0x14a9e) — p1_apply_contact_action_prev LUT. */
+u8  contact_action_lut_365e[0x30] = {
+    0x00,0x01,0x11,0x12,0x13,0x17,0x00,0x15,0x00,0x08,0x09,0x0a,
+    0x00,0x00,0x0b,0x0c,0x0d,0x0e,0x0f,0x10,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x11,0x12,
+    0x13,0x17,0x14,0x00,0x00,0x08,0x09,0x0a,0x00,0x00,0x0b,0x0c
+};
+/* DGROUP 0x367e (file 0x14abe) — p1_apply_contact_action_tbl_367e LUT. */
+u8  contact_action_lut_367e[0x30] = {
+    0x00,0x01,0x11,0x12,0x13,0x17,0x14,0x00,0x00,0x08,0x09,0x0a,
+    0x00,0x00,0x0b,0x0c,0x0d,0x0e,0x0f,0x10,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x11,0x12,
+    0x13,0x17,0x00,0x15,0x00,0x08,0x09,0x0a,0x00,0x00,0x0b,0x0c
+};
+/* DGROUP 0x369e (file 0x14ade) — p1_apply_contact_action_tbl_369e LUT. */
+u8  contact_action_lut_369e[0x30] = {
+    0x00,0x01,0x11,0x12,0x13,0x17,0x00,0x15,0x00,0x08,0x09,0x0a,
+    0x00,0x00,0x0b,0x0c,0x0d,0x0e,0x0f,0x10,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x05,
+    0x00,0x01,0x02,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x0e
+};
+
+/* ── DGROUP contact-sound LUTs (action code -> sound id; device-selected) ──────────
+ * apply_contact_action selects the OPL table (0x272e) when sound_device_state==4,
+ * else the std table (0x274e).  0x30-byte tables, dumped byte-exact (they overlap
+ * by 0x10 bytes in the image, like the dispatch LUTs above). */
+/* DGROUP 0x272e (file 0x13b6e) — contact-sound LUT, OPL/charger device. */
+u8  contact_sound_lut_opl_272e[0x30] = {
+    0x00,0x00,0x2f,0x2f,0x2f,0x2f,0x2f,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x07,0x2f,0x2f,0x2f,0x2f,0x2f,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x0d,0x0d,
+    0x0d,0x0d,0x0d,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
+/* DGROUP 0x274e (file 0x13b8e) — contact-sound LUT, std device. */
+u8  contact_sound_lut_std_274e[0x30] = {
+    0x00,0x00,0x0d,0x0d,0x0d,0x0d,0x0d,0x00,0x00,0x00,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x07,0x0d,0x0d,0x0d,0x0d,0x0d,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x03,0x03,0x03,
+    0x03,0x03,0x03,0x03,0x0e,0x10,0x10,0x10,0x12,0x0e,0x0a,0x0a
+};
+
+/* ── DGROUP contact tile-def far-ptr table (action*4 -> far ptr) ───────────────────
+ * apply_contact_action reads tile_def = *(far ptr)(action*4 + 0x3256/0x3258).  A
+ * table of 4-byte FAR POINTERS (off @ a*4+0, seg @ a*4+2) into the per-action
+ * tile-def stream.  Modeled as a raw byte blob (same as anim.c's anim_a_tiledef_tbl);
+ * the far ptr is rebuilt with MK_FP at the use site.  Sized to 256 entries so any
+ * action byte indexes in range (actions seen are <= 0x17).  Dumped byte-exact for
+ * actions 0..0x17 (the static image's range); the seg halves are the static
+ * link-time DGROUP seg 0x103b (host-seeded/relocated for the gate, see fidelity note
+ * above and anim.c's far-ptr-table comment). */
+#define CONTACT_TILEDEF_TBL_LEN  (256 * 4)
+u8  contact_tiledef_tbl[CONTACT_TILEDEF_TBL_LEN] = {
+    0x00,0x00,0x00,0x00, 0x6a,0x30,0x3b,0x10, 0x82,0x30,0x3b,0x10, 0x9a,0x30,0x3b,0x10,
+    0xb2,0x30,0x3b,0x10, 0xc6,0x30,0x3b,0x10, 0xda,0x30,0x3b,0x10, 0xf2,0x30,0x3b,0x10,
+    0x00,0x31,0x3b,0x10, 0x0e,0x31,0x3b,0x10, 0x26,0x31,0x3b,0x10, 0x3a,0x31,0x3b,0x10,
+    0x4e,0x31,0x3b,0x10, 0x62,0x31,0x3b,0x10, 0x76,0x31,0x3b,0x10, 0x8a,0x31,0x3b,0x10,
+    0x98,0x31,0x3b,0x10, 0xae,0x31,0x3b,0x10, 0xc4,0x31,0x3b,0x10, 0xda,0x31,0x3b,0x10,
+    0xee,0x31,0x3b,0x10, 0x02,0x32,0x3b,0x10, 0x26,0x32,0x3b,0x10, 0x3c,0x32,0x3b,0x10
+    /* actions 0x18..0xff: zero (no tile-def; action codes never exceed 0x17) */
+};
+
+/* DGROUP 0x8566 — last_contact_action: the engine stores the action code here at
+ * apply_contact_action entry; it is the SAME byte the channel-B stepper reuses as
+ * anim_b_loop_idx (OWNED by anim.c).  Aliased via that symbol — see the fidelity
+ * note above. */
+
+/*
+ * apply_contact_action — 1000:6a89
+ * --------------------------------------------------------------------------
+ * Apply a contact/tile action by code: store it as last_contact_action; if 0,
+ * return.  Otherwise play its contact sound (table selected by sound_device_state
+ * == 4 -> OPL, else std), then claim a channel-B animation slot keyed by
+ * p1_cell_prev and stamp the action's tile into the +0x30 tilemap layer.
+ *
+ * The slot SCAN mirrors apply_cell_animation (anim.c) exactly, but on channel B
+ * (anim_channels_b_tbl, 4 slots) and keyed by p1_cell_prev (not anim_target_cell):
+ *   Scan 1 (do/while): advance slot_idx over the B table skipping ACTIVE slots
+ *     (active=='\0' continues); on the first non-zero slot, if it is the 0xFF
+ *     terminator -> reset slot_idx=0 and fall into Scan 2 (LAB_6b26); otherwise if
+ *     its [1]==p1_cell_prev -> claim it (LAB_6b78); else loop Scan 1 again.
+ *   Scan 2 (LAB_6b26): advance from slot 0 looking for a FREE ('\0') slot, stopping
+ *     on '\0' (claim) or 0xFF (give up -> return).  A non-'\0', non-0xFF byte keeps
+ *     scanning.  On reaching '\0' -> claim (LAB_6b78); else (0xFF) -> return.
+ * On claim (LAB_6b78): write [1]=p1_cell_prev, stamp tilemap[p1_cell_prev+0x30] =
+ * tile_def[0], copy tile_def[2..5] -> slot[2..5] (the stream far ptr), set [0]=1.
+ *
+ * Verified against disasm 1000:6a89–6bb4.  See the RECONSTRUCTION FIDELITY banner
+ * above for the channel-B / last_contact_action alias / table-blob notes.
+ */
+void apply_contact_action(u8 action_code)
+{
+    u8                sound_id;
+    const u8 __far   *tile_def;     /* tile_def_ptr — far ptr at tiledef_tbl[a*4] */
+    u16               tdef_off, tdef_seg;
+    u8                slot_idx;
+    u8                cell_key;      /* p1_cell_prev latched (bVar1) */
+    anim_chan_rec __far *slot;       /* slot_entry_ptr / slot_ptr                  */
+
+    anim_b_loop_idx = action_code;   /* last_contact_action @ DGROUP 0x8566 (alias) */
+    if (action_code == 0) {
+        return;
+    }
+    /* contact sound: device-selected LUT (action_code index). */
+    if (sound_device_state == 4) {
+        sound_id = contact_sound_lut_opl_272e[action_code];
+    } else {
+        sound_id = contact_sound_lut_std_274e[action_code];
+    }
+    if (sound_id != 0) {
+        play_sound(sound_id);
+    }
+
+    cell_key = p1_cell_prev;
+    /* tile_def far ptr = contact_tiledef_tbl[action_code*4] (off @ +0, seg @ +2). */
+    tdef_off = *(u16 *)(contact_tiledef_tbl + (u16)action_code * 4 + 0);
+    tdef_seg = *(u16 *)(contact_tiledef_tbl + (u16)action_code * 4 + 2);
+    tile_def = (const u8 __far *)MK_FP(tdef_seg, tdef_off);
+
+    /* ── Scan 1: skip active slots; act on the first non-active slot. ─────────────── */
+    slot_idx = 0;
+    do {
+        do {
+            slot = anim_channels_b_tbl[slot_idx];
+            slot_idx = (u8)(slot_idx + 1);
+        } while (slot->active == '\0');
+        if (slot->active == (u8)0xff) {
+            slot_idx = 0;
+            goto LAB_6b26;
+        }
+    } while (slot->cell != p1_cell_prev);
+    goto LAB_6b78;
+
+    /* ── Scan 2: from slot 0, find a FREE ('\0') slot; 0xFF terminator gives up. ──── */
+    while (slot->active != (u8)0xff) {
+LAB_6b26:
+        slot = anim_channels_b_tbl[slot_idx];
+        slot_idx = (u8)(slot_idx + 1);
+        if (slot->active == '\0') {
+            break;
+        }
+    }
+    if (slot->active != '\0') {
+        return;   /* exited on 0xFF without a free slot */
+    }
+
+LAB_6b78:
+    slot->cell = p1_cell_prev;
+    tilemap[(u16)cell_key + 0x30] = tile_def[0];
+    slot->stream_off = *(u16 __far *)(tile_def + 2);
+    slot->stream_seg = *(u16 __far *)(tile_def + 4);
+    slot->active = 1;
+    return;
+}
+
+/*
+ * p1_dispatch_contact_action — 1000:686a
+ * --------------------------------------------------------------------------
+ * Look up action_table[p1_contact_code] and apply it via apply_contact_action;
+ * clear input_state.  The engine passes action_table as a far pointer (DS:offset);
+ * the _main/_prev wrappers pass a pointer to the corresponding dumped DGROUP LUT.
+ */
+void p1_dispatch_contact_action(u8 *action_table)
+{
+    apply_contact_action(action_table[p1_contact_code]);
+    input_state = 0;
+    return;
+}
+
+/* p1_apply_contact_action_main — 1000:6832
+ * Dispatch contact action for the current cell via the action table at 0x363e. */
+void p1_apply_contact_action_main(void)
+{
+    p1_dispatch_contact_action(contact_action_lut_363e);
+    return;
+}
+
+/* p1_apply_contact_action_prev — 1000:684b
+ * Save p1_cell into p1_cell_prev, then dispatch via the action table at 0x365e. */
+void p1_apply_contact_action_prev(void)
+{
+    p1_cell_prev = p1_cell;
+    p1_dispatch_contact_action(contact_action_lut_365e);
+    return;
+}
+
+/* p1_apply_contact_action_at_start — 1000:6890
+ * If a move step is in progress (move_step_count != 0) apply the contact action
+ * for p1_contact_code via table 0x35fe; clears input_state. */
+void p1_apply_contact_action_at_start(void)
+{
+    if (move_step_count != 0) {
+        apply_contact_action(contact_action_lut_35fe[p1_contact_code]);
+        input_state = 0;
+    }
+    return;
+}
+
+/* p1_apply_contact_action_before_end — 1000:68bb
+ * Unless the move step is at its final frame (move_step_count != 7) apply the
+ * contact action for p1_contact_code via table 0x361e; clears input_state. */
+void p1_apply_contact_action_before_end(void)
+{
+    if (move_step_count != 7) {
+        apply_contact_action(contact_action_lut_361e[p1_contact_code]);
+        input_state = 0;
+    }
+    return;
+}
+
+/* p1_apply_contact_action_tbl_367e — 1000:68fe
+ * Apply the contact action for p1_contact_code via table 0x367e; clears
+ * input_state. */
+void p1_apply_contact_action_tbl_367e(void)
+{
+    apply_contact_action(contact_action_lut_367e[p1_contact_code]);
+    input_state = 0;
+    return;
+}
+
+/* p1_apply_contact_action_tbl_369e — 1000:693a
+ * Apply the contact action for p1_contact_code via table 0x369e; clears
+ * input_state. */
+void p1_apply_contact_action_tbl_369e(void)
+{
+    apply_contact_action(contact_action_lut_369e[p1_contact_code]);
+    input_state = 0;
+    return;
+}
+
+/* p1_apply_contact_action_at_start_b — 1000:68e6
+ * If a move step is in progress (move_step_count != 0) apply the contact action
+ * via table 0x367e (p1_apply_contact_action_tbl_367e). */
+void p1_apply_contact_action_at_start_b(void)
+{
+    if (move_step_count != 0) {
+        p1_apply_contact_action_tbl_367e();
+    }
+    return;
+}
+
+/* p1_apply_contact_action_before_end_b — 1000:6922
+ * Unless the move step is at its final frame (move_step_count != 7) apply the
+ * contact action via table 0x369e (p1_apply_contact_action_tbl_369e). */
+void p1_apply_contact_action_before_end_b(void)
+{
+    if (move_step_count != 7) {
+        p1_apply_contact_action_tbl_369e();
+    }
+    return;
+}
+
 /* ── The two move-step delegates check_tile_below_ladder_or_land tail-calls ────── */
 
 /* p1_exec_pending_action — 1000:465e

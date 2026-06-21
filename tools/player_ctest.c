@@ -66,12 +66,15 @@ u8 __far  *tilemap = synth_tilemap;
 
 /* Leaf-call trace: each stub bumps its counter so tests can assert routing. */
 static int n_play_sound, n_step_walk_anim;
-static int n_apply_contact_action, n_play_action_sound, n_play_walk_anim_default;
+static int n_play_action_sound, n_play_walk_anim_default;
 static int n_fun_4802;
 
 void play_sound(u8 id) { (void)id; n_play_sound++; }
 void play_action_sound(void) { n_play_action_sound++; }
-void apply_contact_action(u8 c) { (void)c; n_apply_contact_action++; }
+/* apply_contact_action (1000:6a89) is now RECONSTRUCTED in src/player.c (Phase-9 T1)
+   and pulled in via the #include below — no host stub (would be a dup symbol).  The
+   E5b routing check asserts it fired by observing anim_b_loop_idx (last_contact_action
+   @ DGROUP 0x8566), which the real fn latches to its action arg on entry. */
 void play_walk_anim_default(void) { n_play_walk_anim_default++; }
 void step_walk_anim(u8 a, u8 p, u16 fo, u16 fs) { (void)a;(void)p;(void)fo;(void)fs; n_step_walk_anim++; }
 void FUN_1000_4802(void) { n_fun_4802++; }
@@ -99,6 +102,15 @@ void p1_input_dispatch_bit10(void) { }
 void FUN_1000_4437(void) { }
 void advance_physics_freeze(void) { }
 void FUN_1000_1e3d(void) { }
+
+/* channel-B anim globals apply_contact_action (player.c, Phase-9 T1) references
+   (OWNED by anim.c in the real build; defined here for this host harness).  anim.h
+   is pulled in by player.c; its include guard makes a re-include a no-op. */
+#include "../src/anim.h"
+anim_chan_rec       anim_b_records[ANIM_B_SLOTS];
+anim_chan_rec       anim_b_terminator = { 0xff, 0, 0, 0, 0, 0, 0, 0 };
+anim_chan_rec __far *anim_channels_b_tbl[ANIM_B_SLOTS + 1];
+u8                  anim_b_loop_idx;   /* DGROUP 0x8566 = last_contact_action alias */
 
 #include "../src/player.c"
 
@@ -134,6 +146,16 @@ static void reset_state(void)
     move_locked = 0; p1_move_steps_left = 0; p1_facing_left = 0;
     p1_move_anim_frame_idx = 0; p1_queued_action_code = 0;
     physics_frozen = 0; move_override = 0; p1_move_script = NULL;
+    /* wire the channel-B slot table (4 free slots + 0xFF terminator) so the real
+       apply_contact_action (player.c, Phase-9 T1) can claim a slot without crashing. */
+    {
+        int i;
+        memset(anim_b_records, 0, sizeof(anim_b_records));
+        for (i = 0; i < ANIM_B_SLOTS; i++) anim_channels_b_tbl[i] = &anim_b_records[i];
+        anim_b_terminator.active = 0xff;
+        anim_channels_b_tbl[ANIM_B_SLOTS] = &anim_b_terminator;
+        anim_b_loop_idx = 0;
+    }
 }
 
 int main(void)
@@ -332,7 +354,7 @@ int main(void)
        dispatch_move_step, so pre-install a safe step slot for game_mode 1. */
     {
         reset_state();
-        n_step_walk_anim = 0; n_apply_contact_action = 0;
+        n_step_walk_anim = 0;
         game_mode = 0x23;
         input_state = 0;
         gamemode_23_walk();
@@ -340,12 +362,16 @@ int main(void)
         reset_state();
         game_mode = 0x23;
         input_state = 2;               /* right held */
+        anim_b_loop_idx = 0;
         install_step_slot(1, 9, step_noop);   /* p1_begin_walk_right uses step_idx 9, mode 1 */
         gamemode_23_walk();
         CHECK(game_mode == 1, "E5b right-held -> begin_walk_right set mode 1: got 0x%x",
               game_mode);
         CHECK(p1_facing_left == 9, "E5b facing_left=9 per engine literal");
-        CHECK(n_apply_contact_action == 1, "E5b apply_contact_action(0x16) fired");
+        /* the real apply_contact_action latches its action arg into last_contact_action
+           (anim_b_loop_idx @ 0x8566) on entry; p1_begin_walk_right calls it with 0x16. */
+        CHECK(anim_b_loop_idx == 0x16, "E5b apply_contact_action(0x16) fired: got 0x%x",
+              anim_b_loop_idx);
     }
 
     /* E6: dispatch_move_step index arithmetic lands on the exact table slot.

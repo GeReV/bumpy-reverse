@@ -621,6 +621,83 @@ the Phase-5 channel-B caveat is **closed**:
 Phases 2–7); the step-B *stream* ptr engine path (the only field the spawn populator never
 writes — see the channel-B caveat residual above).
 
+## Phase-9 module audit (P1 contact-action handler family — `src/player.c`)
+
+The Player-1 contact-action handler family — the `move_step_dispatch_tbl` contact-action
+micro-handlers + the `apply_contact_action` leaf — ported 1:1 from the live Ghidra decomp
++ raw disassembly of `1000:6a89` and `1000:6832..693a`.  This un-stubs `apply_contact_action`
+(a `game_stubs.c` no-op through Phases 2–8) so **every `move_step_dispatch_tbl` target offset
+now resolves to a real function** — the prerequisite for the Phase-9 T2 offset→fn resolver.
+
+| Module / function set | Fidelity | Notes |
+|---|---|---|
+| `apply_contact_action` (6a89) | Transcription | The channel-B slot allocator + contact-sound + tilemap stamp.  Structural twin of `apply_cell_animation` (anim.c 69aa) but on channel B (`anim_channels_b_tbl`, 4 slots + 0xFF terminator), keyed by `p1_cell_prev` (not `anim_target_cell`).  Stores the action code as `last_contact_action` @ DGROUP 0x8566 (the SAME byte the channel-B stepper reuses as `anim_b_loop_idx`; the engine aliases it — written through the anim.c-owned symbol, no new global).  Two-scan free-slot search + 0xFF restart reproduced verbatim; on claim: `slot->cell=p1_cell_prev`, `slot->stream=tile_def[2..5]`, `slot->active=1`, `tilemap[p1_cell_prev+0x30]=tile_def[0]`.  Verified vs disasm 6a89–6bb4. |
+| `p1_dispatch_contact_action` (686a) | Transcription | `apply_contact_action(action_table[p1_contact_code])` + `input_state=0`.  Takes the action table as a **far-pointer arg** (engine passes `DS:0x363e`/`0x365e`); the _main/_prev wrappers pass the corresponding dumped LUT. |
+| `p1_apply_contact_action_main/_prev` (6832/684b) | Transcription | 1:1 thunks to `p1_dispatch_contact_action` with table 0x363e / 0x365e; _prev first latches `p1_cell_prev = p1_cell`. |
+| `p1_apply_contact_action_at_start/_before_end` (6890/68bb) | Transcription | Guarded by `move_step_count != 0` / `!= 7`; apply `contact_action_lut_35fe/361e[p1_contact_code]` (near DGROUP read) + clear `input_state`. |
+| `p1_apply_contact_action_tbl_367e/369e` (68fe/693a) | Transcription | Unconditional apply via LUT 0x367e / 0x369e + clear `input_state`. |
+| `p1_apply_contact_action_at_start_b/_before_end_b` (68e6/6922) | Transcription | Guarded delegates to `_tbl_367e` / `_tbl_369e`. |
+
+**Phase-9 T1 deviations (all in-code RECONSTRUCTION FIDELITY notes present):**
+
+- **`last_contact_action` aliases `anim_b_loop_idx` (DGROUP 0x8566).** The engine reuses one
+  DGROUP byte for the contact action latch (apply_contact_action) and the channel-B step loop
+  index (step_anim_channels_b; the decomp itself labels it `last_contact_action` there).  The
+  store is written through the anim.c-owned `anim_b_loop_idx` symbol — one owner per global, no
+  duplicate.
+- **Dispatch LUTs / sound LUTs / tiledef table dumped byte-exact** (six 0x30-byte action LUTs
+  0x35fe..0x369e; two 0x30-byte contact-sound LUTs 0x272e/0x274e; the action*4 tile-def far-ptr
+  table 0x3256) from `BUMPY_unpacked.exe` (DGROUP file base 0x11440), modeled as raw byte blobs
+  (same idiom as `tile_followup_action_lut` / `anim_a_tiledef_tbl`); far ptrs rebuilt with
+  `MK_FP` at the use site.  The tiledef seg halves are the static link-time DGROUP seg 0x103b
+  (host-seeded/relocated for the gate, as with anim.c's far-ptr tables).
+- **Channel-B table grew a 0xFF terminator.** `anim_channels_b_tbl` is now `[ANIM_B_SLOTS+1]`
+  (4 slots + a 0xFF-terminator record, engine-verified at DGROUP 0x4cb0) — the channel-B
+  analogue of the A table's terminator.  `apply_contact_action`'s unbounded scan and the
+  draw/erase-B `while active != 0xFF` loops require it; the 5th entry was dormant while channel
+  B had no allocator (Phase 5).  A faithful correction (the engine's B table genuinely has it),
+  not a deviation.
+- **`play_sound` (6e11)** is the Phase-6 leaf (already linked from sound.c).
+
+**Phase-9 T1 validation method:** the contact handlers are not in the physics 16-byte SNAP, so
+they are gated by a **self-contained differential** added to the physics harness
+(`tools/physics_ctest.c` → `run_contact_family`, gated by `tools/validate_physics.sh`).  Ground
+truth is the engine's own byte-exact tables read **directly from `BUMPY_unpacked.exe`** (NOT from
+the reconstruction's arrays) + the engine-verified channel-B slot-allocator semantics; the
+reconstruction's LUTs/tiledef are asserted byte-equal to the image, then `apply_contact_action`
++ the four dispatch handlers are driven over a sweep (contact codes 0..0x17, both devices, both
+move-step guard branches) and their effects (last_contact_action, device-selected sound, claimed
+slot cell/active/stream ptr, tilemap stamp, resolved action, `input_state=0`) asserted against an
+independent recomputation from the engine image.  **Perturbation-proven** (`CONTACT_PERTURB=1`
+corrupts the engine-image baseline → the gate FAILs).  **Gate: `validate_physics` PASS=16733
+FAIL=0 UNPORTED=624** (was 16584; +149 contact-family records; the 624 UNPORTED is unchanged —
+the p1_movement_dispatch call-through that Phase-9 T2 converts).
+
+## Phase-9 T1 status (P1 contact-action handler family)
+
+As of Phase-9 Task 1 the Player-1 contact-action handler family is **reconstructed and
+validated**:
+
+- **Reconstructed 1:1**: `apply_contact_action` (6a89), `p1_dispatch_contact_action` (686a),
+  `p1_apply_contact_action_main/_prev/_at_start/_before_end/_at_start_b/_before_end_b` (6832/
+  684b/6890/68bb/68e6/6922), `p1_apply_contact_action_tbl_367e/_369e` (68fe/693a) — all in
+  `src/player.c`, ported 1:1 from the live Ghidra decomp + raw disasm (verified via MCP).  The
+  `apply_contact_action` `game_stubs.c` no-op is removed.
+- **Gate re-confirmed (2026-06-21)**: `validate_physics` PASS=16733 FAIL=0 UNPORTED=624
+  (contact-family PASS=149, perturbation-proven).  No-regression: `validate_player` PASS;
+  `validate_anim` PASS=45 FAIL=0 UNPORTED=1 DESC_CHECKED=28 (B table grew the terminator;
+  harness wired it); `validate_spawn` PASS (9 runs, 7 with layer-B, FAIL=0); `validate_items`
+  PASS=11 FAIL=0; `validate_p2` PASS=74 FAIL=0; `validate_input` 100/100; `validate_blit` 17/17
+  + 24/24; `validate_bg` 119/119; `validate_composite` 54152 @ 53858; `validate_sound` PASS=4414
+  FAIL=0 UNPORTED=25; `validate_screen_fns` PASS=884 FAIL=0; `validate_copyprot` PASS=36 FAIL=0;
+  `BUMPY.EXE` links clean (Open Watcom 16-bit DOS, apply_contact_action now in player.obj, no
+  duplicate symbols).  (`validate_sprites` / `validate_screens` need regenerable inputs
+  `SPROUT.BIN` / `BUMPRESE.PLN` absent from this checkout — pre-existing, unrelated to this task.)
+
+**Deferred from Phase 9 T1:** the offset→fn resolver that converts the 624 UNPORTED
+`p1_movement_dispatch` call-through records (Phase-9 T2); the project-wide **int8-synced
+end-to-end gate** (unchanged from Phases 2–8).
+
 ## Phase-1 slice status (vertical slice — session → loop → modules)
 
 As of Phase-1 Task 7 the reconstructed `src/` tree forms a complete, **linkable**

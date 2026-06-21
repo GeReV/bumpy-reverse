@@ -98,7 +98,7 @@ static u16 host_fp_off(const void *p) { return (u16)(((u32)((const unsigned char
 static anim_chan_rec host_a_recs[ANIM_A_SLOTS];
 static anim_chan_rec host_b_recs[ANIM_B_SLOTS];
 anim_chan_rec *anim_channels_a_tbl[ANIM_A_SLOTS + 1];
-anim_chan_rec *anim_channels_b_tbl[ANIM_B_SLOTS];
+anim_chan_rec *anim_channels_b_tbl[ANIM_B_SLOTS + 1];  /* 4 slots + 0xFF terminator (anim.h) */
 
 /* anim frame-data far-ptr tables (off@N*4+0, seg@N*4+2). */
 u8 anim_a_frame_tbl[256 * 4];
@@ -343,6 +343,13 @@ static int seed_state(const u8 *seed, const snap_t *ent)
         host_b_recs[i].frame = r[6]; host_b_recs[i].pad = r[7];
         host_b_recs[i].data_off = rd16(r+8); host_b_recs[i].data_seg = rd16(r+10);
         anim_channels_b_tbl[i] = &host_b_recs[i];
+    }
+    {   /* B scan terminator slot (engine 0x4cb0, active=0xFF); unused here (draw/erase
+           B are stubbed in this harness) but wired for type/layout consistency with
+           src/anim.c's B_SLOTS+1 table. */
+        static anim_chan_rec b_term;
+        b_term.active = 0xff;
+        anim_channels_b_tbl[B_SLOTS] = &b_term;
     }
 
     /* spawn globals from the ENTRY snapshot (they are overwritten by spawn, but seed

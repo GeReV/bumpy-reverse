@@ -73,6 +73,18 @@ anim_chan_rec anim_b_records[ANIM_B_SLOTS];   /* 4 channel-B slots */
    solely by the allocator.  (Engine-verified vs BUMPY_unpacked.exe DGROUP 0x4c64.) */
 anim_chan_rec anim_a_terminator = { 0xff, 0, 0, 0, 0, 0, 0, 0 };
 
+/* The B slot-SCAN terminator record (the channel-B analogue of anim_a_terminator).
+   In the unpacked EXE the B far-ptr table at 0x4cbc has FIVE entries: the 4 usable
+   slot records (0x4c80/4c8c/4c98/4ca4, active=0) followed by a 5th record at 0x4cb0
+   whose active byte is 0xFF.  apply_contact_action (player.c 6a89, the channel-B
+   allocator) scans the B table until it hits this 0xFF terminator (which restarts the
+   scan from slot 0); without it the unbounded scan would run off the table.  The 4
+   STEPPER loops only ever index slots 0..3 (bounded `< 4`), so this terminator is
+   consumed solely by the allocator.  (Engine-verified vs BUMPY_unpacked.exe DGROUP
+   0x4cb0.)  This 5th entry was unused while channel B had no allocator (Phase 5);
+   apply_contact_action (Phase 9 T1) is its first consumer. */
+anim_chan_rec anim_b_terminator = { 0xff, 0, 0, 0, 0, 0, 0, 0 };
+
 /* ── slot tables (far ptrs into the records above) ──────────────────────────────
    DGROUP 0x4c70/0x4c72 (A: 3 slots + 0xFF terminator) and 0x4cbc/0x4cbe (B: 4 slots
    + spawn-data tail).  In the engine these are populated at load with far ptrs to the
@@ -80,10 +92,11 @@ anim_chan_rec anim_a_terminator = { 0xff, 0, 0, 0, 0, 0, 0, 0 };
    allocator and the host harness see a consistent table.  Static initialisers cannot
    portably take the address of a far array element across compilers, so they are
    wired at runtime (by the harness / the engine spawn path); the records are the
-   owned storage.  The A table has ANIM_A_SLOTS+1 entries so the allocator scan finds
-   the 0xFF terminator at index ANIM_A_SLOTS. */
+   owned storage.  Both tables have N+1 entries so the allocator scans find the 0xFF
+   terminator at index ANIM_A_SLOTS / ANIM_B_SLOTS (A: apply_cell_animation 69aa;
+   B: apply_contact_action 6a89). */
 anim_chan_rec __far *anim_channels_a_tbl[ANIM_A_SLOTS + 1];
-anim_chan_rec __far *anim_channels_b_tbl[ANIM_B_SLOTS];
+anim_chan_rec __far *anim_channels_b_tbl[ANIM_B_SLOTS + 1];
 
 /* ── per-action / per-frame far-ptr tables ─────────────────────────────────────
    In the engine these are DGROUP-resident tables of 4-byte FAR POINTERS indexed by

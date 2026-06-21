@@ -235,6 +235,12 @@ static void seed_globals(const snap_t *s)
        allocator's unbounded slot scan stops on it (steppers never index it). */
     anim_a_terminator.active = 0xff;
     anim_channels_a_tbl[A_SLOTS] = &anim_a_terminator;
+    /* The B scan terminator (engine 0x4cb0, active=0xFF) at index B_SLOTS: the
+       draw/erase B loops scan `while active != 0xFF` and the B allocator
+       (apply_contact_action, Phase-9 T1) stops on it.  Wired since src/anim.c now
+       models the B table with B_SLOTS+1 entries (engine-verified DGROUP 0x4cb0). */
+    anim_b_terminator.active = 0xff;
+    anim_channels_b_tbl[B_SLOTS] = &anim_b_terminator;
     anim_target_cell      = s->anim_target_cell;
     g_anim_channel_idx    = s->g_anim_channel_idx;
     g_anim_cur_cmd_byte   = s->g_anim_cur_cmd_byte;
