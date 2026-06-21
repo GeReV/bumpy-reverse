@@ -105,6 +105,13 @@ extern void erase_anim_channels_b(void);          /* 1000:1b2b (anim.c)         
    203b_792e, 0x203b).  See docs/reconstruction-fidelity.md. */
 extern void anim_blit_sprite_leaf(u16 obj_off, u16 obj_seg); /* blit_sprite 1000:942a */
 
+/* DGROUP segment of the literal blit object (decomp: blit_sprite(&sprite_obj_203b_792e,
+   0x203b)).  0x203b in the real build; the ctest harness may override to the runtime seg —
+   same guarded convention as anim.c. */
+#ifndef ANIM_DGROUP_RUNTIME_SEG
+#define ANIM_DGROUP_RUNTIME_SEG 0x203b
+#endif
+
 void spawn_and_draw_level_entities(void)
 {
     anim_chan_rec __far *rec_a;   /* local_12 — A slot-0 record (active slot)         */
@@ -213,7 +220,7 @@ void spawn_and_draw_level_entities(void)
                 *(u16 __far *)(p1d + 0) = posc[0];                         /* x @0x274 */
                 *(u16 __far *)(p1d + 2) = posc[1];                         /* y @0x276 */
                 *(u16 __far *)(p1d + 4) = (u16)(cv + 0x179);              /* frame    */
-                anim_blit_sprite_leaf(FP_OFF(p1_sprite), FP_SEG(p1_sprite)); /* (0x792e,DS) */
+                anim_blit_sprite_leaf(0x792e, ANIM_DGROUP_RUNTIME_SEG);  /* blit_sprite(&sprite_obj_203b_792e, 0x203b) — literal DGROUP obj addr per the decomp/asm, not a p1_sprite deref */
             }
         }
     }
