@@ -85,6 +85,16 @@
  */
 
 #include "level.h"
+
+/* ── HARNESS BUILD GUARD (BUMPY_COPYPROT_HARNESS) ─────────────────────────────
+   tools/copyprot_ctest.c #includes this TU to compile ONLY copyprotect_challenge
+   (1000:4015) on the host.  The rest of level.c (start_level + the level-1 render
+   pipeline) pulls the DOS render/op12/dosio/malloc surface, which the host cannot
+   provide.  When BUMPY_COPYPROT_HARNESS is defined (ONLY by the ctest, NEVER by the
+   real wcc/wmake build), the heavy includes and every non-challenge function are
+   compiled out, leaving the DGROUP globals + the challenge body the harness needs.
+   The DEFAULT build never sees this macro, so its output is byte-unchanged. */
+#ifndef BUMPY_COPYPROT_HARNESS
 #include "vec.h"          /* VEC_DECODE_MAX, vec_decode_planar */
 #include "op12.h"         /* OP12_ARENA_SIZE, op12_vec_run */
 #include "dosio.h"
@@ -101,6 +111,7 @@
    Shared 0x8000-byte decode arena.  We extern it (do NOT redefine); op12.obj
    and bvec_buf2.obj are already in the BUMPY link set. */
 extern u8 __far g_op12_arena[];
+#endif /* !BUMPY_COPYPROT_HARNESS */
 
 /* ── DGROUP globals (engine originals; defined here) ─────────────────────── */
 u8 current_level        = 1u;
@@ -108,6 +119,8 @@ u8 copyprotect_flag     = 0u;
 u8 p1_start_x           = 0x1fu;
 u8 p1_start_y           = 0x1fu;
 u8 current_entity_index = 1u;
+
+#ifndef BUMPY_COPYPROT_HARNESS   /* { heavy level pipeline — excluded from the host harness */
 
 /* ── Level-file read buffer (small; __far to avoid DGROUP pressure) ───────────
    Raw file bytes for PAV/DEC/BUM.  OP12_ARENA_SIZE = 0x8000; all three files
@@ -522,6 +535,8 @@ static void render_level(void)
     video_blit_planar(g_page0);
 }
 
+#endif /* } !BUMPY_COPYPROT_HARNESS — end heavy level pipeline */
+
 /* ────────────────────────────────────────────────────────────────────────────
    copy-protection challenge — 1000:4015, gated by #ifdef BUMPY_COPY_PROTECTION.
 
@@ -533,40 +548,246 @@ static void render_level(void)
 
    copyprotect_challenge() (1000:4015) is a sprite-identification quiz: it draws a
    randomly-chosen Bumpy sprite, reads a number the player types, and — in the
-   ORIGINAL un-cracked build — compares it against copyprotect_answer_table[index],
-   setting copyprotect_flag = -1 on a MISMATCH (which the second guard above then
-   turns into a forced reset to level 1).  The shipped DOS English release is a
-   CRACKED build: copyprotect_challenge() sets `copyprotect_flag = 1` (pass)
-   UNCONDITIONALLY, before input is even read, and never compares — so the
-   challenge is defeated and copyprotect_flag is never written with -1 anywhere in
-   the binary.
+   ORIGINAL un-cracked build — compares it against the answer table, setting
+   copyprotect_flag = -1 on a MISMATCH (which the second guard above then turns
+   into a forced reset to level 1).  The shipped DOS English release is a CRACKED
+   build: copyprotect_challenge() sets `copyprotect_flag = 1` (pass) UNCONDITIONALLY
+   (1000:412e), before input is even read, then executes a DEAD `expected_answer =
+   entered_number` store (1000:4219) in place of the compare — so the challenge is
+   defeated and copyprotect_flag is never written -1 anywhere in the binary.
 
-   The ENTIRE hook (both guards + the challenge body) is compiled behind
-   `#ifdef BUMPY_COPY_PROTECTION`, which is NOT defined in the default build.  With
-   it OFF the hook compiles OUT: level-advance to levels 2+ flows with no challenge,
-   exactly matching the cracked-build runtime behaviour (copyprotect_flag stays 0,
-   1 < current_level && copyprotect_flag == 0 would have fired the now-absent
-   challenge, and the -1 reset can never trigger because nothing writes -1).
-
-   The faithful FULL un-cracked challenge() body (the sprite quiz + answer compare)
-   is deferred to Phase 7b; defining BUMPY_COPY_PROTECTION switches the hook on and
-   reinstates the challenge call.  The placeholder body below is a faithful-STRUCTURE
-   stand-in for that future port: it carries the cracked-build invariant
-   (copyprotect_flag = 1 unconditional pass) so that, even with the macro ON, the
-   shipped build's defeated-protection semantics are reproduced until the Phase-7b
-   un-cracked body lands.
+   The body below is the FRESH Ghidra decompile of 1000:4015 ported 1:1 for every
+   part present in the cracked binary, PLUS the documented UN-CRACK: the original
+   `if (entered_number != answer_tbl[index]) copyprotect_flag = -1;` compare
+   recovered from docs/copy-protection.md replaces the crack's unconditional pass +
+   dead store (see the in-body RECONSTRUCTION FIDELITY note).  The whole thing is
+   gated behind `#ifdef BUMPY_COPY_PROTECTION` (NOT defined in the default build),
+   so the default build still compiles OUT the entire hook + body, exactly matching
+   the cracked-build runtime (copyprotect_flag stays 0; nothing writes -1).
    ─────────────────────────────────────────────────────────────────────────── */
 #ifdef BUMPY_COPY_PROTECTION
+
+/* ── Copy-protection callees + DGROUP globals reached by copyprotect_challenge ──
+   These are engine primitives that live in OTHER translation units (input.c,
+   anim.c, game_stubs.c, and the resource/render core); none are owned by level.c.
+   The whole challenge — and therefore every reference below — is gated behind
+   #ifdef BUMPY_COPY_PROTECTION, so the DEFAULT build (macro OFF) never sees them.
+   We declare them locally (mirroring the engine prototypes the decomp shows at the
+   call sites) so the challenge body compiles standalone; the replay harness
+   (tools/copyprot_ctest.c) supplies host definitions, and a fully-linked
+   protection-on BUMPY.EXE would resolve them against their owning modules.
+
+   RECONSTRUCTION FIDELITY: fmemcpy is the engine's far block-copy (1000:a9f5).
+   The two challenge call sites copy fixed DGROUP tables into SS-local arrays:
+     fmemcpy(SS,&sprite_id_tbl, DS,0x11b6) CX=0x20 → 16 WORDS  (sprite frame ids)
+     fmemcpy(SS,&answer_tbl,    DS,0x11d6) CX=0x10 → 16 BYTES  (correct answers)
+   We model each as one typed copy primitive taking (dst, dgroup_src_off, count). */
+extern void copyprot_copy_words(u16 __far *dst, u16 src_off, u16 nwords); /* 1000:a9f5 */
+extern void copyprot_copy_bytes(u8  __far *dst, u16 src_off, u16 nbytes); /* 1000:a9f5 */
+
+extern void set_sprite_table_ptr(void);          /* 1cec:2dd2 (thunk 1000:9410)   */
+extern void set_active_display_page(void);        /* (thunk 1000:9814)             */
+extern void set_resource_table(u16 res, u16 seg); /* 1000:7307                     */
+extern void prng_seed_thunk(u16 seed);            /* 1000:93a4 → prng_seed         */
+extern int  open_resource(void);                  /* 1000:736f → INT 21h c_open    */
+extern void read_chunked(int handle, u16 buf_off, u16 buf_seg,
+                         u16 len, u16 arg);        /* 1000:745e                     */
+extern void c_close(int handle);                  /* 1000:7319                     */
+extern void load_palette_byteswapped(void);       /* 1000:063b                     */
+extern void play_iris_wipe_transition(void);      /* 1000:3467                     */
+extern void load_palette(void);                   /* 1000:08d1                     */
+extern void blit_sprite(u16 desc_off, u16 desc_seg); /* 1000:942a                  */
+extern void draw_text_at(u16 str_off, u16 str_seg, u16 x, u16 y); /* 1000:07f0     */
+extern void draw_number(u16 val_lo, u16 val_hi, u8 width, u16 x, u16 y); /* 1000:0816 */
+extern void poll_input(void);                     /* 1000:1dde                     */
+extern void run_n_frames(u8 n);                   /* 1000:05e7                     */
+
+/* DGROUP globals the challenge reads/writes (owned by other modules / the engine). */
+extern u8  input_state;                  /* DGROUP:0x8244 — latched input bits        */
+extern u16 palette_mode;                 /* DGROUP:0x541d — BGI/DAC dispatch mode      */
+extern u16 copyprot_seed_src;            /* DGROUP:0x119c — live prng seed (0x5192 RT) */
+extern u8 __far  *level_dec_buf_fp;      /* DGROUP:0x6be8 far ptr → decoded res buffer */
+extern u8 __far  *p1_sprite;             /* DGROUP:0x8884 far ptr → p1 blit descriptor */
+extern u8 __far  *cur_level_ptr;         /* DGROUP:0x6bca far ptr → current-level table */
+extern u8 __far  *copyprot_patch_ptr;    /* DGROUP:0x9b96 far ptr → res patch target   */
+extern u8 __far  *copyprot_palette_src;  /* codeseg ptr → 16-byte palette patch @0x65a */
+extern u16 __far *copyprot_levelptr_src; /* codeseg ptr → 16-word level table   @0x73e */
+
+/* copyprot_engine_rand — 1000:93b1 (the engine rand() thunk).
+   NOT the CRT rand: it CALLF's prng_step (1ce5:001f) and returns AL = low byte of
+   the new prng_state0.  Modelled identically to player2.c's p2_engine_rand so the
+   reject loop's draw is driven by the reconstructed src/prng.c state — deterministic
+   once prng_state0/1/2 are seeded to the engine's live entry value (0x5192,0,0). */
+static u8 copyprot_engine_rand(void)
+{
+    prng_step();
+    return (u8)prng_state0;
+}
+
+/* copyprotect_challenge — port of 1000:4015 (decompiled fresh via Ghidra MCP).
+
+   A sprite-identification quiz: copy the (sprite-id, answer) tables out of DGROUP,
+   load resource 0x90 (the level header) into the decode buffer, optionally patch
+   it + the current-level table, then run up to 3 rounds.  Each round draws a
+   randomly-chosen Bumpy sprite (frame = sprite_id_tbl[index], index ∈ 2..15),
+   prompts "Enter the platform number", and runs the +/-/FIRE input dial.  On
+   confirm the typed number is compared against the correct answer.
+
+   RECONSTRUCTION FIDELITY — THE UN-CRACK (recovered from docs/copy-protection.md):
+   The shipped DOS English release is a CRACKED build.  At 1000:412e it sets
+       copyprotect_flag = 1            (pass, UNCONDITIONALLY, BEFORE any input)
+   and at 1000:4219 it executes the now-DEAD store
+       expected_answer = entered_number          (the original compare, gutted)
+   so the typed answer is never checked and copyprotect_flag is never written -1
+   anywhere in the binary (Ghidra's own "COPY PROTECTION DEFEATED HERE" comment).
+   The ORIGINAL un-cracked logic — `expected_answer = answer_tbl[index]` survives
+   intact at 1000:4120, and the documented compare it fed — is restored below:
+       if (entered_number != expected_answer) copyprotect_flag = -1;
+   This compare is NOT present in the cracked binary; it is reconstructed from the
+   answer table + the original control flow documented in docs/copy-protection.md.
+
+   RECONSTRUCTION FIDELITY — round_state flow INFERRED.  The crack collapsed the
+   multi-round/pass machinery: it forces `round_state = 0xff` after one round
+   (1000:423e) so `2 < round_state` exits immediately after a single dial entry,
+   regardless of pass/fail.  The original's per-round retry/advance on the compare
+   result is not present in the cracked image; the single-round exit is kept 1:1
+   (it is what the binary does) and the un-cracked pass/fail is expressed purely
+   through copyprotect_flag, which start_level (1000:2d14) turns into the level-1
+   reset.  Where the crack removed the original loop control we do not invent it.
+*/
 void copyprotect_challenge(void)
 {
-    /* Faithful-STRUCTURE placeholder for 1000:4015 (full body → Phase 7b).
-       The shipped (cracked) build sets copyprotect_flag = 1 unconditionally — the
-       "COPY PROTECTION DEFEATED HERE" point in the decomp — before reading input
-       and without comparing the answer.  We carry that single load-bearing effect;
-       the sprite-quiz draw/input/answer-compare machinery is the Phase-7b port. */
-    copyprotect_flag = 1u;
+    u16 sprite_id_tbl[16];      /* SS [BP-0x26] — sprite frame ids   (DS:0x11b6) */
+    u8  answer_tbl[16];         /* SS [BP-0x36] — correct answers     (DS:0x11d6) */
+    u8  round_state;            /* SS [BP-0x05]                                    */
+    u8  expected_answer;        /* SS [BP-0x04] — answer_tbl[index]               */
+    char entry_done;            /* SS [BP-0x03]                                    */
+    u8  entered_number;         /* SS [BP-0x02] — the typed platform number       */
+    u8  copy_idx;               /* SS [BP-0x01] — patch-loop counter              */
+    u16 index;                  /* SI           — random sprite index, 2..15       */
+    int handle;
+    u8 __far *p1d;              /* p1_sprite blit descriptor                       */
+
+    round_state = 0;
+
+    /* Copy the two fixed tables out of DGROUP into SS-local arrays. */
+    copyprot_copy_words(sprite_id_tbl, 0x11b6u, 16u);  /* 16 sprite frame ids */
+    copyprot_copy_bytes(answer_tbl,    0x11d6u, 16u);  /* 16 correct answers  */
+
+    /* Setup: sprite table + display page, then point the resource table at the
+       challenge's level header (res 0x90 in DGROUP segment 0x203b). */
+    set_sprite_table_ptr();
+    set_active_display_page();
+    set_resource_table(0x90u, 0x203bu);
+
+    /* Seed the prng from the (LIVE) DGROUP seed source, then load resource 0x90
+       (99 bytes) into the decode buffer.  RECONSTRUCTION FIDELITY: the static
+       image value at 0x119c is 0x1e61, but at runtime after boot it is mutated to
+       0x5192 — the seed is taken LIVE.  See docs/copy-protection.md + the replay
+       harness, which seeds the captured live value to reproduce index = 12. */
+    prng_seed_thunk(copyprot_seed_src);
+    handle = open_resource();
+    read_chunked(handle, FP_OFF(level_dec_buf_fp), FP_SEG(level_dec_buf_fp),
+                 99u, 0u);
+    c_close(handle);
+
+    /* palette_mode==1: patch 16 bytes of the decoded header from the code-segment
+       table @0x65a (the copy target tracked via copyprot_patch_ptr @0x9b96). */
+    if (palette_mode == 1u) {
+        copyprot_patch_ptr = level_dec_buf_fp;
+        for (copy_idx = 0u; copy_idx < 0x10u; copy_idx = copy_idx + 1u) {
+            copyprot_patch_ptr[(u16)copy_idx + 0x23u] =
+                copyprot_palette_src[copy_idx];
+        }
+    }
+
+    /* Copy 16 words of the level-pointer table from the code-segment src @0x73e
+       into the current-level table, then load the (byte-swapped) palette. */
+    for (copy_idx = 0u; copy_idx < 0x10u; copy_idx = copy_idx + 1u) {
+        ((u16 __far *)cur_level_ptr)[copy_idx] = copyprot_levelptr_src[copy_idx];
+    }
+    load_palette_byteswapped();
+
+    round_state = 0;
+    do {
+        if (2u < round_state) {
+            set_active_display_page();
+            set_sprite_table_ptr();
+            return;
+        }
+
+        /* Random sprite pick: reject 0/1, accept 2..15. */
+        do {
+            index = (u16)copyprot_engine_rand() & 0xfu;
+        } while (index < 2u);
+
+        expected_answer = answer_tbl[index];   /* 1000:4120 — original answer slot */
+        entry_done = '\0';
+        entered_number = 0u;
+
+        /* ── THE UN-CRACK ──────────────────────────────────────────────────────
+           CRACKED binary here: `copyprotect_flag = 1;` (1000:412e) — defeated,
+           set BEFORE input.  Restored below: nothing is decided up-front; the
+           verdict comes from the answer compare AFTER the dial entry. */
+
+        /* Draw the chosen platform sprite. */
+        play_iris_wipe_transition();
+        load_palette();
+        p1d = p1_sprite;
+        *(u16 __far *)(p1d + 4) = sprite_id_tbl[index];  /* frame */
+        *(u16 __far *)(p1d + 0) = 0x90u;                 /* x = 144 */
+        *(u16 __far *)(p1d + 2) = 100u;                  /* y = 100 */
+        blit_sprite(FP_OFF(p1_sprite), FP_SEG(p1_sprite));
+
+        /* "Enter the platform number" prompt + the current entry. */
+        draw_text_at(0x1331u, 0x203bu, 0x54u, 0x87u);
+        draw_number((u16)entered_number, 0u, 2u, 0x98u, 0x96u);
+
+        /* ── Input dial state machine ──────────────────────────────────────────
+           FIRE (0x10) confirms; MINUS (0x04) decrements if > 0; PLUS (0x08)
+           increments only while entered_number < 0x63 (CMP 0x63 / JNC @1000:41d3),
+           so the value saturates at 0x63.  Each iteration redraws the number and
+           advances 4 frames (4× poll sampling per action). */
+        while (entry_done == '\0') {
+            input_state = 0u;
+            poll_input();
+            if ((input_state & 0x10u) == 0u) {
+                if (((input_state & 4u) == 0u) || (entered_number == 0u)) {
+                    if (((input_state & 8u) == 0u) || (0x62u < entered_number)) {
+                        goto LAB_redraw;
+                    }
+                    entered_number = entered_number + 1u;     /* PLUS */
+                    draw_text_at(0x1350u, 0x203bu, 0x98u, 0x96u);
+                }
+                else {
+                    entered_number = entered_number - 1u;     /* MINUS */
+                    draw_text_at(0x134bu, 0x203bu, 0x98u, 0x96u);
+                }
+            }
+            else {
+                entry_done = '\x01';                          /* FIRE: confirm */
+            }
+LAB_redraw:
+            draw_number((u16)entered_number, 0u, 2u, 0x98u, 0x96u);
+            run_n_frames(4u);
+        }
+
+        /* ── THE UN-CRACK (continued) ──────────────────────────────────────────
+           CRACKED binary here: `expected_answer = entered_number;` (1000:4219) —
+           a DEAD store that overwrites the loaded answer with the typed value so
+           no comparison happens.  Restored to the documented ORIGINAL: compare the
+           typed number against the correct answer and FAIL the protection on a
+           mismatch (start_level then forces the player back to level 1). */
+        if (entered_number != expected_answer) {
+            copyprotect_flag = (u8)-1;   /* 0xff — protection FAILED */
+        }
+
+        round_state = 0xffu;             /* 1000:423e — single-round exit (crack)  */
+    } while (1);
 }
 #endif /* BUMPY_COPY_PROTECTION */
+
+#ifndef BUMPY_COPYPROT_HARNESS   /* { start_level + render — excluded from the host harness */
 
 /* ────────────────────────────────────────────────────────────────────────────
    start_level — port of 1000:2d14.
@@ -679,3 +900,5 @@ void start_level(u8 world, u8 level)
     level_populate_dg();
     render_level();
 }
+
+#endif /* } !BUMPY_COPYPROT_HARNESS — end start_level + render */
