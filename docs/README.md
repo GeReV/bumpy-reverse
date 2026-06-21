@@ -27,3 +27,4 @@ note in [formats/README.md](formats/README.md).
 | [copy-protection.md](copy-protection.md) | The copy-protection mechanism (platform-number challenge + protection data files) |
 | [data-files.md](data-files.md) | Data-file inventory, resource descriptor tables, and the load pipeline |
 | [06-engine.md](06-engine.md) | Engine internals (draft — to be rewritten from the decompiled source) |
+| [ghidra-symbol-map.md](ghidra-symbol-map.md) | Symbol map for the BumpyDecomp Ghidra project — names + identities of every function and the named data labels |
