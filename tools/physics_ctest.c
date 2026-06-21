@@ -156,11 +156,14 @@ u8 __far *p1_sprite;
 #define SNAP_SIZE 16
 
 /* SNAP field order (16 B LE): px(s16) py(s16) anim mode step facing steps_left
-   input frozen override cell locked prev_mode pad. */
+   input frozen override cell locked prev_mode step_col.
+   step_col (last byte) = p1_step_col_count @ DGROUP 0x855e — the cursor/move-step
+   COLUMN counter the contact/walk-step resolvers + apply_contact handlers gate on
+   (DISTINCT from move_step_count @ 0x824c).  It occupies the former _pad slot. */
 typedef struct {
     s16 px, py;
     u8  anim, mode, step, facing, steps_left, input, frozen, override,
-        cell, locked, prev_mode, pad;
+        cell, locked, prev_mode, step_col;
 } snap_t;
 
 typedef struct {
@@ -192,7 +195,7 @@ static void parse_snap(const u8 *p, snap_t *s)
     s->py = (s16)rd16(p + 2);
     s->anim = p[4]; s->mode = p[5]; s->step = p[6]; s->facing = p[7];
     s->steps_left = p[8]; s->input = p[9]; s->frozen = p[10]; s->override = p[11];
-    s->cell = p[12]; s->locked = p[13]; s->prev_mode = p[14]; s->pad = p[15];
+    s->cell = p[12]; s->locked = p[13]; s->prev_mode = p[14]; s->step_col = p[15];
 }
 
 /* ── globals <-> SNAP ───────────────────────────────────────────────────────── */
@@ -203,6 +206,11 @@ static void seed_globals(const snap_t *s)
     p1_facing_left = s->facing; p1_move_steps_left = s->steps_left;
     input_state = s->input; physics_frozen = s->frozen; move_override = s->override;
     p1_cell = s->cell; move_locked = s->locked; prev_game_mode = s->prev_mode;
+    /* p1_step_col_count @ 0x855e — the cursor/move-step COLUMN counter the
+       contact/walk-step resolvers + apply_contact handlers gate on (DISTINCT from
+       move_step_count @ 0x824c).  Captured in the SNAP's former _pad slot so the
+       per-fn differential drives the engine-correct branch (Phase-9.1). */
+    p1_step_col_count = s->step_col;
 }
 
 /* Compare the live globals against an exit SNAP.  Returns NULL if all match,
@@ -978,49 +986,92 @@ static int run_contact_family(const char *exe, stats_t *st)
 
     /* ── 4. drive each dispatch handler: assert it resolves the action code via the
        reconstructed LUT == the engine-image LUT, applies it, and clears input_state.
-       The handlers gate on move_step_count (0/7); cover both branches. ── */
-    {
-        static const struct { u16 off; const char *nm; int lut; int guard; }
-        H[] = {
-            /* guard: 0 = unconditional, 1 = move_step_count!=0, 7 = move_step_count!=7 */
-            { 0x6890, "at_start",      0, 1 },   /* lut 35fe */
-            { 0x68bb, "before_end",    1, 7 },   /* lut 361e */
-            { 0x68fe, "tbl_367e",      4, 0 },   /* lut 367e */
-            { 0x693a, "tbl_369e",      5, 0 },   /* lut 369e */
-        };
-        int h, cc;
-        for (h = 0; h < (int)(sizeof(H)/sizeof(H[0])); h++) {
-            for (cc = 0; cc < 0x18; cc++) {       /* sweep contact codes 0..0x17 */
-                u8 want_action = lut_eng[H[h].lut][cc];
-                const char *bad = NULL; long got = 0, want = 0;
-                memset(synth_tilemap, 0, TILEMAP_SIZE);
-                contact_reset_b_slots();
-                p1_contact_code = (u8)cc;
-                p1_cell_prev = (u8)(0x10 + cc);
-                input_state = 0x7f;
-                move_step_count = (H[h].guard == 7) ? 3 : 1;   /* take the active branch */
-                sound_device_state = 0;
-                anim_b_loop_idx = 0xEE;
 
-                switch (H[h].off) {
-                    case 0x6890: p1_apply_contact_action_at_start();   break;
-                    case 0x68bb: p1_apply_contact_action_before_end(); break;
-                    case 0x68fe: p1_apply_contact_action_tbl_367e();   break;
-                    case 0x693a: p1_apply_contact_action_tbl_369e();   break;
+       The two gated handlers (at_start/before_end) read the ENGINE's cursor/move-step
+       COLUMN counter at DGROUP 0x855e (`p1_step_col_count`), NOT the jump_step_counter
+       at 0x824c (`move_step_count`) — verified from the disasm:
+         at_start    1000:689c  CMP byte ptr [0x855e],0x0   (apply iff 0x855e != 0)
+         before_end  1000:68c7  CMP byte ptr [0x855e],0x7   (apply iff 0x855e != 7)
+       (tbl_367e/tbl_369e are unconditional.)  To give this gate TEETH against the
+       wrong-global aliasing bug, the COUNTER-ALIASING sweep below seeds 0x855e and
+       0x824c to DISTINCT values: 0x855e carries the engine-correct branch selector and
+       0x824c carries a DECOY that would flip the branch if the handler mis-read it.
+       A handler that reads the wrong global takes the decoy branch -> MUST FAIL. ── */
+    {
+        /* eng_guard: engine guard operand (0x855e arbiter).  active_855e / inactive_855e:
+           values of 0x855e that take the apply / no-op branch.  When gated, the DECOY
+           0x824c is always set to the OPPOSITE selector so a wrong-global read flips. */
+        static const struct {
+            u16 off; const char *nm; int lut;
+            int gated;             /* 1 = guarded on 0x855e, 0 = unconditional */
+            u8  active_855e;       /* 0x855e value that takes the apply branch  */
+            u8  inactive_855e;     /* 0x855e value that takes the no-op branch  */
+        } H[] = {
+            { 0x6890, "at_start",   0, 1, /*apply*/ 3, /*noop*/ 0 },  /* lut 35fe; apply iff 0x855e!=0 */
+            { 0x68bb, "before_end", 1, 1, /*apply*/ 3, /*noop*/ 7 },  /* lut 361e; apply iff 0x855e!=7 */
+            { 0x68fe, "tbl_367e",   4, 0, 0, 0 },                     /* lut 367e; unconditional */
+            { 0x693a, "tbl_369e",   5, 0, 0, 0 },                     /* lut 369e; unconditional */
+        };
+        int h, cc, phase;
+        for (h = 0; h < (int)(sizeof(H)/sizeof(H[0])); h++) {
+            /* phase 0: apply branch (0x855e=active).  phase 1: no-op branch
+               (0x855e=inactive) — only meaningful for the gated handlers. */
+            for (phase = 0; phase < (H[h].gated ? 2 : 1); phase++) {
+                int apply_branch = (phase == 0);
+                u8 col_855e = apply_branch ? H[h].active_855e : H[h].inactive_855e;
+                /* DECOY 0x824c drives the OPPOSITE branch from 0x855e: a wrong-global
+                   reader would (apply phase) NO-OP, or (no-op phase) APPLY. */
+                u8 decoy_824c = apply_branch
+                    ? H[h].inactive_855e   /* would no-op if 0x824c were read */
+                    : H[h].active_855e;    /* would apply if 0x824c were read */
+                for (cc = 0; cc < 0x18; cc++) {   /* sweep contact codes 0..0x17 */
+                    u8 want_action = lut_eng[H[h].lut][cc];
+                    const char *bad = NULL; long got = 0, want = 0;
+                    memset(synth_tilemap, 0, TILEMAP_SIZE);
+                    contact_reset_b_slots();
+                    p1_contact_code = (u8)cc;
+                    p1_cell_prev = (u8)(0x10 + cc);
+                    input_state = 0x7f;
+                    /* seed the two counters DISTINCTLY (the engine arbiter is 0x855e). */
+                    p1_step_col_count = col_855e;   /* 0x855e — engine-correct selector */
+                    move_step_count   = decoy_824c; /* 0x824c — decoy (must be ignored) */
+                    sound_device_state = 0;
+                    anim_b_loop_idx = 0xEE;
+
+                    switch (H[h].off) {
+                        case 0x6890: p1_apply_contact_action_at_start();   break;
+                        case 0x68bb: p1_apply_contact_action_before_end(); break;
+                        case 0x68fe: p1_apply_contact_action_tbl_367e();   break;
+                        case 0x693a: p1_apply_contact_action_tbl_369e();   break;
+                    }
+                    if (apply_branch) {
+                        /* applied: action = LUT[cc] latched, input_state zeroed. */
+                        if (anim_b_loop_idx != want_action) {
+                            bad = "resolved_action"; got = anim_b_loop_idx; want = want_action;
+                        } else if (input_state != 0) {
+                            bad = "input_state"; got = input_state; want = 0;
+                        }
+                    } else {
+                        /* no-op: the gated handler returns WITHOUT applying — the
+                           sentinel + input_state must be untouched.  A wrong-global
+                           read of the decoy 0x824c would (wrongly) apply here. */
+                        if (anim_b_loop_idx != 0xEE) {
+                            bad = "noop:applied(wrong 0x824c read?)";
+                            got = anim_b_loop_idx; want = 0xEE;
+                        } else if (input_state != 0x7f) {
+                            bad = "noop:input_state";
+                            got = input_state; want = 0x7f;
+                        }
+                    }
+                    if (bad) {
+                        st->fail++;
+                        if (printed++ < 12)
+                            printf("    FAIL %s[%s cc=%#x 0x855e=%u 0x824c=%u] %s: "
+                                   "got %ld want %ld\n",
+                                   H[h].nm, apply_branch ? "apply" : "noop", cc,
+                                   col_855e, decoy_824c, bad, got, want);
+                    } else { st->pass++; }
                 }
-                /* the handler must have applied action = LUT[cc] (last_contact_action
-                   latches it) and zeroed input_state. */
-                if (anim_b_loop_idx != want_action) {
-                    bad = "resolved_action"; got = anim_b_loop_idx; want = want_action;
-                } else if (input_state != 0) {
-                    bad = "input_state"; got = input_state; want = 0;
-                }
-                if (bad) {
-                    st->fail++;
-                    if (printed++ < 12)
-                        printf("    FAIL %s[cc=%#x] %s: got %ld want %ld\n",
-                               H[h].nm, cc, bad, got, want);
-                } else { st->pass++; }
             }
         }
     }

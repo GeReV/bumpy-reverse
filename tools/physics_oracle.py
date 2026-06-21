@@ -72,7 +72,7 @@ TRACE LAYOUT (little-endian) — FROZEN; Task-2 (physics_ctest.c) parses this ex
     u8   p1_cell         (0x856e)
     u8   move_locked     (0x8242)
     u8   prev_game_mode  (0x8552)
-    u8   _pad            (0)
+    u8   p1_step_col_count(0x855e)   (former _pad slot; cursor/move-step col counter)
 
 Run (sandbox disabled — needs unicorn/uv cache access), HARD timeout:
   timeout 1800 uv run python tools/physics_oracle.py
@@ -125,6 +125,11 @@ OFF_MOVE_OVERRIDE: int = 0xa1a7     # u8
 OFF_P1_CELL: int = 0x856e           # u8
 OFF_MOVE_LOCKED: int = 0x8242       # u8
 OFF_PREV_GAME_MODE: int = 0x8552    # u8
+OFF_P1_STEP_COL_COUNT: int = 0x855e # u8 (cursor/move-step COLUMN counter; the
+                                    #     contact/walk-step resolvers + apply_contact
+                                    #     handlers gate on this, NOT 0x824c — captured
+                                    #     in the SNAP's former _pad slot so the per-fn
+                                    #     differential can seed it distinctly)
 OFF_CURRENT_LEVEL: int = 0x79b2     # u8
 OFF_COPYPROTECT: int = 0x119a       # s8
 
@@ -598,7 +603,8 @@ def main() -> None:
             rd8(OFF_P1_MOVE_ANIM), rd8(OFF_GAME_MODE), rd8(OFF_P1_MOVE_STEP_IDX),
             rd8(OFF_P1_FACING_LEFT), rd8(OFF_P1_MOVE_STEPS_LEFT), rd8(OFF_INPUT_STATE),
             rd8(OFF_PHYSICS_FROZEN), rd8(OFF_MOVE_OVERRIDE), rd8(OFF_P1_CELL),
-            rd8(OFF_MOVE_LOCKED), rd8(OFF_PREV_GAME_MODE), 0)
+            rd8(OFF_MOVE_LOCKED), rd8(OFF_PREV_GAME_MODE),
+            rd8(OFF_P1_STEP_COL_COUNT))   # former _pad slot now = 0x855e
 
     def read_script() -> Tuple[int, int, bytes]:
         off, seg = struct.unpack("<HH", bytes(uc.mem_read(DG_LIN + OFF_MOVE_SCRIPT_PTR, 4)))
@@ -890,7 +896,8 @@ def main() -> None:
 
     # SNAP field order helper
     SNAP_FIELDS = ["px", "py", "anim", "mode", "step", "facing", "steps_left",
-                   "input", "frozen", "override", "cell", "locked", "prev_mode", "pad"]
+                   "input", "frozen", "override", "cell", "locked", "prev_mode",
+                   "step_col"]
 
     def snap_dict(t: tuple) -> dict:
         return dict(zip(SNAP_FIELDS, t))

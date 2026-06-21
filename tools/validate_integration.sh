@@ -154,69 +154,71 @@ build_map() {
 build_map ""
 [ -f "$MAP" ] || { echo "ERROR: map not produced" >&2; tail -10 "$TMP/bumpy_map.log" >&2; exit 1; }
 
-# module_of <symbol> : print the .obj that DEFINES the C symbol (Watcom adds '_')
+# module_of <mapfile> <symbol> : print the .obj that DEFINES the C symbol (Watcom '_')
 module_of() {
-    awk -v sym="${1}_" '
+    awk -v sym="${2}_" '
         /^Module: /{ m=$2; sub(/\(.*/,"",m) }
         $2==sym { print m; exit }
-    ' "$MAP"
+    ' "$1"
 }
 
-# ── 2. game_loop per-tick callees resolve to their real module (NOT stub) ────
-echo "== [2/3] game_loop per-tick callees resolve to real module bodies =="
-fail=0
-for sym in "${!SPINE_EXPECT[@]}"; do
-    want="${SPINE_EXPECT[$sym]}"
-    got="$(module_of "$sym")"
-    if [ -z "$got" ]; then
-        echo "   FAIL: spine callee '$sym' not defined by any linked object" >&2; fail=1; continue
-    fi
-    if [ "$got" = "game_stubs.obj" ]; then
-        echo "   FAIL: spine callee '$sym' REGRESSED to a stub (game_stubs.obj)" >&2; fail=1; continue
-    fi
-    if [ "$got" != "$want" ]; then
-        echo "   FAIL: spine callee '$sym' resolved to '$got', expected '$want'" >&2; fail=1
-    fi
-done
-if [ "$fail" = 0 ]; then
-    echo "   all ${#SPINE_EXPECT[@]} per-tick callees resolve to their real module (none stubbed)."
-fi
+# run_checks <mapfile> : run BOTH production gates ([2/3] resolution + [3/3]
+# allowlist) against the given map.  Prints PASS/FAIL detail; returns 0 iff both
+# gates pass, non-zero on ANY regression.  The self-test re-invokes this exact
+# function against a perturbed map and asserts a non-zero exit — so the gate proof
+# exercises the real production code path, not an inline simulation.
+run_checks() {
+    local map="$1" rc=0 sym want got s
+    declare -A ALLOW=()
+    local a; for a in "${CARVEOUT_ALLOWLIST[@]}"; do ALLOW[$a]=1; done
 
-# ── 3. game_stubs.obj symbols ⊆ carve-out allowlist ──────────────────────────
-echo "== [3/3] game_stubs.obj defines ONLY allowlisted carve-outs =="
-mapfile -t STUB_SYMS < <(
-    awk '/^Module: game_stubs.obj/{f=1;next} /^Module: /{f=0} f' "$MAP" \
-      | grep -E '^[0-9a-f]{4}:[0-9a-f]+ +[A-Za-z]' \
-      | awk '{ s=$2; sub(/_$/,"",s); print s }'
-)
-declare -A ALLOW=()
-for a in "${CARVEOUT_ALLOWLIST[@]}"; do ALLOW[$a]=1; done
-stub_fail=0
-for s in "${STUB_SYMS[@]}"; do
-    if [ -z "${ALLOW[$s]:-}" ]; then
-        echo "   FAIL: game_stubs.obj defines '$s' which is NOT an allowlisted carve-out" >&2
-        stub_fail=1
-    fi
-done
-if [ "$stub_fail" = 0 ]; then
-    echo "   game_stubs.obj defines ${#STUB_SYMS[@]} symbols, all allowlisted carve-outs."
-fi
+    echo "== [2/3] game_loop per-tick callees resolve to real module bodies =="
+    for sym in "${!SPINE_EXPECT[@]}"; do
+        want="${SPINE_EXPECT[$sym]}"
+        got="$(module_of "$map" "$sym")"
+        if [ -z "$got" ]; then
+            echo "   FAIL: spine callee '$sym' not defined by any linked object" >&2; rc=1; continue
+        fi
+        if [ "$got" = "game_stubs.obj" ]; then
+            echo "   FAIL: spine callee '$sym' REGRESSED to a stub (game_stubs.obj)" >&2; rc=1; continue
+        fi
+        if [ "$got" != "$want" ]; then
+            echo "   FAIL: spine callee '$sym' resolved to '$got', expected '$want'" >&2; rc=1
+        fi
+    done
+    [ "$rc" = 0 ] && echo "   all ${#SPINE_EXPECT[@]} per-tick callees resolve to their real module (none stubbed)."
+
+    echo "== [3/3] game_stubs.obj defines ONLY allowlisted carve-outs =="
+    local STUB_SYMS=()
+    mapfile -t STUB_SYMS < <(
+        awk '/^Module: game_stubs.obj/{f=1;next} /^Module: /{f=0} f' "$map" \
+          | grep -E '^[0-9a-f]{4}:[0-9a-f]+ +[A-Za-z]' \
+          | awk '{ s=$2; sub(/_$/,"",s); print s }'
+    )
+    local stub_rc=0
+    for s in "${STUB_SYMS[@]}"; do
+        if [ -z "${ALLOW[$s]:-}" ]; then
+            echo "   FAIL: game_stubs.obj defines '$s' which is NOT an allowlisted carve-out" >&2
+            stub_rc=1
+        fi
+    done
+    [ "$stub_rc" = 0 ] && echo "   game_stubs.obj defines ${#STUB_SYMS[@]} symbols, all allowlisted carve-outs."
+
+    [ "$rc" = 0 ] && [ "$stub_rc" = 0 ]
+}
 
 # ── --self-test: prove the gate has teeth ────────────────────────────────────
 # A real regression = a reconstructed spine callee's body is removed from its
 # module and only a game_stubs.c stub remains, so the symbol lands in
 # game_stubs.obj.  We can't safely delete a body mid-build, so we perturb the MAP:
 # move a spine callee's definition line under the game_stubs.obj module, then
-# re-run the SAME [2/3] resolution + [3/3] allowlist checks against the perturbed
-# map and assert they now FAIL.  This proves the comparator logic gates regressions
-# (it isn't a no-op) using the exact production code paths.
+# RE-INVOKE the production run_checks against the perturbed map and assert it
+# exits non-zero.  This proves the comparator gates regressions (not a no-op)
+# using the exact production code path — no inline simulation.
 if [ "$SELFTEST" = 1 ]; then
-    echo "== [self-test] move a spine callee into game_stubs.obj in the map → checks MUST fail =="
+    echo "== [self-test] move a spine callee into game_stubs.obj in the map → run_checks MUST fail =="
     VICTIM="handle_gameplay_input"          # owned by player.obj
     PMAP="$TMP/BUMPY_integration_perturbed.map"
-    # Relocate the victim's symbol line: delete it from its real module and insert
-    # it under the game_stubs.obj module header (two-pass: game_stubs precedes the
-    # victim's owning module in the map, so insert on the header line directly).
     VLINE="$(awk -v v="${VICTIM}_" '$2==v{print; exit}' "$MAP")"
     awk -v v="${VICTIM}_" -v vline="$VLINE" '
         $2==v { next }                                   # drop the real definition line
@@ -224,24 +226,25 @@ if [ "$SELFTEST" = 1 ]; then
         { print }
     ' "$MAP" > "$PMAP"
 
-    # Re-run the production [2/3] resolution check against the perturbed map.
-    got="$(awk -v sym="${VICTIM}_" '/^Module: /{m=$2;sub(/\(.*/,"",m)} $2==sym{print m;exit}' "$PMAP")"
+    # Sanity: the perturbation must actually re-home the victim into the stub module.
+    got="$(module_of "$PMAP" "$VICTIM")"
     if [ "$got" != "game_stubs.obj" ]; then
         echo "   self-test INCONCLUSIVE: perturbation did not place '$VICTIM' in game_stubs.obj (got '$got')" >&2
         exit 3
     fi
-    echo "   perturbed map resolves '$VICTIM' to '$got' (a stub)."
-    echo "   -> [2/3] would report: spine callee '$VICTIM' REGRESSED to a stub  => gate FAILS."
-    # And [3/3] would also fire: handle_gameplay_input is NOT in the carve-out allowlist.
-    if [ -n "${ALLOW[$VICTIM]:-}" ]; then
-        echo "   self-test INCONCLUSIVE: '$VICTIM' is unexpectedly in the allowlist" >&2; exit 3
+
+    # Re-invoke the PRODUCTION checks against the perturbed map; they MUST fail.
+    echo "   -- running production run_checks against the perturbed map --"
+    if run_checks "$PMAP"; then
+        echo "   self-test FAILED: run_checks PASSED on a perturbed map (gate is toothless)" >&2
+        exit 3
     fi
-    echo "   '$VICTIM' is NOT in the carve-out allowlist => [3/3] would also FAIL."
+    echo "   run_checks returned non-zero on the perturbed map (regression caught)."
     echo "== self-test OK (gate is a real regression guard) =="
     exit 0
 fi
 
-if [ "$fail" != 0 ] || [ "$stub_fail" != 0 ]; then
+if ! run_checks "$MAP"; then
     echo "== validate_integration: FAIL =="; exit 1
 fi
 echo "== validate_integration: PASS =="

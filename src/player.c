@@ -617,7 +617,7 @@ void gamemode_25_contact(void)
 
     p1_contact_code = 0;
     if ((input_state & 0x12) == 0) {
-        if (move_step_count == 0) {
+        if (p1_step_col_count == 0) {             /* 0x855e */
             p1_contact_code = 0x1f;
             enter_game_mode(0x27);
         } else {
@@ -658,7 +658,7 @@ void gamemode_26_contact(void)
     u8 next_mode;
 
     if ((input_state & 0x12) == 0) {
-        if (move_step_count == 7) {
+        if (p1_step_col_count == 7) {             /* 0x855e */
             p1_contact_code = 0x1f;
             enter_game_mode(0x28);
         } else {
@@ -745,7 +745,7 @@ void move_left(void)
 
     p1_contact_code = 0;
     play_action_sound();
-    if (move_step_count == 0) {
+    if (p1_step_col_count == 0) {                 /* 0x855e */
         p1_contact_code = 0x1f;
         mode = 0x12;
     } else {
@@ -782,7 +782,7 @@ void move_right(void)
 
     p1_contact_code = 0;
     play_action_sound();
-    if (move_step_count == 7) {
+    if (p1_step_col_count == 7) {                 /* 0x855e */
         p1_contact_code = 0x1f;
         mode = 0x13;
     } else {
@@ -1308,7 +1308,7 @@ void move_left_step_resolve(void)
     u8 resolved_mode;
 
     p1_contact_code = 0;
-    if (move_step_count == 0) {
+    if (p1_step_col_count == 0) {                 /* 0x855e */
         p1_contact_code = 0x1f;
         mode = 0x14;
     } else {
@@ -1344,7 +1344,7 @@ void move_right_step_resolve_alt(void)
     u8 resolved_mode;
 
     p1_contact_code = 0;
-    if (move_step_count == 7) {
+    if (p1_step_col_count == 7) {                 /* 0x855e */
         p1_contact_code = 0x1f;
         mode = 0x15;
     } else {
@@ -1387,7 +1387,7 @@ void p1_resolve_walk_left_contact(void)
         mode = 2;
     }
     play_sound(mode);
-    if (move_step_count == 0) {
+    if (p1_step_col_count == 0) {                 /* 0x855e */
         p1_contact_code = 0x1f;
         mode = 0x38;
     } else {
@@ -1399,7 +1399,7 @@ void p1_resolve_walk_left_contact(void)
             read_tile_at_cell((u8)(p1_cell + 0xff));
             if (p1_current_tile == 0x0b) {
                 mode = 0x3a;
-            } else if (move_step_count == 1) {
+            } else if (p1_step_col_count == 1) {  /* 0x855e */
                 p1_contact_code = 0x1f;
                 mode = 0x34;
             } else {
@@ -1442,7 +1442,7 @@ void p1_resolve_walk_right_contact(void)
         mode = 2;
     }
     play_sound(mode);
-    if (move_step_count == 7) {
+    if (p1_step_col_count == 7) {                 /* 0x855e */
         p1_contact_code = 0x1f;
         mode = 0x39;
     } else {
@@ -1454,7 +1454,7 @@ void p1_resolve_walk_right_contact(void)
             read_tile_at_cell((u8)(p1_cell + 1));
             if (p1_current_tile == 0x0b) {
                 mode = 0x3b;
-            } else if (move_step_count == 6) {
+            } else if (p1_step_col_count == 6) {  /* 0x855e */
                 p1_contact_code = 0x1f;
                 mode = 0x35;
             } else {
@@ -1663,13 +1663,19 @@ void check_tile_below_ladder_or_land(void)
  * ════════════════════════════════════════════════════════════════════════════ */
 
 /* ── DGROUP move-step substate globals (Task 4) ───────────────────────────────
- * jump_step_counter (DGROUP 0x824c) IS the existing `move_step_count` global —
- * gamemode_default_idle stores 8 to it and move_down_step increments/tests it;
- * the same byte, so it is REUSED here (not redefined).  The bytes below are new. */
+ * Two DISTINCT engine counters live here; keep them separate:
+ *   move_step_count   (DGROUP 0x824c, jump_step_counter) — the existing global,
+ *                     stored 8 by gamemode_default_idle and incremented/tested by
+ *                     move_down_step; REUSED here (not redefined).
+ *   p1_step_col_count (DGROUP 0x855e) — the cursor / move-step COLUMN counter
+ *                     (cursor_move_right increments it; the contact/walk-step
+ *                     resolvers and the apply_contact handlers test it ==0/1/6/7).
+ * The bytes below are new. */
 u8  p1_grid_row;          /* DGROUP 0x855c — cursor row counter (cursor_move_up/down) */
-u8  p1_step_col_count;    /* DGROUP 0x855e — cursor column counter (cursor_move_right;
-                             move_step_last_variant tests ==7).  Distinct from
-                             move_step_count(0x824c); the decomp mislabels both. */
+u8  p1_step_col_count;    /* DGROUP 0x855e — cursor/move-step column counter (read by
+                             gamemode_25/26_contact, move_left/right(_step_resolve),
+                             p1_resolve_walk_*_contact, p1_apply_contact_action_*,
+                             move_step_last_variant; written by cursor_move_right). */
 u8  g_anim_channel_idx;   /* DGROUP 0x856c — anim-channel index probed by move_step_landed */
 u8  level_complete_flag;  /* DGROUP 0xa1b1 — cleared by move_step_landed on the '[' tile */
 
@@ -2030,8 +2036,8 @@ void move_step_landed(void)
 
 /* move_step_first_variant — 1000:6699
  * First-step counterpart of move_step_last_variant (66d8): unless prev mode 3/0xf,
- * refresh the pending-action view (pending_anim_lut_3c7a); then, if move_step_count
- * (p1_step_col_count @ 0x855e) != 0, apply contact_action_lut_35be[p1_contact_code].
+ * refresh the pending-action view (pending_anim_lut_3c7a); then, if
+ * p1_step_col_count (0x855e) != 0, apply contact_action_lut_35be[p1_contact_code].
  * Disasm: 66a5 CMP[0x8552],3 / 66ac CMP[0x8552],0xf / 66be CMP[0x855e],0 /
  * 66c5 [0x8551] index 0x35be / 66d1 CALL 6a89(apply_contact_action). */
 void move_step_first_variant(void)
@@ -2125,7 +2131,7 @@ void move_step_last_gate_c(void)
 
 /* check_exit_tile_horiz — 1000:6326
  * Horizontal exit-tile detection (sibling of check_exit_tile_vert @ 6372 in items.c):
- * if move_step_count (p1_step_col_count @ 0x855e) != 0 AND the neighbour tile at
+ * if p1_step_col_count (0x855e) != 0 AND the neighbour tile at
  * tilemap[p1_cell + 0x2f] (one column back) is the exit tile 0x0c, commit the
  * end-of-level transition (p1_move_step_idx=0, physics_frozen=1, enter_game_mode(0x2e),
  * play exit sound 0x0d on the OPL device else 0x03).
@@ -2441,11 +2447,11 @@ void p1_apply_contact_action_prev(void)
 }
 
 /* p1_apply_contact_action_at_start — 1000:6890
- * If a move step is in progress (move_step_count != 0) apply the contact action
- * for p1_contact_code via table 0x35fe; clears input_state. */
+ * If a move step is in progress (p1_step_col_count @ 0x855e != 0) apply the contact
+ * action for p1_contact_code via table 0x35fe; clears input_state. */
 void p1_apply_contact_action_at_start(void)
 {
-    if (move_step_count != 0) {
+    if (p1_step_col_count != 0) {                 /* 0x855e */
         apply_contact_action(contact_action_lut_35fe[p1_contact_code]);
         input_state = 0;
     }
@@ -2453,11 +2459,11 @@ void p1_apply_contact_action_at_start(void)
 }
 
 /* p1_apply_contact_action_before_end — 1000:68bb
- * Unless the move step is at its final frame (move_step_count != 7) apply the
- * contact action for p1_contact_code via table 0x361e; clears input_state. */
+ * Unless the move step is at its final frame (p1_step_col_count @ 0x855e != 7) apply
+ * the contact action for p1_contact_code via table 0x361e; clears input_state. */
 void p1_apply_contact_action_before_end(void)
 {
-    if (move_step_count != 7) {
+    if (p1_step_col_count != 7) {                 /* 0x855e */
         apply_contact_action(contact_action_lut_361e[p1_contact_code]);
         input_state = 0;
     }
@@ -2485,22 +2491,22 @@ void p1_apply_contact_action_tbl_369e(void)
 }
 
 /* p1_apply_contact_action_at_start_b — 1000:68e6
- * If a move step is in progress (move_step_count != 0) apply the contact action
- * via table 0x367e (p1_apply_contact_action_tbl_367e). */
+ * If a move step is in progress (p1_step_col_count @ 0x855e != 0) apply the contact
+ * action via table 0x367e (p1_apply_contact_action_tbl_367e). */
 void p1_apply_contact_action_at_start_b(void)
 {
-    if (move_step_count != 0) {
+    if (p1_step_col_count != 0) {                 /* 0x855e */
         p1_apply_contact_action_tbl_367e();
     }
     return;
 }
 
 /* p1_apply_contact_action_before_end_b — 1000:6922
- * Unless the move step is at its final frame (move_step_count != 7) apply the
- * contact action via table 0x369e (p1_apply_contact_action_tbl_369e). */
+ * Unless the move step is at its final frame (p1_step_col_count @ 0x855e != 7) apply
+ * the contact action via table 0x369e (p1_apply_contact_action_tbl_369e). */
 void p1_apply_contact_action_before_end_b(void)
 {
-    if (move_step_count != 7) {
+    if (p1_step_col_count != 7) {                 /* 0x855e */
         p1_apply_contact_action_tbl_369e();
     }
     return;
