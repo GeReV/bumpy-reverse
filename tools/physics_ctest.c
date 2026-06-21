@@ -4,7 +4,7 @@
  * shimmed out: __far/__huge erased, exact-width typedefs, BUMPY_H defined so
  * player.h does not pull <dos.h>), then validates the reconstructed physics
  * against the Phase-2 T1 capture local/build/render/physics_trace.bin
- * (magic PHYSTRC1, version 1 — layout frozen in tools/physics_oracle.py and
+ * (magic PHYSTRC1, version 2 — layout frozen in tools/physics_oracle.py and
  * local/build/physics_model.md §Trace layout).  TWO comparators:
  *
  *   PRIMARY — per-function differential (the real gate).  For each trace record
@@ -1099,7 +1099,12 @@ int main(int argc, char **argv)
         fprintf(stderr, "bad magic (want PHYSTRC1)\n"); return 2;
     }
     ver = rd16(b + 8); nsc = rd16(b + 10);
-    if (ver != 1) { fprintf(stderr, "unsupported version %u\n", ver); return 2; }
+    if (ver != 2) {
+        fprintf(stderr, "unsupported trace version %u (want 2 — regenerate via "
+                "tools/physics_oracle.py; the v2 SNAP carries p1_step_col_count in "
+                "slot 15, was zero-pad in v1)\n", ver);
+        return 2;
+    }
     o = 12;
     nfn = rd16(b + o); o += 2;
     /* skip the fn-name string table (we key on fn_addr, not the name index). */

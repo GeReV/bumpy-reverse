@@ -206,8 +206,14 @@ KNOWN_HANDLERS: Dict[int, str] = {
 # Trace format constants
 # ---------------------------------------------------------------------------
 TRACE_MAGIC: bytes = b"PHYSTRC1"
-TRACE_VERSION: int = 1
-SNAP_FMT: str = "<hhBBBBBBBBBBBB"   # 16 bytes
+# v2 (Phase 9.1): the final SNAP byte (slot 15) was an always-zero `_pad` in v1;
+# it now carries the engine's captured p1_step_col_count (0x855e) so the per-fn
+# differential can seed 0x855e distinctly from move_step_count (0x824c) and catch
+# wrong-global reads.  Layout size is unchanged, so the VERSION is bumped to make a
+# stale v1 trace HARD-FAIL at load (physics_ctest.c) rather than silently read the
+# step_col seed as zero (which would re-hide the counter-aliasing bug).
+TRACE_VERSION: int = 2
+SNAP_FMT: str = "<hhBBBBBBBBBBBB"   # 16 bytes (slot 15 = p1_step_col_count as of v2)
 SNAP_SIZE: int = struct.calcsize(SNAP_FMT)  # 16
 assert SNAP_SIZE == 16
 
@@ -911,7 +917,7 @@ def main() -> None:
                  "move-step / physics-function-call boundary (NOT int8 tick).\n")
     lines.append("\n## Trace layout\n")
     lines.append("See the header comment of `tools/physics_oracle.py` for the frozen "
-                 "`physics_trace.bin` layout (magic `PHYSTRC1`, version 1). Each record "
+                 "`physics_trace.bin` layout (magic `PHYSTRC1`, version 2). Each record "
                  "carries fn_addr, fn_name_idx, dispatch_target, a 16-byte entry SNAP and "
                  "16-byte exit SNAP, the active move-script bytes (off/seg + raw), and a "
                  "tilemap window around p1_cell.\n")
