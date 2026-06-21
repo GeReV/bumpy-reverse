@@ -468,6 +468,76 @@ validated (semantic + descriptor + the static DAC writer). The **int8-synced end
 and the **copy-protection path** (kept behind `#define` OFF, Phase 7b) remain the project-wide
 deferrals (unchanged from Phases 2/3/4/5/6).
 
+## Phase-7b module audit (copy-protection challenge — `src/level.c`)
+
+The platform-number copy-protection challenge `copyprotect_challenge` (1000:4015) — the
+**only** protection code in `BUMPY.EXE` — reconstructed in `src/level.c` behind
+`#define BUMPY_COPY_PROTECTION` (default **OFF** → default build byte-unchanged /
+cracked-equivalent). The reconstruction has two layers: the **present routine** (the cracked
+build's body, transcribed 1:1 from the live decomp at `4015`) and the **documented un-crack**
+(the answer compare the crack removed, recovered from `docs/copy-protection.md`, plus the
+collapsed round-state flow inferred). See `docs/copy-protection.md` for the full protection
+write-up (including the orphaned password/registration path — `CODES.EXE`/`VS.VSN`/`VGUARD.DAT`,
+a deferred separate-binary effort).
+
+| Module / function set | Fidelity | Notes |
+|---|---|---|
+| **Present routine** (T2): `copyprotect_challenge` (1000:4015) | Transcription | The cracked-build body, ported 1:1 from the live decomp: the two table copies (`sprite_id_tbl` 16 words from DGROUP `0x11b6`, `answer_tbl` 16 bytes from `0x11d6`), the challenge setup + resource-0x90 load, the random sprite-index pick in **2..15** (seeded from the captured LIVE prng state `(0x5192,0,0)` → index 12), the platform-display descriptor (`p1_sprite` x=0x90, y=100, frame=`sprite_id_tbl[12]`), and the +/- input dial. **Present-parts gated** — per-function differential vs the cracked `4015` (table copies, reproduced index, the entered-number trajectory under the 4×-poll-per-action sampling, the display descriptor). |
+| **Documented un-crack** (T2): the answer compare + round-state | Reconstruction (documented) | The original input-loop tail `if (entered != answer_tbl[index]) copyprotect_flag = -1;` (PASS leaves the flag at its initial value; mismatch writes `-1`, which the `start_level` hook reads to reset `current_level` to 1). **Recovered from `docs/copy-protection.md`** — this compare and the `-1` fail path do **NOT exist in the cracked binary** (the shipped build sets `copyprotect_flag = 1` unconditionally at `1000:412e`, before input). The collapsed `round_state` flow is **inferred**. **Un-crack-logic gated** — the documented compare (pass-on-match / `-1`-on-mismatch) is perturbation-proven via the descriptor-frame gate, plus the +/- ceiling clamp (saturates at 0x63) that the T1 capture did not exercise. |
+
+**Phase-7b deviations (stated plainly; in-code RECONSTRUCTION FIDELITY note present; NO over-claim):**
+
+- **The un-crack is a documented reconstruction, not a recovered original.** The answer compare
+  (`entered != answer_tbl[index] → copyprotect_flag = -1`) and the collapsed `round_state` flow
+  are reconstructed from `docs/copy-protection.md`, not transcribed from a protection-active
+  binary (no such binary is available; both 1992 copies are the same cracked build). The
+  **present-parts** of the routine are 1:1 from the cracked `4015`; the **un-crack** is the
+  documented-logic layer, gated by logic check (not by an engine differential against an
+  un-cracked original).
+- **`+` plus guard saturates at 0x63.** The dial's increment is reconstructed with the engine's
+  `CMP 0x63 / JNC` ceiling: the entered number clamps at 0x63 rather than wrapping. (T1 did not
+  exercise the ceiling; the clamp is validated by the un-crack-logic comparator.)
+- **Input-dial `draw_text_at` inlined as two calls.** The reconstruction emits the dial's
+  prompt + number via two `draw_text_at` calls where the decomp shares a single call site;
+  effect-identical (same descriptors written), a call-shape-only deviation.
+- **The password/registration path is a deferred separate-binary effort.** `CODES.EXE`
+  (TinyProg-packed), `VS.VSN` (`YZFA`-encrypted), and `VGUARD.DAT` are NOT reachable from
+  BUMPY's code (the `0x119e` password table + the four password strings at `203b:12e7`–`1318`
+  have no code xref; BUMPY opens no `.DAT`/`.VSN`/`CODES` file). RE of those files is deferred
+  to its own effort — see `docs/copy-protection.md`.
+
+**Phase-7b validation method:** per-function differential split — **present-parts** vs the
+cracked `4015` (the table copies, the live-prng index reproduction with seed state `0x5192`, the
+entered-number trajectory, the display descriptor) + **un-crack logic** (the documented
+pass-on-match / `-1`-on-mismatch compare and the `+` ceiling clamp, perturbation-proven via the
+descriptor-frame gate). The challenge compiles in BOTH modes (default OFF → compiled out;
+`-dBUMPY_COPY_PROTECTION` → body compiled). **Gate: `validate_copyprot` PASS=36 FAIL=0** (level.c
+builds clean in both modes; present-parts + un-crack comparators both FAIL=0).
+
+## Phase-7b status (copy-protection challenge)
+
+As of Phase-7b Task 3, the copy-protection challenge is **reconstructed and documented**:
+
+- **Reconstructed**: `copyprotect_challenge` (1000:4015) — the present routine 1:1 from the
+  cracked decomp + the documented un-crack (answer compare + collapsed round-state), behind
+  `#define BUMPY_COPY_PROTECTION` (default OFF → default build unchanged / cracked-equivalent).
+- **Traced (Part-B, no reconstruction)**: the platform-number challenge is the **only** protection
+  code in `BUMPY.EXE`; the password/registration path (`0x119e` table + the four `203b:12e7`–`1318`
+  strings) is **orphaned** (no code xref, no file open) and lives in the separate
+  `CODES.EXE`/`VS.VSN`/`VGUARD.DAT` files — RE of those is **DEFERRED** to its own effort.
+  `"INSERT THE OTHER DISK…"` (`203b:0606`) is the multi-disk disk-swap prompt, unrelated.
+- **Gate re-confirmed (2026-06-21)**: `validate_copyprot` PASS=36 FAIL=0 (present-parts + un-crack,
+  both modes compile clean). No-regression across the full gate set: `validate_blit` 17/17 anim +
+  17/17 chain + 24/24 blits; `validate_composite` 54152 @ 53858 baseline; `validate_player` PASS;
+  `validate_physics` PASS=16584 FAIL=0 UNPORTED=624; `validate_items` PASS=11 FAIL=0 UNPORTED=0;
+  `validate_p2` PASS=74 FAIL=0 DESC_CHECKED=1; `validate_anim` PASS=45 FAIL=0 UNPORTED=1
+  DESC_CHECKED=28; `validate_sound` PASS=4414 FAIL=0 UNPORTED=25; `validate_screen_fns` PASS=884
+  FAIL=0 UNPORTED=0; `BUMPY.EXE` links clean (Open Watcom 16-bit DOS).
+
+**Deferred from Phase 7b:** RE of the separate registration binaries (`CODES.EXE` unpack +
+`VS.VSN`/`VGUARD.DAT` formats) — its own effort; and the project-wide **int8-synced end-to-end
+gate** (unchanged from Phases 2–7).
+
 ## Phase-1 slice status (vertical slice — session → loop → modules)
 
 As of Phase-1 Task 7 the reconstructed `src/` tree forms a complete, **linkable**
