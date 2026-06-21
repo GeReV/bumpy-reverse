@@ -247,12 +247,10 @@ void load_current_level_data(void)
 {
 }
 
-/* spawn_and_draw_level_entities 1000:2a78 — spawn + draw the level's entities
-   (reconstructed for RENDER as entity.c helpers; this standalone game-state
-   entry is stubbed for linkability). */
-void spawn_and_draw_level_entities(void)
-{
-}
+/* spawn_and_draw_level_entities 1000:2a78 — RECONSTRUCTED 1:1 in src/spawn.c
+   (Phase-8 T2: the channel-A/B record populator + layer-C static-sprite blitter +
+   P1/P2 BUM-header spawn reader).  No longer stubbed here — spawn.obj owns the body
+   (no dup; validated by tools/validate_spawn.sh). */
 
 /* FUN_1000_31de — post-spawn round-counter reset.  Task-1 UNCERTAIN: never
    decompiled (address-out-of-bounds).  Faithful no-op stub. */
@@ -286,6 +284,12 @@ void show_pause_screen(void)         {}
 
 /* init_fullscreen_view_desc — set up the fullscreen view descriptor (mode,flag). */
 void init_fullscreen_view_desc(u8 mode, u8 flag) { (void)mode; (void)flag; }
+
+/* setup_fullscreen_view 1000:483c — the per-load fullscreen view/page restore the
+   spawn orchestrator runs once before the grid scan (the fullscreen_buf -> page
+   copy bgi_overlay.c models for sub-handler 0).  Render-core leaf, not yet
+   reconstructed; faithful no-op stub for linkability (called by spawn.c). */
+void setup_fullscreen_view(void) {}
 
 /* P1/P2 sprite draw (the engine's draw_p1_sprite/draw_p2_sprite are reconstructed
    for RENDER as entity.c entity_draw_p1/p2 with explicit args; these zero-arg
