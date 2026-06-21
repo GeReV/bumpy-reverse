@@ -211,6 +211,22 @@ OFF_COPYPROTECT: int = 0x119a         # s8
 OFF_KEY_STATE_PTR: int = 0x4D42       # near ptr to g_key_state_table base
 
 # ---------------------------------------------------------------------------
+# Phase-8 channel-B caveat closure: the REAL layer-B populator + level (re)load path.
+# Channel B has no per-cell allocator; it is spawn-populated by the level-load entity
+# orchestrator spawn_and_draw_level_entities (1000:2a78). Level 1's decoded layer-B is
+# genuinely EMPTY (raw BUM +0x30 is the vec-ENCODED bitstream, not the runtime grid), so
+# to exercise the B steppers/draw/erase on ENGINE-populated records we (re)load a B-firing
+# level (start_level loads+vec_decodes D{N}.PAV/DEC/BUM; load_current_level_data copies the
+# decoded 0xc2 slice into the runtime tilemap), then invoke the orchestrator. Verified
+# (spawn_oracle.py SCAN): levels 2/3/4/5/6/8/9 have a populated decoded layer-B; 1/7 do not.
+# These three offsets are read live from the disasm of spawn_and_draw_level_entities (see
+# spawn_model.md / spawn_oracle.py — same resolved addresses, not re-derived here).
+OFF_SPAWN: int = 0x2a78               # spawn_and_draw_level_entities (channel-B+A populator)
+OFF_START_LEVEL: int = 0x2d14         # loads+vec_decodes D{N}.PAV/DEC/BUM
+OFF_LOAD_LEVEL_DATA: int = 0x32b0     # copies decoded 0xc2 header slice into the tilemap
+B_FIRING_LEVEL: int = 2               # a level whose decoded layer-B is populated
+
+# ---------------------------------------------------------------------------
 # Hooked anim functions (Ghidra seg-1000 offsets)
 # ---------------------------------------------------------------------------
 FN_NAMES: Dict[int, str] = {
@@ -682,7 +698,8 @@ def main() -> None:
     # STOP_OFF (the HLT return sentinel) is defined above where its exit hook is
     # pre-registered.
     # ---------------------------------------------------------------------------
-    def call_engine_fn(fn_off: int, arg_word: Optional[int] = None) -> None:
+    def call_engine_fn(fn_off: int, arg_word: Optional[int] = None,
+                       count: int = 20_000_000) -> None:
         uc.mem_write(CODE_LIN + STOP_OFF, b"\xF4")  # HLT sentinel
         ss = uc.reg_read(UC_X86_REG_SS) & 0xFFFF
         sp = uc.reg_read(UC_X86_REG_SP) & 0xFFFF
@@ -698,7 +715,7 @@ def main() -> None:
         h = uc.hook_add(UC_HOOK_CODE, stop_hook, None,
                         CODE_LIN + STOP_OFF, CODE_LIN + STOP_OFF)
         try:
-            uc.emu_start(CODE_LIN + fn_off, 0, count=20_000_000)
+            uc.emu_start(CODE_LIN + fn_off, 0, count=count)
         except UcError as e:
             tr["call_err"] = str(e)
         finally:
@@ -801,6 +818,34 @@ def main() -> None:
         uc.context_restore(boot_ctx)
         tr["fault"] = None
         tr["exit"] = None
+
+    # ---------------------------------------------------------------------------
+    # Phase-8 channel-B caveat closure: (re)load a B-firing level and run the REAL
+    # populator. Mirrors tools/spawn_oracle.py's load_level: set current_level, (re)run
+    # start_level (load + vec_decode D{N}.PAV/DEC/BUM) then load_current_level_data (copy
+    # the decoded 0xc2 slice into the runtime tilemap). The level-load + spawn engine
+    # code itself calls the anim draw/erase leaves internally; we hold the anim-fn capture
+    # OFF across that work so the only captured B records are the explicit step/draw/erase
+    # calls we issue afterwards, operating on the records the engine just populated.
+    # ---------------------------------------------------------------------------
+    def load_b_firing_level(n: int) -> Tuple[int, int, int]:
+        wr8(OFF_CURRENT_LEVEL, n)
+        uc.mem_write(DG_LIN + OFF_COPYPROTECT, bytes([1]))   # skip copy-protect
+        call_engine_fn(OFF_START_LEVEL, count=80_000_000)
+        wr8(OFF_CURRENT_LEVEL, n)
+        uc.mem_write(DG_LIN + OFF_COPYPROTECT, bytes([1]))
+        call_engine_fn(OFF_LOAD_LEVEL_DATA, count=40_000_000)
+        # decoded-tilemap non-zero counts for layers A/B/C (verifies B is populated)
+        o, s = read_far_at(OFF_TILEMAP_PTR)
+        base = (s * 16 + o) & 0xFFFFF
+        LAYER_LEN = 0x30
+        try:
+            tm = bytes(uc.mem_read(base, LAYER_LEN * 3))
+        except UcError:
+            tm = b"\x00" * (LAYER_LEN * 3)
+        nz = [sum(1 for i in range(LAYER_LEN) if tm[L * LAYER_LEN + i] != 0)
+              for L in range(3)]
+        return nz[0], nz[1], nz[2]
 
     # Resolved table slices for the model (read once post-boot).
     def tbl_slice(off: int, n: int) -> bytes:
@@ -908,36 +953,77 @@ def main() -> None:
             "render+erase it. Full channel-A lifecycle.",
             scn_a_lifecycle)
 
-    # --- Scenario 4: channel B step/draw/erase ---------------------------------------
-    # Channel B has NO allocator (spawn-populated). To exercise the B step/draw/erase
-    # bodies we hand-populate a B slot record (active=1, a cell, a stream ptr pointing at
-    # a small in-DGROUP byte-stream we write), then run the B fns. This is a SEEDED probe
-    # of the B fn bodies; the real B spawn path is out of scope this phase (documented).
-    SCRATCH_STREAM_OFF = 0x6e00   # unused DGROUP scratch region for our seeded B stream
+    # --- Scenario 4: channel B step/draw/erase on REAL spawn-populated records --------
+    # PHASE-8 CHANNEL-B CAVEAT CLOSURE. Channel B has NO per-cell allocator; the real
+    # populator is spawn_and_draw_level_entities (1000:2a78), the level-load entity
+    # orchestrator (reconstructed + validated in Phase-8 T2). Phase 5 could not reach it
+    # (deferred), so the B step/draw/erase were exercised on a SYNTHETIC hand-seeded slot
+    # record — documented there as a coverage caveat. We now CLOSE it: (re)load a B-firing
+    # level (level 2; level 1's decoded layer-B is genuinely empty), run the REAL
+    # orchestrator to populate the channel-B slot table from the level's layer-B grid,
+    # then run step_b + draw_b + erase_b on those ENGINE-populated records — no synthetic
+    # seed. The captured records carry the real B channel-record table as ENTRY/EXIT snaps,
+    # so the host replay harness (anim_chan_ctest.c) validates B's per-tick bodies against
+    # records the engine itself produced.
+    # The B record's per-tick STREAM ptr (rec bytes [2..5]) is the one B input the REAL
+    # spawn does NOT populate: spawn sets the B record's cell (+1) and frame-DATA ptr
+    # (+8/+10) from the level's layer-B grid, and during its active window (slot-0
+    # active=1, frame=1) calls draw_b/erase_b per cell — but the per-tick step_b consumes
+    # a separate stream ptr that the spawn path never writes (confirmed from the 1000:2a78
+    # decomp + the spawn_oracle level-2 B record `001e00000000000002001700`: bytes [2..5]
+    # are 0). To exercise step_b's stream-advance on the ENGINE-populated record we point
+    # that one field at a small in-DGROUP byte-stream; every OTHER B-record field (cell,
+    # frame-data ptr) and the active/frame activation values are taken verbatim from the
+    # real spawn. This is the documented residual: cell + frame-data ptr are engine-real;
+    # only the step-B stream ptr is harness-supplied (the engine path that writes it is
+    # not in any captured trace).
+    SCRATCH_STREAM_OFF = 0x6e00   # unused DGROUP scratch for the step-B stream ptr only
     def scn_b_lifecycle(pre):
-        # Build a tiny frame-byte stream: a couple frame bytes then 0xff (end).
+        capturing["on"] = False                    # don't capture the load/spawn internals
+        a_nz, b_nz, c_nz = load_b_firing_level(B_FIRING_LEVEL)
+        pre["level"] = B_FIRING_LEVEL
+        pre["decoded_nz_ABC"] = (a_nz, b_nz, c_nz)
+        # Run the REAL populator: stamps the channel-B slot table (cell + frame-data ptr)
+        # from the level's layer-B grid; leaves slot-0 active=0 at exit (engine end-state).
+        call_engine_fn(OFF_SPAWN, count=80_000_000)
+        real_b0 = read_slot_recs()[A_SLOTS * SLOT_REC_LEN:
+                                   (A_SLOTS + 1) * SLOT_REC_LEN]
+        pre["b0_after_spawn"] = real_b0.hex()
+        pre["b_recs_after_spawn"] = " ".join(
+            read_slot_recs()[(A_SLOTS + i) * SLOT_REC_LEN:
+                             (A_SLOTS + i + 1) * SLOT_REC_LEN].hex()
+            for i in range(B_SLOTS))
+        # Re-create the engine's OWN mid-spawn active state on the engine-populated B
+        # slot-0: active=1 + frame=1 (the exact values spawn step-1 writes), keeping the
+        # spawn's real cell + frame-data ptr. Supply the one missing field — the step-B
+        # stream ptr — from DGROUP scratch so step_b advances along a real byte-stream.
         stream = bytes([0x01, 0x02, 0x01, 0xff, 0xff, 0xff])
         uc.mem_write(DG_LIN + SCRATCH_STREAM_OFF, stream)
-        # Seed B slot 0: active=1, cell=SEED_CELL, stream ptr -> our scratch stream.
-        rec = bytearray(SLOT_REC_LEN)
-        rec[0] = 1
-        rec[1] = SEED_CELL & 0xFF
-        struct.pack_into("<HH", rec, 2, SCRATCH_STREAM_OFF, DG_SEG)  # stream far ptr
+        rec = bytearray(real_b0)
+        rec[0] = 1                                  # active=1 (engine spawn step-1 value)
+        rec[6] = 1                                  # frame=1 (engine spawn step-1 value)
+        struct.pack_into("<HH", rec, 2, SCRATCH_STREAM_OFF, DG_SEG)  # step-B stream ptr
         write_slot_rec("b", 0, bytes(rec))
-        pre["cell"] = SEED_CELL
-        pre["b_active_seeded"] = [read_slot_active("b", i) for i in range(B_SLOTS)]
+        pre["b0_active_record"] = bytes(rec).hex()
         pre["stream"] = stream.hex()
+        # Capture the explicit B per-tick lifecycle on the engine-populated record.
+        capturing["on"] = True
         for _ in range(6):
             call_engine_fn(0x15a1)                 # step_anim_channels_b
             call_engine_fn(0x17c7)                 # draw_anim_channels_b
             call_engine_fn(0x1b2b)                 # erase_anim_channels_b
         pre["b_active_after"] = [read_slot_active("b", i) for i in range(B_SLOTS)]
         pre["cur_frame_byte"] = rd8(OFF_B_CUR_FRAME_BYTE)
-    run_one(6, "b_lifecycle",
-            "Channel B has no allocator (spawn-populated). SEED B slot 0 (active=1, a "
-            "cell, a small frame-byte stream in DGROUP scratch), then run step_b + draw_b "
-            "+ erase_b x6 to exercise the B fn bodies along the stream until 0xff ends it. "
-            "SEEDED probe — the real B spawn path is out of scope this phase.",
+    run_one(6, "b_lifecycle_real_spawn",
+            "Channel B has no allocator. CAVEAT CLOSURE (Phase 8): (re)load a B-firing "
+            "level (level %d) and run the REAL populator spawn_and_draw_level_entities "
+            "(1000:2a78); the channel-B slot-0 record's cell + frame-data ptr are stamped "
+            "from the level's real layer-B grid. Re-apply the engine's own active=1/frame=1 "
+            "(spawn step-1 values), supply the one field spawn doesn't write (the step-B "
+            "stream ptr), then run step_b + draw_b + erase_b x6 on that ENGINE-populated "
+            "record. Replaces the Phase-5 fully-synthetic seed (cell + frame-data ptr are "
+            "now engine-real; only the step-B stream ptr remains harness-supplied)."
+            % B_FIRING_LEVEL,
             scn_b_lifecycle)
 
     # ---------------------------------------------------------------------------

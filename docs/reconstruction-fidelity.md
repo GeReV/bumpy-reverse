@@ -179,14 +179,18 @@ stubs). The shared channel record is 12 bytes: `[0]`active `[1]`cell `[2..5]`str
 
 **Phase-5 deviations (all in-code RECONSTRUCTION FIDELITY notes present):**
 
-- **Channel-B populator deferred.** `spawn_and_draw_level_entities` (2a78) — the
-  level-entity spawn path that *fills* the channel-B slots — is NOT ported (a separate
-  entity-spawn concern). Channel B has no allocator of its own, so its step/draw/erase
-  are validated against **synthetic, harness-seeded** entry-records: the B function
-  *bodies* run 1:1 on the seed and the captured deltas (stream-ptr advance) are
-  genuine. This is a coverage caveat, not an integrity gap — analogous to the Phase-4
-  direction-seeded cell-move minor (the channel-A path *is* allocator-driven and
-  semantic-state validated end-to-end).
+- **Channel-B populator — CLOSED in Phase 8.** Channel B has no allocator of its own;
+  its real populator is `spawn_and_draw_level_entities` (2a78), deferred at Phase 5. It
+  was reconstructed 1:1 + validated in Phase 8 (see the Phase-8 section). The Phase-8 T3
+  re-validation runs the channel-B step/draw/erase against records **populated by the
+  real `spawn_and_draw_level_entities`** on a B-firing level (level 2): the oracle
+  (re)loads the level, runs the real orchestrator to stamp the B slot record's cell +
+  frame-data ptr from the level's layer-B grid, re-applies the engine's own
+  `active=1`/`frame=1` (spawn step-1 values), and then steps/draws/erases. The earlier
+  fully-synthetic seed is gone. **Documented residual:** the one B-record field the spawn
+  path never writes — the per-tick step-B *stream* ptr (rec bytes [2..5]; confirmed 0 in
+  both the 2a78 decomp and the spawn_oracle level-2 capture `001e…0002001700`) — remains
+  harness-supplied; the cell + frame-data ptr are engine-real.
 - **BGI-overlay leaves stay faithful-signature stubs.** `restore_bg_view`,
   `blit_sprite`, `render_player_view`, `FUN_1000_80ac` — the Phase-0 render core is
   untouched; draw/erase are validated at the descriptor level over that already-
@@ -212,8 +216,9 @@ bytes the engine actually wrote, over the plane-exact blitter). Engine ground tr
 captured by `tools/anim_oracle.py` (Unicorn instrumentation); 6 scenarios, 46 records.
 **Gate: `validate_anim` PASS=45 FAIL=0 UNPORTED=1 DESC_CHECKED=28** (the 1 UNPORTED is
 a single skeleton-coverage record, not a port gap; the descriptor gate is perturbation-
-proven). The B path's step/draw/erase run on synthetic-seeded records (B-populator
-deferred); the channel-A path is allocator-driven end-to-end.
+proven). As of Phase 8 the B path's step/draw/erase run on records populated by the real
+`spawn_and_draw_level_entities` (level 2) — no longer synthetic seeds (caveat CLOSED; see
+Phase-8 section); the channel-A path is allocator-driven end-to-end.
 
 ## Phase-5 status (anim-channel FX subsystem)
 
@@ -230,8 +235,9 @@ anim-channel FX subsystem is **reconstructed and validated**:
 - **Validation split**: allocator + steppers at the **semantic-state** level (channel
   records + scalars); draw + erase at the **view-descriptor + p1_sprite-pointee**
   level over the already-plane-exact Phase-0 blitter (perturbation-proven real gate).
-  Channel-B step/draw/erase run on **synthetic harness-seeded** entry-records (B has no
-  allocator) — the bodies run 1:1 and the deltas are genuine; the channel-A path is
+  Channel-B step/draw/erase: validated against records populated by the real
+  `spawn_and_draw_level_entities` as of Phase 8 (CLOSED — see Phase-8 section; was
+  synthetic-seeded while the populator was deferred); the channel-A path is
   allocator-driven and validated end-to-end.
 - **Gate re-confirmed (2026-06-20)**: `validate_anim` PASS=45 FAIL=0 UNPORTED=1
   DESC_CHECKED=28. No-regression: `validate_blit` 17/17 anim + 17/17 chain + 24/24
@@ -243,8 +249,8 @@ anim-channel FX subsystem is **reconstructed and validated**:
 **Deferred from Phase 5:**
 
 1. **Channel-B populator / level-entity spawn** (`spawn_and_draw_level_entities` 2a78)
-   — the path that fills the channel-B slots; B's step/draw/erase are validated on
-   synthetic seeds until it lands. A separate entity-spawn concern.
+   — **DONE in Phase 8** (`src/spawn.c`; see Phase-8 section). B's step/draw/erase are
+   now validated against records the real populator stamps, not synthetic seeds.
 2. **Sound** (`play_sound`, `play_state_sound` 6e11/647e) — extern stubs → Phase 6.
 3. **BGI-overlay leaves / `bgi_overlay.c` sub-handlers 3–6** — Phase-0 render core
    untouched; draw/erase validated at the descriptor level over it. Unchanged.
@@ -537,6 +543,83 @@ As of Phase-7b Task 3, the copy-protection challenge is **reconstructed and docu
 **Deferred from Phase 7b:** RE of the separate registration binaries (`CODES.EXE` unpack +
 `VS.VSN`/`VGUARD.DAT` formats) — its own effort; and the project-wide **int8-synced end-to-end
 gate** (unchanged from Phases 2–7).
+
+## Phase-8 module audit (level-load entity spawn — `src/spawn.c`)
+
+The level-load entity-placement orchestrator — the channel-A/B record **populator** + the
+layer-C static-sprite blitter + the P1/P2 BUM-header spawn-field reader — ported 1:1 from
+the live Ghidra decomp + raw disassembly of `1000:2a78`. It runs once per level load,
+placing the level's static entities and seeding the per-frame animation channels. This
+**closes the Phase-5 channel-B coverage caveat**: channel B has no allocator of its own, so
+its per-tick step/draw/erase were Phase-5-validated on synthetic harness-seeded records
+until this populator landed.
+
+| Module / function | Fidelity | Notes |
+|---|---|---|
+| `spawn_and_draw_level_entities` (2a78) | Transcription | 1:1 mirror of the orchestrator: (1) zero the active byte of the 3 A + 4 B records then activate slot-0 of each channel (`active=1`, `frame=1`, + the two `0x8e8b`/`0x8e8c` mirrors + the `0x8578`/`0x8579` cmd-byte scalars); (2) BUM-header spawn reads (p1_cell / level_exit_cell / items_remaining via `tilemap` 0xa0d8; p2_cell / p2_ai_threshold / p2_move_state / p2_frame_base via `level_src_ptr` 0x75d0); (3) `setup_fullscreen_view`; (4) the 6×8 grid scan (cell = row*8+col) placing layer A / layer B (skip col 7) / layer C per cell; (5) slot-0 deactivate. Control flow, the per-layer `if cv != 0` guards, and the slot-record byte offsets (`+1` cell / `+6` frame / `+8`/`+10` data-ptr) match the asm. |
+
+**Phase-8 deviations (all in-code RECONSTRUCTION FIDELITY notes present in `src/spawn.c`):**
+
+- **Render-core leaves stay module-owned / faithful-signature.** `setup_fullscreen_view`
+  (483c), `draw`/`erase_anim_channels_a`/`_b` (anim.c, Phase-5-validated), and `blit_sprite`
+  (942a, the BGI-overlay self-modifying leaf, routed via `anim_blit_sprite_leaf`) are NOT
+  re-implemented here; spawn.c calls them by name over the already-validated render core.
+- **Nested blit inside layer A/B.** `draw_anim_channels_a`/`_b` each NEST a `blit_sprite` per
+  active entity (Phase-5 behavior); the host replay harness (`tools/spawn_ctest.c`) separates
+  those nested blits from spawn's own layer-C blits via the trace's per-fill layer tag.
+- **Slot-table far-ptr split modelled as a typed `__far *[]`.** The decomp CONCATs the
+  `0x4c70 off`/`0x4c72 seg` halves to reach slot-0's record; spawn.c reaches it as
+  `anim_channels_X_tbl[0]` (off+seg in one far ptr) — the same model anim.c owns.
+- **Level data seeded.** The host replay seeds each level's tilemap (layers A/B/C), BUM header,
+  and the spawn type/frame tables from the oracle's REAL engine load+`vec_decode` (no INT 21h
+  in the harness); the orchestrator's placement logic runs genuinely over that seeded input.
+
+**Phase-8 validation method:** per-function semantic-state + descriptor differential, run over
+a **multi-level** capture so channel A+B+C are exercised together (level 1's decoded layer-B is
+genuinely empty — only levels 2/3/4/5/6/8/9 fire layer B). The oracle (`tools/spawn_oracle.py`,
+Unicorn instrumentation) (re)loads each level, invokes the real orchestrator, and captures its
+entry/exit channel-record snapshots + the per-cell leaf descriptors. The host replay
+(`tools/spawn_ctest.c`) seeds each level's ENTRY state, calls the reconstructed C fn, and asserts
+the populated A/B records + the layer-C blit descriptors == the engine's exit capture; a seeded
+layer-A cell perturbation must fail (gate has teeth). **Gate: `validate_spawn` PASS — 9 runs, 7
+with layer-B, FAIL=0.**
+
+**Phase-5 channel-B caveat — CLOSED (Phase-8 T3).** With the real populator in place, the
+`validate_anim` channel-B step/draw/erase no longer run on a fully synthetic seed:
+`tools/anim_oracle.py` scenario 6 (`b_lifecycle_real_spawn`) (re)loads a B-firing level (level
+2), runs the **real `spawn_and_draw_level_entities`** to stamp the channel-B slot-0 record's
+**cell + frame-data ptr** from the level's real layer-B grid, re-applies the engine's own
+`active=1`/`frame=1` (spawn step-1 values), and steps/draws/erases over that engine-populated
+record. **Documented residual:** the one B-record field the spawn path never writes — the
+per-tick step-B *stream* ptr (rec bytes [2..5]; confirmed 0 in both the 2a78 decomp and the
+spawn_oracle level-2 record `001e…0002001700`) — stays harness-supplied; cell + frame-data ptr
+are engine-real. `validate_anim` re-confirmed **PASS=45 FAIL=0 UNPORTED=1 DESC_CHECKED=28**
+(record count unchanged; scenario 6's 18 B records now operate on engine-populated state).
+
+## Phase-8 status (level-load entity spawn)
+
+As of Phase-8 Task 3 the level-load entity-spawn path is **reconstructed and validated**, and
+the Phase-5 channel-B caveat is **closed**:
+
+- **Reconstructed 1:1**: `spawn_and_draw_level_entities` (2a78) in `src/spawn.c` — the
+  channel-A/B record populator + layer-C static blitter + BUM-header spawn reader, ported 1:1
+  from the live decomp + raw disasm (verified via MCP).
+- **Validated**: semantic record-population + descriptor differential across a multi-level trace
+  (levels 1–9; layer B exercised on 2/3/4/5/6/8/9) over the already-validated render core; the
+  level data is seeded from the engine's real load+decode.
+- **Channel-B caveat closed**: `validate_anim`'s B step/draw/erase now validate against records
+  populated by the real spawn (see the caveat note above).
+- **Gate re-confirmed (2026-06-21)** — all 11 green: `validate_spawn` PASS (9 runs, 7 with
+  layer-B, FAIL=0); `validate_anim` PASS=45 FAIL=0 UNPORTED=1 DESC_CHECKED=28; `validate_blit`
+  17/17 anim + 17/17 chain + 24/24 blits; `validate_composite` 54152 @ 53858 baseline;
+  `validate_player` PASS; `validate_physics` PASS=16584 FAIL=0 UNPORTED=624; `validate_items`
+  PASS=11 FAIL=0 UNPORTED=0; `validate_p2` PASS=74 FAIL=0 DESC_CHECKED=1; `validate_sound`
+  PASS=4414 FAIL=0 UNPORTED=25; `validate_screen_fns` PASS=884 FAIL=0 UNPORTED=0;
+  `validate_copyprot` PASS=36 FAIL=0; `BUMPY.EXE` links clean (Open Watcom 16-bit DOS).
+
+**Deferred from Phase 8:** the project-wide **int8-synced end-to-end gate** (unchanged from
+Phases 2–7); the step-B *stream* ptr engine path (the only field the spawn populator never
+writes — see the channel-B caveat residual above).
 
 ## Phase-1 slice status (vertical slice — session → loop → modules)
 
