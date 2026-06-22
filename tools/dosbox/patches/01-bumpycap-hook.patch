@@ -1,0 +1,128 @@
+diff --git i/src/hardware/vga_draw.cpp w/src/hardware/vga_draw.cpp
+index 5ec90e1..0040418 100644
+--- i/src/hardware/vga_draw.cpp
++++ w/src/hardware/vga_draw.cpp
+@@ -21,11 +21,15 @@
+ #include <assert.h>
+ #include <math.h>
+ #include <stdio.h>
++#include <stdlib.h>   /* BUMPYCAP: getenv for the input-script path */
+ #include "dosbox.h"
+ #if defined (WIN32)
+ #include <d3d9.h>
+ #endif
+ #include "logging.h"
++#include "mem.h"       /* BUMPYCAP: phys_readb for the int8-capture probe */
++#include "regs.h"      /* BUMPYCAP: SegValue/reg_ip for the int8-capture probe */
++#include "keyboard.h"  /* BUMPYCAP: KEYBOARD_AddKey for input injection */
+ #include "time.h"
+ #include "timer.h"
+ #include "setup.h"
+@@ -5967,6 +5971,107 @@ Bitu DEBUG_EnableDebugger(void);
+ static void VGA_VerticalTimer(Bitu /*val*/) {
+ 	double current_time = PIC_GetCurrentEventTime();
+ 
++	/* BUMPYCAP (Phase-10 int8-capture, observability probe): once per video frame,
++	 * report the BIOS video mode (BDA 0040:0049 — 0x0D = Bumpy's 320x200x16 graphics,
++	 * 0x03 = text) plus the foreground CS:IP. Confirms whether BUMPY.EXE entered its
++	 * graphics loop and where it executes (load-segment calibration). Throttled + on
++	 * mode change to avoid log spam. Remove/gate before the production capture. */
++	{
++		static unsigned int bumpycap_frame = 0;
++		static uint8_t bumpycap_lastmode = 0xFFu;
++		static int bumpycap_init = 0;
++		/* Script-driven key injection: each entry = (frame, scancode, value).
++		 * Loaded once from the file named by $BUMPYCAP_SCRIPT, so the startup input
++		 * sequence is tuned as DATA (no emulator rebuild per attempt). */
++		static unsigned bumpycap_n = 0;
++		static unsigned bumpycap_sfr[512];
++		static unsigned bumpycap_ssc[512];
++		static unsigned bumpycap_sval[512];
++
++		/* Runtime DGROUP segment (calibrated: ghidra 0x203b -> 0x185f at run time;
++		 * runtime offsets identical to the unpacked image). See docs/dosbox-int8-capture.md. */
++		const PhysPt dg = (PhysPt)0x185f0u;
++
++		if (!bumpycap_init) {
++			bumpycap_init = 1;
++			const char *sp = getenv("BUMPYCAP_SCRIPT");
++			if (sp != NULL) {
++				FILE *f = fopen(sp, "r");
++				if (f != NULL) {
++					char line[128];
++					/* lines: "<frame-dec> <scancode-hex> <value-dec>"; skip '#' comments + blanks. */
++					while (bumpycap_n < 512u && fgets(line, sizeof(line), f) != NULL) {
++						unsigned fr, sc, va;
++						const char *q = line;
++						while (*q == ' ' || *q == '\t') q++;
++						if (*q == '#' || *q == '\n' || *q == '\r' || *q == '\0') continue;
++						if (sscanf(q, "%u %x %u", &fr, &sc, &va) == 3) {
++							bumpycap_sfr[bumpycap_n]  = fr;
++							bumpycap_ssc[bumpycap_n]  = sc;
++							bumpycap_sval[bumpycap_n] = va;
++							bumpycap_n++;
++						}
++					}
++					fclose(f);
++					LOG_MSG("BUMPYCAP loaded %u script entries from %s", bumpycap_n, sp);
++				} else {
++					LOG_MSG("BUMPYCAP could not open script %s", sp);
++				}
++			}
++		}
++
++		/* phys_readb (not real_readb/mem_readb — cpu_io_is_forbidden.h forbids those in
++		 * this VGA-render TU; phys_readb is explicitly allowed). Real-mode DOS: physical
++		 * == linear, so BDA 0040:0049 (current video mode) is physical 0x449. */
++		uint8_t bumpycap_vmode = phys_readb((PhysPt)0x449u);
++		if ((bumpycap_frame % 35u) == 0u || bumpycap_vmode != bumpycap_lastmode) {
++			LOG_MSG("BUMPYCAP frame=%u vmode=0x%02x CS:IP=%04x:%04x",
++				bumpycap_frame, bumpycap_vmode,
++				(unsigned)SegValue(cs), (unsigned)reg_ip);
++		}
++
++		/* One-shot dump of the live joystick/key handler script for handler 0
++		 * (g_joystick_handler_table @ DGROUP:0x4cf2 = 16 far ptrs), so we can decode
++		 * the scancode -> input_state mapping the menu uses (read_input_action),
++		 * i.e. find the FIRE (bit 0x10) and up/down scancodes. */
++		{
++			static unsigned bumpycap_hsum = 0xFFFFFFFFu;   /* last logged content checksum */
++			unsigned hoff = phys_readb(dg + 0x4cf2u) | (phys_readb(dg + 0x4cf3u) << 8);
++			unsigned hseg = phys_readb(dg + 0x4cf4u) | (phys_readb(dg + 0x4cf5u) << 8);
++			if ((hoff != 0u || hseg != 0u) && (bumpycap_frame % 35u) == 0u) {
++				PhysPt p = (PhysPt)(hseg*16u + hoff);
++				char hx[3*48+1]; int hp = 0; unsigned sum = 0;
++				for (int b = 0; b < 48; b++) {
++					unsigned v = phys_readb(p+(PhysPt)b);
++					sum = sum*131u + v;
++					hp += snprintf(hx+hp, sizeof(hx)-(size_t)hp, "%02x ", v);
++				}
++				/* only log when the script CONTENT changes (skip the all-zero early state) */
++				if (sum != bumpycap_hsum) {
++					bumpycap_hsum = sum;
++					LOG_MSG("BUMPYCAP handler0 %04x:%04x = %s", hseg, hoff, hx);
++				}
++			}
++		}
++
++		/* Apply scripted key-state-table writes for this frame.  Injection = direct
++		 * write to the game's polled key table at DGROUP:[0x4d42]+scancode (value
++		 * 1=down, 0=up) — uniform across screens (works whether or not the game's
++		 * INT9 ISR is installed; there is no real keyboard input in the headless run). */
++		if (bumpycap_n != 0u) {
++			unsigned tbl = phys_readb(dg + 0x4d42u) | (phys_readb(dg + 0x4d43u) << 8);
++			for (unsigned i = 0; i < bumpycap_n; i++) {
++				if (bumpycap_sfr[i] == bumpycap_frame) {
++					phys_writeb(dg + (PhysPt)tbl + (PhysPt)bumpycap_ssc[i], (uint8_t)bumpycap_sval[i]);
++					LOG_MSG("BUMPYCAP f=%u key[%02x]=%u", bumpycap_frame, bumpycap_ssc[i], bumpycap_sval[i]);
++				}
++			}
++		}
++
++		bumpycap_lastmode = bumpycap_vmode;
++		bumpycap_frame++;
++	}
++
+ #if C_DEBUG
+ 	if (DEBUG_HaltOnRetrace) {
+ 		DEBUG_EnableDebugger();

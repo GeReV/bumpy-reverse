@@ -20,12 +20,35 @@ integrated-DOS dosbox-x; BUMPY.EXE boots and **runs** under it.
   installed** during these early prompts (INT9 vector = BIOS `f000:e987`), so
   `KEYBOARD_AddKey` (scancode→IRQ1→INT9) does **not** populate the game's table. Writing the
   key directly into the table the game polls (`DGROUP:[0x4d42]+scancode = 1`) **does** advance
-  it — verified: an F2 table-write drove the game past `gfx_driver_init` into new code.
+  it. This is now the standing injection path — uniform across all screens (works whether or
+  not the ISR is installed) and deterministic.
+- **Injection is script-driven (data, not code).** The hook reads an input script from
+  `$BUMPYCAP_SCRIPT` (lines `<frame-dec> <scancode-hex> <value-dec>`), so the startup input
+  sequence is tuned without rebuilding the emulator. The emulator was rebuilt **once** for
+  this mechanism; every subsequent attempt is a one-line edit of the script file.
+- **Input mapping decoded from the live game.** Dumping the runtime key/joystick handler
+  script (`g_joystick_handler_table[0]` at DGROUP `0x4cf2`) and decoding it through
+  `read_input_action` gives the real scancode→`input_state` map:
+  `0x01`=UP (↑ `0x48`), `0x02`=DOWN (↓ `0x50`), `0x04`=LEFT (← `0x4b`), `0x08`=RIGHT
+  (→ `0x4d`), **`0x10`=FIRE (Enter `0x1c`, Space `0x39`, or `0x74`)**.
+- **Startup gate sequence solved (boot → gameplay graphics).** Two text-mode keypress gates
+  in the BGI/overlay init guard the gameplay graphics mode, then the in-graphics screens take
+  over:
+  1. **gfx_driver_init palette select** — **F2** (`0x3c`) (or F3 `0x3d`); text mode `0x02`.
+  2. **second overlay gate** — **F5** (`0x3f`); on pressing it the BIOS video mode flips to
+     **`0x0D`** (Bumpy's 320×200×16 gameplay graphics). Found by a scancode sweep
+     (`0x01..0x44`) watching for the mode flip; confirmed minimal (`F2` then `F5` reaches
+     `0x0D` directly).
+  3. in `0x0D`, injecting **FIRE (Enter `0x1c`)** drives the game on through the in-graphics
+     screens (title/menu) into further new code — i.e. the real input path now carries the
+     game forward frame-deterministically.
 
 So: build ✅, runs ✅, per-frame state readable ✅, DGROUP calibrated ✅, reconstruction
-cross-validated ✅, **input injection proven** ✅. Remaining: script the full startup key
-sequence to reach the gameplay graphics loop (`mode 0x0D`), then move the hook to the game's
-frame boundary and emit the SNAP trace, then the host replay harness.
+cross-validated ✅, script-driven injection ✅, input map decoded ✅, **boot→`0x0D` gateway
+sequence (F2,F5) reproducible** ✅. Remaining: confirm the exact arrival at the per-tick
+gameplay loop (needs the Ghidra GUI up to label the in-graphics overlay segments
+`1510`/`185a` and the `1000:75xx` sound-wait), then move the hook to the game's logical frame
+boundary and emit the SNAP trace, then build the host replay harness.
 
 ## Goal
 

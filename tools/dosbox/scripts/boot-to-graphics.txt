@@ -1,0 +1,22 @@
+# BUMPYCAP input script — drive BUMPY.EXE from boot to gameplay graphics (mode 0x0D).
+# Format: <frame-dec> <scancode-hex> <value>   (1=key down, 0=key up; '#' = comment)
+# Applied by the 01-bumpycap-hook.patch hook (writes DGROUP:[0x4d42]+scancode).
+# Deterministic config (core=normal, cycles=fixed 6000) => same frames every run.
+#
+# Gate 1: gfx_driver_init palette select — F2 (0x3c), text mode 0x02.
+120 3c 1
+300 3c 0
+# Gate 2: second overlay gate — F5 (0x3f); on press the BIOS video mode flips to 0x0D.
+340 3f 1
+348 3f 0
+360 3f 1
+368 3f 0
+380 3f 1
+388 3f 0
+# In 0x0D: FIRE = Enter (0x1c) drives on through the title/menu screens.
+600 1c 1
+606 1c 0
+640 1c 1
+646 1c 0
+680 1c 1
+686 1c 0
