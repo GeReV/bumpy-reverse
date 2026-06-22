@@ -1,0 +1,41 @@
+diff --git i/src/hardware/vga_draw.cpp w/src/hardware/vga_draw.cpp
+index 5ec90e1..538c5e6 100644
+--- i/src/hardware/vga_draw.cpp
++++ w/src/hardware/vga_draw.cpp
+@@ -26,6 +26,8 @@
+ #include <d3d9.h>
+ #endif
+ #include "logging.h"
++#include "mem.h"   /* BUMPYCAP: real_readb for the int8-capture probe */
++#include "regs.h"  /* BUMPYCAP: SegValue/reg_ip for the int8-capture probe */
+ #include "time.h"
+ #include "timer.h"
+ #include "setup.h"
+@@ -5967,6 +5969,27 @@ Bitu DEBUG_EnableDebugger(void);
+ static void VGA_VerticalTimer(Bitu /*val*/) {
+ 	double current_time = PIC_GetCurrentEventTime();
+ 
++	/* BUMPYCAP (Phase-10 int8-capture, observability probe): once per video frame,
++	 * report the BIOS video mode (BDA 0040:0049 — 0x0D = Bumpy's 320x200x16 graphics,
++	 * 0x03 = text) plus the foreground CS:IP. Confirms whether BUMPY.EXE entered its
++	 * graphics loop and where it executes (load-segment calibration). Throttled + on
++	 * mode change to avoid log spam. Remove/gate before the production capture. */
++	{
++		static unsigned int bumpycap_frame = 0;
++		static uint8_t bumpycap_lastmode = 0xFFu;
++		/* phys_readb (not real_readb/mem_readb — cpu_io_is_forbidden.h forbids those in
++		 * this VGA-render TU; phys_readb is explicitly allowed). Real-mode DOS: physical
++		 * == linear, so BDA 0040:0049 (current video mode) is physical 0x449. */
++		uint8_t bumpycap_vmode = phys_readb((PhysPt)0x449u);
++		if ((bumpycap_frame % 35u) == 0u || bumpycap_vmode != bumpycap_lastmode) {
++			LOG_MSG("BUMPYCAP frame=%u vmode=0x%02x CS:IP=%04x:%04x",
++				bumpycap_frame, bumpycap_vmode,
++				(unsigned)SegValue(cs), (unsigned)reg_ip);
++		}
++		bumpycap_lastmode = bumpycap_vmode;
++		bumpycap_frame++;
++	}
++
+ #if C_DEBUG
+ 	if (DEBUG_HaltOnRetrace) {
+ 		DEBUG_EnableDebugger();

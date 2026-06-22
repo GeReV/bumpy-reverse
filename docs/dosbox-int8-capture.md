@@ -3,6 +3,16 @@
 **Status:** in progress (capture harness bring-up). This documents what is being set
 up, why, and how to reproduce it from a clean checkout.
 
+**Bring-up findings (spike, 2026-06-22):** the reproducible build produces a working
+integrated-DOS dosbox-x; BUMPY.EXE boots and **runs** under it. The `01-observability-probe`
+patch (a per-frame `VGA_VerticalTimer` hook logging BDA video mode + `CS:IP`) shows the
+boot progression `vmode 0x12` (BIOS) → `0x03` (DOS) → settling at **`0x02` (text) with the
+foreground looping tightly in the program's own code segments `0824:7abb–7ad4` / `12dd:031x`
+for thousands of frames** — i.e. the game is alive but parked in a **keyboard poll-wait**
+(no input is injected headless). So: build ✅, runs ✅, per-frame state readable ✅; the next
+piece is **input injection** to drive it into the graphics gameplay loop (`mode 0x0D`), plus
+**DGROUP calibration** (the runtime code segs `0824`/`12dd` are the first load anchors).
+
 ## Goal
 
 Produce a **frame-accurate golden reference** of the real `BUMPY.EXE` running, so the
