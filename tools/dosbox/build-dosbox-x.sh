@@ -15,7 +15,10 @@
 # GL output) so the dependency footprint stays small and the build is reproducible.
 set -euo pipefail
 
-DBX_TAG="dosbox-x-v2026.06.02-osfree"
+# NB: pin the REGULAR tag, NOT the paired "-osfree" tag — the -osfree variant ships
+# vs/config_package.h with `#define OSFREE`, which configure turns into an OS-Free build
+# (no built-in DOS), so `mount; BUMPY.EXE` cannot run. The regular tag has the integrated DOS.
+DBX_TAG="dosbox-x-v2026.06.02"
 DBX_REPO="https://github.com/joncampbell123/dosbox-x"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

@@ -57,7 +57,14 @@ build is required regardless. We DISABLE the optional heavy features (ffmpeg vid
 FluidSynth, freetype/TTF, slirp/sdlnet networking, GL output) to keep the dependency
 footprint small.
 
-Pinned version: **`dosbox-x-v2026.06.02-osfree`**.
+Pinned version: **`dosbox-x-v2026.06.02`**.
+
+> **Pitfall — pin the regular tag, not `-osfree`.** Upstream ships paired tags per release:
+> `dosbox-x-vYYYY.MM.DD` **and** `dosbox-x-vYYYY.MM.DD-osfree`. GitHub's "latest release" is
+> the `-osfree` one, which ships `vs/config_package.h` with `#define OSFREE` — `configure`
+> turns that into an **OS-Free build with no built-in DOS**, so `mount c …; BUMPY.EXE` just
+> drops to a stub COMMAND.COM and exits (the game never runs). The build script pins the
+> **regular** tag, which has the integrated DOS kernel.
 
 ## Reproducibility model — what is tracked vs. built
 
@@ -89,7 +96,7 @@ reproduces the instrumented emulator.
    autotools are what a build needs and what the sandbox cannot `apt`-install itself.
    `libncurses-dev` is required for the `--enable-debug=heavy` debugger TUI.)
 
-2. **Build the instrumented emulator** (fetches the pinned `dosbox-x-v2026.06.02-osfree`
+2. **Build the instrumented emulator** (fetches the pinned `dosbox-x-v2026.06.02`
    source into the git-ignored `local/toolchain/`, applies `tools/dosbox/patches/`, builds
    `src/dosbox-x` with the debugger):
    ```
