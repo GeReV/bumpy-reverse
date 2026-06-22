@@ -3,15 +3,29 @@
 **Status:** in progress (capture harness bring-up). This documents what is being set
 up, why, and how to reproduce it from a clean checkout.
 
-**Bring-up findings (spike, 2026-06-22):** the reproducible build produces a working
-integrated-DOS dosbox-x; BUMPY.EXE boots and **runs** under it. The `01-observability-probe`
-patch (a per-frame `VGA_VerticalTimer` hook logging BDA video mode + `CS:IP`) shows the
-boot progression `vmode 0x12` (BIOS) → `0x03` (DOS) → settling at **`0x02` (text) with the
-foreground looping tightly in the program's own code segments `0824:7abb–7ad4` / `12dd:031x`
-for thousands of frames** — i.e. the game is alive but parked in a **keyboard poll-wait**
-(no input is injected headless). So: build ✅, runs ✅, per-frame state readable ✅; the next
-piece is **input injection** to drive it into the graphics gameplay loop (`mode 0x0D`), plus
-**DGROUP calibration** (the runtime code segs `0824`/`12dd` are the first load anchors).
+**Bring-up findings (spike, 2026-06-22/23):** the reproducible build produces a working
+integrated-DOS dosbox-x; BUMPY.EXE boots and **runs** under it.
+
+- **Calibration solved.** Disassembling the loop the game parks in showed it is our
+  `get_key_state` reading `g_key_state_table` at `DGROUP:0x4d42` — so the runtime **DGROUP
+  segment is `0x185f`**, runtime code seg `0824` (a second seg `12dd` = the `1ab9` overlay),
+  and **runtime offsets are identical to the unpacked image** (`runtime_seg = ghidra_seg −
+  0x7DC`). We can now read any SNAP field at `0x185f:<offset>`.
+- **Reconstruction cross-validated against the live binary**: `get_key_state` (7ab4),
+  `g_key_state_table` (`0x4d42`), and `palette_mode` (`0x541d`) all match `src/` exactly.
+- **The startup is a sequence of input-gated screens.** The first is `gfx_driver_init`
+  (`1ab9:0316`): a loop polling **F2 (scancode 0x3c → `palette_mode`=1)** / **F3 (0x3d →
+  `palette_mode`=2)** — a palette/monitor select. It loops in text mode until one is pressed.
+- **Injection mechanism = direct key-state-table write.** The game's INT9 ISR is **not
+  installed** during these early prompts (INT9 vector = BIOS `f000:e987`), so
+  `KEYBOARD_AddKey` (scancode→IRQ1→INT9) does **not** populate the game's table. Writing the
+  key directly into the table the game polls (`DGROUP:[0x4d42]+scancode = 1`) **does** advance
+  it — verified: an F2 table-write drove the game past `gfx_driver_init` into new code.
+
+So: build ✅, runs ✅, per-frame state readable ✅, DGROUP calibrated ✅, reconstruction
+cross-validated ✅, **input injection proven** ✅. Remaining: script the full startup key
+sequence to reach the gameplay graphics loop (`mode 0x0D`), then move the hook to the game's
+frame boundary and emit the SNAP trace, then the host replay harness.
 
 ## Goal
 
