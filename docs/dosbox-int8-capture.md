@@ -43,12 +43,34 @@ integrated-DOS dosbox-x; BUMPY.EXE boots and **runs** under it.
      screens (title/menu) into further new code — i.e. the real input path now carries the
      game forward frame-deterministically.
 
+- **The in-graphics screen flow is the standard `game_loop` path** (mapped with the Ghidra
+  GUI). After `0x0D` the game runs `game_loop`: `init_title_graphics` → `run_main_menu`
+  (poll until FIRE selects an option) → `start_level` → `level_intro_screen` (per-level
+  border image + Bumpy intro animation; its wait loop exits on a direction or **FIRE
+  (`0x10`) → `intro_start_level`**) → the per-tick gameplay loop. `wait_keypress` (`1000:328f`)
+  and the menu/intro waits all read `input_state` via `poll_input`, so the decoded FIRE
+  scancode (Enter `0x1c`) drives them. The non-`game_loop` segments seen in the trace are the
+  regular static code segments (`CODE_6` `1cec`/runtime `1510` is the **BGI EGAVGA driver**,
+  un-analyzed — all rendering routes through it) plus the int8/PIT sound ISR
+  (`pit_timer_isr_multiplexer` `1000:7c02`); the once-per-video-frame PC sampler sits in those
+  + the input pollers, so it rarely catches the brief `game_loop`/physics frames directly.
+- **Engine state advances under scripted input (SNAP core proven).** A gameplay-state
+  read-out in the hook (the per-function gates' globals, read live from DGROUP:
+  `game_mode 0x792c`, `current_level 0x8f40`, `p1_pixel_x/y 0x9290/0x9292`, `score
+  0xa0d4/0xa0d6`) shows them **zeroed pre-gameplay** then, once the FIRE train drives past
+  the menu/intro, **advancing every frame**: `p1_pixel_x` locks to the grid start column
+  (`15`) while `p1_pixel_y` animates and `game_mode` cycles through movement states. So the
+  reconstructed-vs-real comparison surface is readable and live at the frame boundary.
+
 So: build ✅, runs ✅, per-frame state readable ✅, DGROUP calibrated ✅, reconstruction
-cross-validated ✅, script-driven injection ✅, input map decoded ✅, **boot→`0x0D` gateway
-sequence (F2,F5) reproducible** ✅. Remaining: confirm the exact arrival at the per-tick
-gameplay loop (needs the Ghidra GUI up to label the in-graphics overlay segments
-`1510`/`185a` and the `1000:75xx` sound-wait), then move the hook to the game's logical frame
-boundary and emit the SNAP trace, then build the host replay harness.
+cross-validated ✅, script-driven injection ✅, input map decoded ✅, boot→`0x0D` gateway
+(F2,F5) reproducible ✅, `game_loop` screen flow mapped ✅, **gameplay-state globals advance
+under scripted input** ✅. Remaining (the SNAP phase): pin the exact per-tick-loop entry
+frame and cross-check the live globals against the per-function oracle
+(`tools/physics_oracle.py`) to validate the calibration, then move the hook to the game's
+logical frame boundary (after the last state mutation, before `present_frame`) and emit the
+binary SNAP trace, then build the host replay harness that drives the reconstructed
+`game_loop` tick-for-tick against it.
 
 ## Goal
 
