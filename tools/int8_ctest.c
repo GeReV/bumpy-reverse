@@ -1,6 +1,19 @@
-/* Host int8-synced END-TO-END replay harness — Phase-9.x Task 3 (PART 1 of 2).
+/* Host int8-synced END-TO-END replay harness — Phase-9.x (PARTS 1 + 2).
  *
- * PART 1 (this task): INIT parse + seed-once.  Defines the canonical INIT/FRAME
+ * PART 2 (this task): the per-tick replay loop (seed-once-then-evolve), the
+ * first-divergence report, and --perturb.  run_replay() reads a captured trace
+ * (magic "BINT" / version checked — stale or foreign traces HARD-fail), seeds the
+ * live engine globals ONCE from INIT, then for each FRAME feeds the trailing
+ * rng/input and calls the REAL game_tick(), comparing the evolved globals +
+ * tilemap hash against the captured FRAME state and printing the first mismatching
+ * (frame, field, got/want).  --perturb corrupts one seeded field so a tick must
+ * diverge (proves the gate is a genuine differential).  Two committed self-tests:
+ *   --selftest-seed   : synthetic INIT -> seed -> assert globals (PART 1, no tick)
+ *   --selftest-replay : synthetic 2-FRAME trace (one match / one one-byte-flipped)
+ *                       -> assert run_replay returns 0 / reports a field (needs the
+ *                       game_tick build: cc -DINT8_WITH_GAME_TICK -Itools).
+ *
+ * PART 1: INIT parse + seed-once.  Defines the canonical INIT/FRAME
  * layout consumer (tools/int8_trace.h), the host-include skeleton for the
  * reconstructed engine TUs, and seed_from_init() — which writes one captured INIT
  * snapshot into the live reconstructed engine globals (the per-tick loop's full
@@ -98,6 +111,14 @@ u8  rng_frame;                   /* player.c — driven by rand() in game_tick *
 u8  input_state;                 /* input.c  0x8244          */
 u16 prng_state0, prng_state1, prng_state2;  /* prng.c references these (owned here) */
 
+/* deferred-contact event queue — game.c-owned globals (0x9ba6/0x886/0x79b7); the
+   extracted game_post_present body reads/writes them.  Host-defined here so the
+   extracted bodies resolve against the real reconstructed apply_contact_action/
+   apply_cell_animation in the included TUs (REAL logic, not stubbed). */
+u8 __far *deferred_contact_ptr;      /* DGROUP 0x9ba6/0x9ba8 — event-queue cursor far ptr */
+u8        deferred_contact_buf[16];  /* DGROUP 0x0886 — the event buffer (head = reset tgt) */
+u8        deferred_contact_countdown;/* DGROUP 0x79b7 — per-event delay countdown          */
+
 /* p2 spawn globals (spawn.c references them extern; owned elsewhere in the build). */
 u8 __far *level_src_ptr;
 s8  p2_cell;
@@ -141,6 +162,15 @@ void p2_dispatch_move_state_handler(void) {}
 u8   pvp_collision_flag;
 u8   mode_script_tbl[0x40 * 4];
 void setup_fullscreen_view(void) {}
+/* game_tick render/timing/loop-boundary carve-out leaves (the documented partition
+   validate_integration.sh asserts: present_frame = VGA page-flip;
+   rotate_timing_flags_and_wait = int8 timing; show_pause_screen = a screen TU).
+   These mutate no replayed state — pure presentation/timing — so they are no-op
+   host shims, NOT real game logic.  game_post_present / game_post_input are NOT here:
+   they contain real state mutation and are awk-extracted (see int8_extracted.h). */
+void present_frame(u8 page) { (void)page; }
+void rotate_timing_flags_and_wait(void) {}
+void show_pause_screen(void) {}
 
 /* ── poll_input / rand stubs: the established pattern (physics_ctest.c:120 stubs
  *    poll_input "input already seeded from the SNAP"; the per-tick loop feeds the
@@ -163,7 +193,20 @@ int  rand(void) { return g_fed_rng; }
 #pragma GCC diagnostic pop
 
 #ifdef INT8_WITH_GAME_TICK
-#include "int8_extracted.h"   /* game_tick + game.c/level.c helpers (gate script) */
+/* forward-declare the two game.c bodies the extracted header itself defines (game_tick
+   calls them before their definitions appear in the same extracted header). */
+void game_post_present(void);
+void game_post_input(void);
+/* tools/int8_extracted.h is a TRANSIENT build artifact (not committed) the int8 gate
+   regenerates by awk-extracting three verbatim game.c bodies — game_tick (per-tick
+   spine), game_post_present and game_post_input (the two REAL state-mutating helpers
+   game_tick calls, which the host can't include wholesale).  The Task-7 wrapper
+   (tools/validate_int8.sh) owns the recipe; it is, verbatim:
+     awk '/^void game_tick\(void\)$/         {p=1} p{print} p&&/^}$/{exit}' src/game.c
+     awk '/^void game_post_present\(void\)$/ {p=1} p{print} p&&/^}$/{exit}' src/game.c
+     awk '/^void game_post_input\(void\)$/   {p=1} p{print} p&&/^}$/{exit}' src/game.c
+   (mirrors tools/validate_p1_spine.sh:42-60).  Build: cc -DINT8_WITH_GAME_TICK -Itools. */
+#include "int8_extracted.h"
 #endif
 
 /* p1_set_pixel_from_cell (items.c calls it; reconstructed in player.c in the real
@@ -180,6 +223,52 @@ void p1_set_pixel_from_cell(void)
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
+ *  Far-ptr DESCRIPTOR backing — the view / sprite-object / pos-table DGROUP far
+ *  ptrs the game_tick call tree dereferences (p1/p2 grid recompute read
+ *  sprite+0x14/0x16; the anim steppers write p1_sprite+0..4 and the clear-view
+ *  +0x14/0x16; render/erase pass the view ptrs to the no-op BGI leaves).  In the
+ *  engine these point into a contiguous DGROUP descriptor block set up by
+ *  init_sprite_structs / init_view_anim_descriptors; the host can't run that BGI
+ *  init, so — exactly as tools/anim_chan_ctest.c wire_views() does — we point each
+ *  far ptr at a dedicated host backing buffer.  Zeroed: the descriptor CONTENT
+ *  (sprite origin words) is not yet in the captured scalar union (entity_state is
+ *  reserved), so it is a deterministic zero here; see the report's concerns.
+ * ════════════════════════════════════════════════════════════════════════════ */
+#define VIEW_LEN     0x40
+#define SPRITE_LEN   0x40
+#define POSTBL_LEN   0x400
+static u8 hb_p1_sprite[SPRITE_LEN], hb_p2_sprite[SPRITE_LEN];
+static u8 hb_p1_view[VIEW_LEN], hb_p1_erase_view[VIEW_LEN], hb_pending_erase_view[VIEW_LEN];
+static u8 hb_p2_view[VIEW_LEN], hb_p2_erase_view[VIEW_LEN];
+static u8 hb_anim_a_erase_view[VIEW_LEN], hb_anim_a_draw_view[VIEW_LEN], hb_anim_a_clear_view[VIEW_LEN];
+static u8 hb_anim_b_view0[VIEW_LEN], hb_anim_b_view1[VIEW_LEN];
+static u8 hb_anim_b_draw_view[VIEW_LEN], hb_anim_b_clear_view[VIEW_LEN];
+static u8 hb_anim_posA_tbl[POSTBL_LEN], hb_anim_posB_tbl[POSTBL_LEN];
+static u8 hb_anim_a_grid_tbl[POSTBL_LEN], hb_anim_b_grid_tbl[POSTBL_LEN];
+
+static void wire_far_descriptors(void)
+{
+    p1_sprite          = hb_p1_sprite;
+    p2_sprite          = hb_p2_sprite;
+    p1_view            = hb_p1_view;
+    p1_erase_view      = hb_p1_erase_view;
+    pending_erase_view = hb_pending_erase_view;
+    p2_view            = hb_p2_view;
+    p2_erase_view      = hb_p2_erase_view;
+    anim_a_erase_view  = hb_anim_a_erase_view;
+    anim_a_draw_view   = hb_anim_a_draw_view;
+    anim_a_clear_view  = hb_anim_a_clear_view;
+    anim_b_view0       = hb_anim_b_view0;
+    anim_b_view1       = hb_anim_b_view1;
+    anim_b_draw_view   = hb_anim_b_draw_view;
+    anim_b_clear_view  = hb_anim_b_clear_view;
+    anim_posA_tbl      = hb_anim_posA_tbl;
+    anim_posB_tbl      = hb_anim_posB_tbl;
+    anim_a_grid_tbl    = hb_anim_a_grid_tbl;
+    anim_b_grid_tbl    = hb_anim_b_grid_tbl;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
  *  SET_SCALAR — write a named field into the INIT scalar sub-block.
  * ════════════════════════════════════════════════════════════════════════════ */
 #define SET_SCALAR(initp, field, val) ((initp)->scalars.field = (val))
@@ -193,6 +282,10 @@ void p1_set_pixel_from_cell(void)
 static void seed_from_init(const struct int8_init *in)
 {
     const struct int8_scalars *s = &in->scalars;
+
+    /* point the view/sprite/pos-table DGROUP far ptrs at host backing buffers
+       (the engine's init_sprite_structs / init_view_anim_descriptors equivalent). */
+    wire_far_descriptors();
 
     /* ── world-state arrays ── */
     tilemap = synth_tilemap;
@@ -276,6 +369,14 @@ static void seed_from_init(const struct int8_init *in)
     p2_ai_threshold    = s->p2_ai_threshold;
     p2_frame_base      = s->p2_frame_base;
 
+    /* deferred-contact event-queue cursor: a self-bootstrapping DGROUP far ptr the
+       engine resets to the buffer head with an empty (0xff) head at level reset —
+       not a captured scalar.  Seed it to that reset state so game_post_present's
+       first dereference is valid (mirrors game.c's reset path: ptr=buf; *ptr=0xff). */
+    deferred_contact_ptr = (u8 __far *)deferred_contact_buf;
+    *deferred_contact_ptr = 0xff;
+    deferred_contact_countdown = 0;
+
     /* ── [sess] session / level / frame-boundary control ── */
     round_continue_flag   = s->round_continue_flag;
     session_continue_flag = s->session_continue_flag;
@@ -284,13 +385,286 @@ static void seed_from_init(const struct int8_init *in)
     rng_frame             = s->rng_frame;
 }
 
+/* ════════════════════════════════════════════════════════════════════════════
+ *  PART 2 — per-tick replay loop + first-divergence report + --perturb.
+ *  The whole block needs game_tick (the replay evolve step); it is compiled only
+ *  when INT8_WITH_GAME_TICK is defined (the gate wrapper flips it).  Without it,
+ *  main() still serves --selftest-seed (the standalone DONE bar from part 1).
+ * ════════════════════════════════════════════════════════════════════════════ */
+#ifdef INT8_WITH_GAME_TICK
+
+/* --perturb: after seeding, corrupt ONE seeded field so a tick must diverge. */
+static int g_perturb;
+
+/* cmp_frame — compare the evolved live globals against FRAME[k].state field by
+ * field (the int8_frame_state assert-set = union of the per-function gates' cmp_*
+ * output fields).  Returns the FIRST mismatching field name (NULL == all match);
+ * *got = live value, *want = captured value, for the divergence report. */
+#define CMP1(field)  do { \
+        if ((long)(field) != (long)(f->state.field)) { \
+            *got = (long)(field); *want = (long)(f->state.field); return #field; } \
+    } while (0)
+
+static const char *cmp_frame(const struct int8_frame *f, long *got, long *want)
+{
+    /* [phys] cmp_exit / [spine] cmp_grid + cmp_adv + cmp_bbox */
+    CMP1(p1_pixel_x);
+    CMP1(p1_pixel_y);
+    CMP1(p1_grid_x_new);
+    CMP1(p1_grid_y_new);
+    CMP1(p1_grid_x);
+    CMP1(p1_grid_y);
+    CMP1(p1_grid_x_prev);
+    CMP1(p1_grid_y_prev);
+    CMP1(pvp_p1_x0);
+    CMP1(pvp_p1_x1);
+    CMP1(pvp_p1_y0);
+    CMP1(pvp_p1_y1);
+    /* p1_pixel_y_dup — items' separate p1_pixel_y compare (explicit alias) */
+    if ((long)p1_pixel_y != (long)f->state.p1_pixel_y_dup) {
+        *got = (long)p1_pixel_y; *want = (long)f->state.p1_pixel_y_dup;
+        return "p1_pixel_y_dup";
+    }
+    /* [items] score / semantic state */
+    CMP1(score_lo);
+    CMP1(score_hi);
+    CMP1(p1_move_anim);
+    CMP1(game_mode);
+    CMP1(p1_move_step_idx);
+    CMP1(p1_facing_left);
+    CMP1(p1_move_steps_left);
+    CMP1(input_state);
+    CMP1(physics_frozen);
+    CMP1(move_override);
+    CMP1(p1_cell);
+    CMP1(move_locked);
+    CMP1(prev_game_mode);
+    CMP1(p1_step_col_count);
+    CMP1(pending_erase_count);
+    CMP1(level_complete_flag);
+    CMP1(items_remaining);
+    CMP1(level_exit_cell);
+    CMP1(level_complete_anim_counter);
+    CMP1(p1_item_code);
+    CMP1(anim_target_cell);
+    CMP1(current_level);
+    CMP1(move_step_count);
+    /* [spawn] p2 state */
+    CMP1(p2_cell);
+    CMP1(p2_move_state);
+    /* p2_frame_base is split lo/hi in the FRAME state */
+    if ((long)(p2_frame_base & 0xff) != (long)f->state.p2_frame_base_lo) {
+        *got = (long)(p2_frame_base & 0xff); *want = (long)f->state.p2_frame_base_lo;
+        return "p2_frame_base_lo";
+    }
+    if ((long)((p2_frame_base >> 8) & 0xff) != (long)f->state.p2_frame_base_hi) {
+        *got = (long)((p2_frame_base >> 8) & 0xff); *want = (long)f->state.p2_frame_base_hi;
+        return "p2_frame_base_hi";
+    }
+    return NULL;
+}
+#undef CMP1
+
+/* read_trace — slurp a trace file into a freshly-allocated buffer; validate the
+ * header (magic + version), and point hdr/init/frames into it.  Returns the
+ * malloc'd buffer (caller frees) or NULL on any structural / version failure. */
+static void *read_trace(const char *path, struct int8_header *hdr,
+                        const struct int8_init **init,
+                        const struct int8_frame **frames)
+{
+    FILE *fp = fopen(path, "rb");
+    if (!fp) { fprintf(stderr, "int8: cannot open trace %s\n", path); return NULL; }
+    if (fseek(fp, 0, SEEK_END) != 0) { fclose(fp); return NULL; }
+    long sz = ftell(fp);
+    if (sz < (long)sizeof(struct int8_header)) {
+        fprintf(stderr, "int8: trace too small (%ld bytes)\n", sz);
+        fclose(fp); return NULL;
+    }
+    rewind(fp);
+    unsigned char *buf = (unsigned char *)malloc((size_t)sz);
+    if (!buf) { fclose(fp); return NULL; }
+    if (fread(buf, 1, (size_t)sz, fp) != (size_t)sz) {
+        fclose(fp); free(buf); return NULL;
+    }
+    fclose(fp);
+
+    memcpy(hdr, buf, sizeof *hdr);
+    /* stale / foreign trace -> hard fail. */
+    if (memcmp(hdr->magic, INT8_MAGIC, 4) != 0) {
+        fprintf(stderr, "int8: bad magic (stale/foreign trace; want \"%s\")\n", INT8_MAGIC);
+        free(buf); return NULL;
+    }
+    if (hdr->version != INT8_VERSION) {
+        fprintf(stderr, "int8: version %u != %u (stale trace; bump or recapture)\n",
+                (unsigned)hdr->version, (unsigned)INT8_VERSION);
+        free(buf); return NULL;
+    }
+    if (hdr->init_size != sizeof(struct int8_init) ||
+        hdr->frame_stride != sizeof(struct int8_frame)) {
+        fprintf(stderr, "int8: layout mismatch (init=%u/%zu frame=%u/%zu)\n",
+                (unsigned)hdr->init_size, sizeof(struct int8_init),
+                (unsigned)hdr->frame_stride, sizeof(struct int8_frame));
+        free(buf); return NULL;
+    }
+    long need = (long)sizeof(struct int8_header) + (long)sizeof(struct int8_init)
+              + (long)hdr->frame_count * (long)sizeof(struct int8_frame);
+    if (sz < need) {
+        fprintf(stderr, "int8: truncated trace (have %ld, need %ld)\n", sz, need);
+        free(buf); return NULL;
+    }
+    *init   = (const struct int8_init *)(buf + sizeof(struct int8_header));
+    *frames = (const struct int8_frame *)
+              (buf + sizeof(struct int8_header) + sizeof(struct int8_init));
+    return buf;
+}
+
+/* run_replay — seed ONCE from INIT, then evolve tick-by-tick: feed each FRAME's
+ * trailing rng/input, call game_tick(), and compare the evolved live globals +
+ * tilemap hash against the captured FRAME state.  Returns 0 on full match, 1 on
+ * the first divergence (reporting frame/field/got/want), 2 on a load failure. */
+static int run_replay(const char *path)
+{
+    struct int8_header hdr;
+    const struct int8_init *init;
+    const struct int8_frame *frames;
+    void *buf = read_trace(path, &hdr, &init, &frames);
+    if (!buf) return 2;
+
+    seed_from_init(init);
+
+    /* --perturb: corrupt ONE seeded field so a tick must diverge (proves the gate
+       is a genuine differential, not trivially passing). */
+    if (g_perturb) {
+        p1_pixel_x ^= 1;
+    }
+
+    for (uint16_t k = 1; k <= hdr.frame_count; k++) {
+        const struct int8_frame *f = &frames[k - 1];   /* FRAME[0] mirrors INIT; we
+                                                           evolve into FRAME[k]. */
+        const struct int8_frame *want = &frames[k];
+        g_fed_rng   = f->rng;     /* the rng_frame value that drove this tick */
+        g_fed_input = f->input;   /* the input_state value that drove this tick */
+        game_tick();
+        long got = 0, wv = 0;
+        const char *bad = cmp_frame(want, &got, &wv);
+        uint32_t th = int8_tilemap_hash((const uint8_t *)tilemap);
+        if (bad || th != want->tilemap_hash) {
+            printf("DIVERGENCE frame=%u field=%s got=%ld want=%ld%s\n",
+                   (unsigned)(k - 1), bad ? bad : "tilemap_hash",
+                   bad ? got : (long)th, bad ? wv : (long)want->tilemap_hash,
+                   bad ? "" : " (tilemap mutated differently)");
+            free(buf);
+            return 1;
+        }
+    }
+    printf("int8 replay: %u ticks matched\n", (unsigned)hdr.frame_count);
+    free(buf);
+    return 0;
+}
+
+/* snapshot_state — capture the live globals into a FRAME state block (used by the
+ * synthetic-trace self-test to record game_tick's TRUE output). */
+static void snapshot_state(struct int8_frame_state *st)
+{
+    memset(st, 0, sizeof *st);
+    st->p1_pixel_x = p1_pixel_x; st->p1_pixel_y = p1_pixel_y;
+    st->p1_grid_x_new = p1_grid_x_new; st->p1_grid_y_new = p1_grid_y_new;
+    st->p1_grid_x = p1_grid_x; st->p1_grid_y = p1_grid_y;
+    st->p1_grid_x_prev = p1_grid_x_prev; st->p1_grid_y_prev = p1_grid_y_prev;
+    st->pvp_p1_x0 = pvp_p1_x0; st->pvp_p1_x1 = pvp_p1_x1;
+    st->pvp_p1_y0 = pvp_p1_y0; st->pvp_p1_y1 = pvp_p1_y1;
+    st->p1_pixel_y_dup = p1_pixel_y;
+    st->score_lo = score_lo; st->score_hi = score_hi;
+    st->p1_move_anim = p1_move_anim; st->game_mode = game_mode;
+    st->p1_move_step_idx = p1_move_step_idx; st->p1_facing_left = p1_facing_left;
+    st->p1_move_steps_left = p1_move_steps_left; st->input_state = input_state;
+    st->physics_frozen = physics_frozen; st->move_override = move_override;
+    st->p1_cell = p1_cell; st->move_locked = move_locked;
+    st->prev_game_mode = prev_game_mode; st->p1_step_col_count = p1_step_col_count;
+    st->pending_erase_count = pending_erase_count;
+    st->level_complete_flag = level_complete_flag;
+    st->items_remaining = items_remaining; st->level_exit_cell = level_exit_cell;
+    st->level_complete_anim_counter = level_complete_anim_counter;
+    st->p1_item_code = p1_item_code; st->anim_target_cell = anim_target_cell;
+    st->current_level = current_level; st->move_step_count = move_step_count;
+    st->p2_cell = p2_cell; st->p2_move_state = p2_move_state;
+    st->p2_frame_base_lo = (u8)(p2_frame_base & 0xff);
+    st->p2_frame_base_hi = (u8)((p2_frame_base >> 8) & 0xff);
+}
+
+/* write_synth_trace — build an in-memory 2-FRAME trace and write it to `path`.
+ * Seeds a minimal INIT, runs game_tick() ONCE to compute the TRUE next state, and
+ * writes FRAME[1].state = that state (match) or that-state-with-one-byte-flipped
+ * (!match).  FRAME[0] mirrors the seed.  Used by --selftest-replay. */
+static void write_synth_trace(const char *path, int match)
+{
+    struct int8_init init;
+    memset(&init, 0, sizeof init);
+    /* A minimal-but-non-trivial INIT: a benign game_mode + a couple of grid/cell
+       sentinels so game_tick has real state to evolve (the exact values do not
+       matter — the self-test compares game_tick's own output against itself). */
+    SET_SCALAR(&init, game_mode, 0x21);
+    SET_SCALAR(&init, current_level, 1);
+    SET_SCALAR(&init, p1_cell, 0x11);
+    /* p2_cell = 0xff (-1): P2 inactive.  The self-test exercises the P1 spine +
+       anim + present/post paths of game_tick without needing the far p2_move_script
+       cursor seeded (that is a capture-only far ptr outside the scalar union; the P2
+       scripted-move branch is gated on p2_cell != 0xff).  A real single-player
+       capture seeds p2_cell=0xff identically. */
+    SET_SCALAR(&init, p2_cell, (int8_t)0xff);
+    init.tilemap[0]     = 0x5a;
+    init.tilemap[0x2ff] = 0xa5;
+
+    /* FRAME[0] mirrors the seed; its rng/input drive tick 0 (the only tick). */
+    struct int8_frame f0, f1;
+    memset(&f0, 0, sizeof f0);
+    memset(&f1, 0, sizeof f1);
+    f0.rng = 0x00; f0.input = 0x00;
+
+    /* Compute the TRUE next state: seed, feed f0's rng/input, tick once, snapshot. */
+    seed_from_init(&init);
+    g_fed_rng = f0.rng; g_fed_input = f0.input;
+    game_tick();
+    snapshot_state(&f1.state);
+    f1.tilemap_hash = int8_tilemap_hash((const uint8_t *)tilemap);
+    /* FRAME[0] records the pre-tick (seed) tilemap hash for completeness. */
+    f0.tilemap_hash = f1.tilemap_hash;   /* tick mutates tilemap rarely; not compared at k=0 */
+
+    if (!match) {
+        /* flip one byte of the recorded state so the replay MUST diverge. */
+        f1.state.p1_pixel_x ^= 1;
+    }
+
+    struct int8_header hdr;
+    memset(&hdr, 0, sizeof hdr);
+    memcpy(hdr.magic, INT8_MAGIC, 4);
+    hdr.version      = INT8_VERSION;
+    hdr.dgroup_seg   = GAME_DGROUP_RUNTIME_SEG;
+    hdr.frame_count  = 1;                       /* one tick: FRAME[0] -> FRAME[1] */
+    hdr.init_size    = (uint16_t)sizeof(struct int8_init);
+    hdr.frame_stride = (uint16_t)sizeof(struct int8_frame);
+
+    FILE *fp = fopen(path, "wb");
+    assert(fp);
+    fwrite(&hdr, sizeof hdr, 1, fp);
+    fwrite(&init, sizeof init, 1, fp);
+    fwrite(&f0, sizeof f0, 1, fp);
+    fwrite(&f1, sizeof f1, 1, fp);
+    fclose(fp);
+}
+#endif /* INT8_WITH_GAME_TICK */
+
 /* ════════════════════════════════════════════════════════════════════════════ */
 int main(int argc, char **argv)
 {
-    int selftest_seed = 0;
+    const char *trace = NULL;
+    int perturb = 0, selftest_seed = 0, selftest_replay = 0;
     int i;
     for (i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--selftest-seed") == 0) selftest_seed = 1;
+        if      (strcmp(argv[i], "--perturb") == 0)         perturb = 1;
+        else if (strcmp(argv[i], "--selftest-seed") == 0)   selftest_seed = 1;
+        else if (strcmp(argv[i], "--selftest-replay") == 0) selftest_replay = 1;
+        else                                                trace = argv[i];
     }
 
     /* --selftest-seed: synthetic INIT -> seed -> assert globals set (no trace file). */
@@ -335,8 +709,55 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    fprintf(stderr,
-        "int8_ctest (part 1): only --selftest-seed is implemented; the per-tick "
-        "replay loop lands in the next task.\n");
+#ifdef INT8_WITH_GAME_TICK
+    /* --selftest-replay: build two synthetic 2-FRAME traces — one whose FRAME[1]
+       state matches game_tick's true output (expect clean) and one with a
+       deliberately-flipped byte (expect a reported divergence) — and assert the
+       divergence machinery catches exactly the mismatch.  Needs game_tick linked. */
+    if (selftest_replay) {
+        const char *tdir = getenv("TMPDIR");
+        if (!tdir || !*tdir) tdir = "/tmp";
+        char pathA[1024], pathB[1024];
+        snprintf(pathA, sizeof pathA, "%s/int8_synth_mismatch.bin", tdir);
+        snprintf(pathB, sizeof pathB, "%s/int8_synth_match.bin", tdir);
+
+        /* trace A: deliberately-wrong FRAME[1].state -> expect divergence */
+        write_synth_trace(pathA, /*match=*/0);
+        int ra = run_replay(pathA);
+        assert(ra != 0);                         /* divergence detected (reports a field) */
+
+        /* trace B: self-consistent FRAME[1].state -> expect clean */
+        write_synth_trace(pathB, /*match=*/1);
+        int rb = run_replay(pathB);
+        assert(rb == 0);                         /* clean: ticks matched */
+
+        remove(pathA);
+        remove(pathB);
+        printf("selftest-replay OK\n");
+        return 0;
+    }
+
+    /* default: replay the named trace (perturb -> corrupt-then-replay, expect the
+       gate to catch the divergence as non-zero). */
+    if (!trace) {
+        fprintf(stderr, "usage: int8_ctest [--perturb] <trace.bin>\n"
+                        "       int8_ctest --selftest-seed | --selftest-replay\n");
+        return 2;
+    }
+    g_perturb = perturb;
+    return run_replay(trace);
+#else
+    /* Without game_tick linked, only the seed self-test is available; the replay
+       loop (run_replay / write_synth_trace) needs game_tick (gate wrapper flips
+       INT8_WITH_GAME_TICK). */
+    (void)trace; (void)perturb;
+    if (selftest_replay) {
+        fprintf(stderr, "int8: --selftest-replay needs game_tick "
+                        "(compile -DINT8_WITH_GAME_TICK; see validate_int8.sh)\n");
+        return 2;
+    }
+    fprintf(stderr, "int8_ctest: only --selftest-seed runs without "
+                    "-DINT8_WITH_GAME_TICK.\n");
     return 2;
+#endif
 }
