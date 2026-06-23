@@ -17,6 +17,9 @@
 #define CRTC_DATA       0x3D5u
 #define CRTC_START_HI   0x0Cu
 #define CRTC_START_LO   0x0Du
+/* VGA Input Status Register 1 — polled for vertical retrace (bit 3) in vblank sync. */
+#define VGA_INPUT_STATUS1 0x3DAu
+#define VGA_VRETRACE_BIT  0x08u
 #define HOST_PLANE_SIZE 0x10000UL    /* the reconstructed blitters' flat-plane stride */
 /* the host framebuffer (flat 4-plane RAM image the blitters compose into) */
 extern u8 __huge *host_framebuffer;  /* 4 * HOST_PLANE_SIZE */
