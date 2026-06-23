@@ -381,7 +381,7 @@ void run_n_frames(u8 n)              { (void)n; }
 #endif /* !BUMPY_PLAYABLE */
 
 /* wait_keypress — CARVE-OUT (int8-timing): spin until a key tick; timing leaf.
-   BUMPY_PLAYABLE: owned by src/host/host_timer.c in the playable build. */
+   BUMPY_PLAYABLE: owned by src/host/host_input.c in the playable build. */
 #ifndef BUMPY_PLAYABLE
 void wait_keypress(void)             {}
 #endif /* !BUMPY_PLAYABLE */
