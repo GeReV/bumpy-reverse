@@ -118,4 +118,12 @@ void copyprotect_challenge(void);
 extern u8 __far *move_descriptor_table;  /* DGROUP 0x8246/0x8248 */
 u8 all_entries_flag_set(void);
 
+#ifdef BUMPY_PLAYABLE
+/* level_get_entity_dg — expose the entity-DG shadow pointer (g_entity_dg) to
+ * host_view.c so init_sprite_structs can point p1_sprite / p2_sprite into the
+ * same buffer that hr_blit_obj reads from (host_render.c: hr_dg = g_entity_dg
+ * via host_render_bind).  ONLY available under BUMPY_PLAYABLE. */
+u8 __far *level_get_entity_dg(void);
+#endif /* BUMPY_PLAYABLE */
+
 #endif /* LEVEL_H_INCLUDED */

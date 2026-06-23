@@ -1090,6 +1090,43 @@ documented CORE render divergence:**
   The pixels the playable build composes through the leaves are identical to the
   already-trusted composite gate.
 
+**Task 7 — view/setup leaves + background save-under (`src/host/host_view.c`):**
+
+- **Flat-RAM save-under (setup_fullscreen_view).** The original engine's
+  `setup_fullscreen_view` (1000:483c) copies VGA page-0 (`a000:0000`) into
+  `fullscreen_buf` via `render_player_view` + the BGI overlay mode-10 subhandler-0
+  full-plane copy.  In the host flat-RAM model we additionally copy
+  `host_framebuffer` page-0 (4 planes × 0x1F40 B each = 32000 B total) into a
+  static `hv_saveunder_buf` allocated from the far heap.  The view-descriptor
+  build at `render_descriptor_ptr` and the `render_player_view` call are
+  faithfully reconstructed 1:1; only the source (flat RAM vs VGA a000) and
+  destination (`hv_saveunder_buf` vs `fullscreen_buf`) differ.
+
+- **Sprite-obj far-ptr init (init_sprite_structs).** The engine stores sprite
+  objects at fixed DGROUP offsets (0x792e p1_sprite, 0x795a p2_sprite, 0x7986
+  hud-icon) and seeds each object's `+0x06/+0x08` from `screen_sprite_buf`
+  (DGROUP 0xa0c6/0xa0c8) and sets the flag byte (`+0x09`: old & 0x87 | 0x80).
+  In the host: `p1_sprite` and `p2_sprite` are pointed at
+  `g_entity_dg[0x792e]` / `g_entity_dg[0x795a]` via `level_get_entity_dg()` —
+  the same shadow buffer `hr_blit_obj` reads from — ensuring `draw_p1/p2_sprite`
+  obj writes and the blit leaf read the same bytes.  The sprite-sheet buf seed
+  (`+0x06/+0x08`) and flag byte (`+0x09`) are skipped: the frametable is seeded
+  by `level_populate_dg` (level.c) from `g_bank_buf` (the correct frametable);
+  `screen_sprite_buf` is a BGI-overlay ptr unused by the planar pipeline.
+  `hud_icon_sprite_ptr` (obj at 0x7986) has no C declaration; skipped.
+
+- **BGI mode-11 call (init_fullscreen_view_desc).** The engine ends
+  `init_fullscreen_view_desc` with `bgi_set_mode_11_thunk` (→ `bgi_set_mode_11`
+  1ab9:126e, dynamically-loaded BGI overlay code not decompilable).  In the host
+  this call is replaced by `present_frame(1)` which copies the composed RAM image
+  to real VGA.  The view-descriptor build is 1:1.
+
+- **redraw_level_background_tiles carve-out.** `setup_fullscreen_view` calls
+  `redraw_level_background_tiles` (1000:2a0a) 1:1 before the save-under copy.
+  That function is not yet reconstructed; a NOP stub is defined locally in
+  `host_view.c` under `BUMPY_PLAYABLE` (not in `game_stubs.c` to preserve
+  BUMPY.EXE byte-equality).
+
 ## Host/validation tooling (not part of the decompilation)
 
 These are reimplementation/validation artifacts — the *Devilution-X*-flavored side — kept

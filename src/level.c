@@ -109,6 +109,13 @@
 #ifdef BUMPY_PLAYABLE
 #include "host/host.h"  /* host_fb_init / host_framebuffer / host_render_bind */
 void host_render_bind(u8 __huge *bank, u32 bank_base_lin, const u8 __far *dg);
+/* host_view.c needs a pointer into the entity-DG shadow at the sprite-obj offsets
+ * (DG_P1_OBJ=0x792e, DG_P2_OBJ=0x795a) so that init_sprite_structs can set
+ * p1_sprite/p2_sprite to point there (draw_p1/p2_sprite writes obj+0/2/4, and
+ * hr_blit_obj in host_render.c reads hr_dg+0x792e — they must be the same memory).
+ * g_entity_dg is static so we expose it via this minimal accessor, compiled only
+ * under BUMPY_PLAYABLE (no faithful-default-build exposure). */
+u8 __far *level_get_entity_dg(void);
 #endif
 
 /* ── extern: op12 arena (declared in bvec_buf2.c) ─────────────────────────────
@@ -963,3 +970,17 @@ u8 all_entries_flag_set(void)
     }
     return all_set;
 }
+
+#ifdef BUMPY_PLAYABLE
+/* level_get_entity_dg — expose the entity-DG shadow to host_view.c.
+ * init_sprite_structs (1000:33c5) in the engine sets p1_sprite / p2_sprite to
+ * the literal DGROUP far ptrs (&sprite_obj_203b_792e / &sprite_obj_203b_795a).
+ * In the host model the "DGROUP" is the g_entity_dg shadow buffer; init_sprite_structs
+ * must point p1_sprite and p2_sprite into that shadow so that draw_p1/p2_sprite's
+ * writes to obj+0/2/4 land in the same bytes that hr_blit_obj (host_render.c) reads
+ * from hr_dg[0x792e] / hr_dg[0x795a].  Exposed ONLY under BUMPY_PLAYABLE. */
+u8 __far *level_get_entity_dg(void)
+{
+    return g_entity_dg;
+}
+#endif /* BUMPY_PLAYABLE */
