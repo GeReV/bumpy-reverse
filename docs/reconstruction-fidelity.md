@@ -1127,6 +1127,35 @@ documented CORE render divergence:**
   `host_view.c` under `BUMPY_PLAYABLE` (not in `game_stubs.c` to preserve
   BUMPY.EXE byte-equality).
 
+**Task 8 — boot init + per-round level (re)load (`src/host/host_boot.c`):**
+
+- **`init_joystick_handlers` — calibration skipped.** Engine body (1000:7532)
+  zeros `g_joystick_handler_table[16]` then calls `calibrate_joystick()` twice.
+  Host: table zeroed via `memset`; `calibrate_joystick()` skipped (keyboard-only
+  Tier 1, no joystick hardware).
+
+- **`mouse_reset` — benign no-op.** INT 33h AX=0 not issued.  Keyboard-only host.
+
+- **`init_sound_tables` — SILENT SOUND (Tier 1).** Engine body (1000:7563)
+  installs a sound-driver far-fn pointer into the joystick handler table.
+  Benign no-op in the host.  Sound output is Plan B / Tier 2.
+
+- **`set_disk_swap_callback` — benign no-op.** INT 24h critical-error handler not
+  installed (single-mount Tier-1 run; no disk-swap prompt needed).
+
+- **`set_resource_table` — benign no-op.** `resource_table_ptr` not written.
+  `level.c start_level` bypasses the resource table and builds filenames directly
+  (see level.c RECONSTRUCTION FIDELITY note #3).
+
+- **`load_current_level_data` — calls `start_level()` (over-does engine 32b0).**
+  Engine body (1000:32b0): lightweight 0x96-byte header copy from the in-memory
+  level archive (`cur_level_ptr` / `level_src_ptr`) into the tilemap buffer.
+  In the playable host the in-memory archive is never populated; host calls
+  `start_level(current_level, current_level)` which performs a full file-load
+  + bank reload + render pass.  Functionally equivalent for Tier 1 round resets
+  (same data, redundant render), but NOT a 0x96-byte lightweight copy.
+  Runtime proof (round-reset loads correct level state) deferred to Tasks 9/11.
+
 ## Host/validation tooling (not part of the decompilation)
 
 These are reimplementation/validation artifacts — the *Devilution-X*-flavored side — kept
