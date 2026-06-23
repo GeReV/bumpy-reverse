@@ -160,8 +160,13 @@ int dos_abort(void)                         { return 0; }
  *  blitters and the L5 timer ISR.  Faithful-signature no-op stubs for the link.
  *  The descriptive C names (init_crtc_window etc.) are the reconstruction's own;
  *  the canonical Ghidra label is cited per stub.  install_keyboard_isr is the one
- *  REAL reconstructed call in this block (input.c). */
+ *  REAL reconstructed call in this block (input.c).
+ *
+ *  BUMPY_PLAYABLE: all hardware-init symbols below (through init_misc_7bbd) are
+ *  owned by src/host/host_boot.c and src/host/host_video.c in the playable build.
+ *  Guard them out so both game_stubs.obj + host_*.obj can link without duplicates. */
 
+#ifndef BUMPY_PLAYABLE
 /* set_disk_swap_callback 1000:72ef — install INT24 + disk-swap prompt callback. */
 void set_disk_swap_callback(u16 int24_handler, u16 callback)
 {
@@ -194,16 +199,19 @@ void init_sound_tables(u16 a, u16 b, u16 seg)
 {
     (void)a; (void)b; (void)seg;
 }
+#endif /* !BUMPY_PLAYABLE */
 
 /* 1000:7bd7 bgi_overlay_thunk_gfx_init — misc subsystem init. */
 void init_misc_7bd7(void)
 {
 }
 
+#ifndef BUMPY_PLAYABLE
 /* 1000:97a4 init_display_controller_a — display controller init. */
 void init_display_97a4(void)
 {
 }
+#endif /* !BUMPY_PLAYABLE */
 
 /* 1000:7bbd bgi_overlay_thunk_0232 — misc init (one byte arg). */
 void init_misc_7bbd(u8 mode)
@@ -211,6 +219,7 @@ void init_misc_7bbd(u8 mode)
     (void)mode;
 }
 
+#ifndef BUMPY_PLAYABLE
 /* 1000:97f1 init_display_controller_b — display controller init. */
 void init_display_97f1(void)
 {
@@ -254,6 +263,7 @@ void clear_viewport(void)
 void reset_opaque_session_globals(void)
 {
 }
+#endif /* !BUMPY_PLAYABLE */
 
 
 /* ── B. run_game_session (1000:0258) one-time setup ─────────────────────────── */
@@ -271,10 +281,13 @@ void reset_opaque_session_globals(void)
 /* load_current_level_data 1000:32b0 — CARVE-OUT (engine standalone loader): copies
    the current level's 0x96-byte header into the tilemap buffer.  The reconstruction
    loads level data through level.c start_level instead, so this standalone loader is
-   not reconstructed; faithful no-op stub for the link. */
+   not reconstructed; faithful no-op stub for the link.
+   BUMPY_PLAYABLE: owned by src/host/host_boot.c in the playable build. */
+#ifndef BUMPY_PLAYABLE
 void load_current_level_data(void)
 {
 }
+#endif /* !BUMPY_PLAYABLE */
 
 /* spawn_and_draw_level_entities 1000:2a78 — RECONSTRUCTED 1:1 in src/spawn.c
    (Phase-8 T2: the channel-A/B record populator + layer-C static-sprite blitter +
@@ -293,8 +306,11 @@ void reset_round_counters(void)
 /* ── D. game_loop (1000:0c18) per-tick spine callees ────────────────────────── */
 
 /* init_sprite_structs — CARVE-OUT (render-core leaf): one-time per-game sprite-struct
-   setup, not reconstructed; no-op stub for the link. */
+   setup, not reconstructed; no-op stub for the link.
+   BUMPY_PLAYABLE: owned by src/host/host_view.c in the playable build. */
+#ifndef BUMPY_PLAYABLE
 void init_sprite_structs(void)   {}
+#endif /* !BUMPY_PLAYABLE */
 
 /* init_title_graphics / run_main_menu / show_menu_select_screen / show_title_and_init /
    play_iris_wipe_transition — RECONSTRUCTED 1:1 in screens.c (Phase-7 T4); their stubs
@@ -302,29 +318,41 @@ void init_sprite_structs(void)   {}
 
 /* 1000:75a2 read_input_action — the engine's input-poll primitive (returns the action
    byte in AL).  CARVE-OUT: faithful-signature stub for the BUMPY.EXE link.  The
-   screens.c menu / state-machine loops call it through this symbol. */
+   screens.c menu / state-machine loops call it through this symbol.
+   BUMPY_PLAYABLE: owned by src/host/host_input.c in the playable build. */
+#ifndef BUMPY_PLAYABLE
 char fun_75a2_poll_action(u8 arg)    { (void)arg; return 0; }
+#endif /* !BUMPY_PLAYABLE */
 
 /* show_highscore_screen (1000:5681), show_level_intro_screen (1000:0d9d),
    level_intro_screen (1000:3852) — RECONSTRUCTED 1:1 in screens.c (Phase-7 T5); their
    stubs are removed here (would be duplicate symbols once screens.obj links). */
 /* show_text_screen / show_pause_screen — CARVE-OUT (render-core leaves): the
-   text-screen + pause-screen present paths, not reconstructed; no-op stubs. */
+   text-screen + pause-screen present paths, not reconstructed; no-op stubs.
+   BUMPY_PLAYABLE: owned by src/host/host_view.c in the playable build. */
+#ifndef BUMPY_PLAYABLE
 void show_text_screen(void)          {}
 void show_pause_screen(void)         {}
+#endif /* !BUMPY_PLAYABLE */
 
 /* p2_set_move_state (1000:4bc6) — RECONSTRUCTED in player2.c (Phase-4 T3); stub
    removed (would be a duplicate symbol once player2.obj links). */
 
 /* init_fullscreen_view_desc — CARVE-OUT (render-core leaf): set up the fullscreen
-   view descriptor (mode,flag); not reconstructed, no-op stub. */
+   view descriptor (mode,flag); not reconstructed, no-op stub.
+   BUMPY_PLAYABLE: owned by src/host/host_view.c in the playable build. */
+#ifndef BUMPY_PLAYABLE
 void init_fullscreen_view_desc(u8 mode, u8 flag) { (void)mode; (void)flag; }
+#endif /* !BUMPY_PLAYABLE */
 
 /* setup_fullscreen_view 1000:483c — CARVE-OUT (render-core leaf): the per-load
    fullscreen view/page restore the spawn orchestrator runs once before the grid scan
    (the fullscreen_buf -> page copy bgi_overlay.c models for sub-handler 0).  Not
-   reconstructed; faithful no-op stub for linkability (called by spawn.c). */
+   reconstructed; faithful no-op stub for linkability (called by spawn.c).
+   BUMPY_PLAYABLE: owned by src/host/host_view.c in the playable build. */
+#ifndef BUMPY_PLAYABLE
 void setup_fullscreen_view(void) {}
+#endif /* !BUMPY_PLAYABLE */
 
 /* P1/P2 sprite draw — the zero-arg game-loop ENTRIES are now RECONSTRUCTED:
    draw_p1_sprite (1000:1cb2) in player.c (Phase-9 T3), draw_p2_sprite (1000:1cea) in
@@ -332,19 +360,31 @@ void setup_fullscreen_view(void) {}
    The explicit-arg RENDER helpers (entity_draw_p1/p2, entity.c) are distinct symbols. */
 
 /* apply_level_palette — CARVE-OUT (render-core leaf): program the level's VGA
-   palette (DAC port writes); not reconstructed, no-op stub. */
+   palette (DAC port writes); not reconstructed, no-op stub.
+   BUMPY_PLAYABLE: owned by src/host/host_video.c in the playable build. */
+#ifndef BUMPY_PLAYABLE
 void apply_level_palette(void)       {}
+#endif /* !BUMPY_PLAYABLE */
 
 /* present_frame — CARVE-OUT (CRTC page-flip): flips the a000/a200 VGA double-buffer
-   to the displayed page (CRTC start-address port write).  Hardware leaf, no-op stub. */
+   to the displayed page (CRTC start-address port write).  Hardware leaf, no-op stub.
+   BUMPY_PLAYABLE: owned by src/host/host_video.c in the playable build. */
+#ifndef BUMPY_PLAYABLE
 void present_frame(u8 page)          { (void)page; }
+#endif /* !BUMPY_PLAYABLE */
 
 /* run_n_frames — CARVE-OUT (int8-timing): block for N frame ticks driven by the int8
-   timer the L5 ISR services.  Timing leaf, no-op stub. */
+   timer the L5 ISR services.  Timing leaf, no-op stub.
+   BUMPY_PLAYABLE: owned by src/host/host_timer.c in the playable build. */
+#ifndef BUMPY_PLAYABLE
 void run_n_frames(u8 n)              { (void)n; }
+#endif /* !BUMPY_PLAYABLE */
 
-/* wait_keypress — CARVE-OUT (int8-timing): spin until a key tick; timing leaf. */
+/* wait_keypress — CARVE-OUT (int8-timing): spin until a key tick; timing leaf.
+   BUMPY_PLAYABLE: owned by src/host/host_timer.c in the playable build. */
+#ifndef BUMPY_PLAYABLE
 void wait_keypress(void)             {}
+#endif /* !BUMPY_PLAYABLE */
 
 /* Grid-cell + grid-history updates.  The P2 entries (p2_update_grid_cell 1000:4b4e,
    p2_advance_grid_history 1000:13b2) are RECONSTRUCTED in player2.c (Phase-4 T3); the
@@ -375,8 +415,11 @@ void wait_keypress(void)             {}
    words player2.c owns); their stubs are removed (dup-symbol once player2.obj links). */
 
 /* rotate_timing_flags_and_wait — CARVE-OUT (int8-timing): rotate the timing flags and
-   block for the frame tick (the per-tick int8 wait at the bottom of game_loop). */
+   block for the frame tick (the per-tick int8 wait at the bottom of game_loop).
+   BUMPY_PLAYABLE: owned by src/host/host_timer.c in the playable build. */
+#ifndef BUMPY_PLAYABLE
 void rotate_timing_flags_and_wait(void) {}
+#endif /* !BUMPY_PLAYABLE */
 
 /* game_post_present (1000:629c) / game_post_input (1000:233a) — RECONSTRUCTED in
    game.c (Phase-9 T3): the per-tick deferred-contact queue step + the level-complete
