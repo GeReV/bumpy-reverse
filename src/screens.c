@@ -438,8 +438,43 @@ void draw_hud_composite(void)
 /* ── render / BGI-overlay leaves OWNED ELSEWHERE (extern — NOT defined here; resolve
  *    to bgi_overlay.obj / game_stubs.obj / input.obj at the BUMPY.EXE link; the host
  *    replay harness supplies its own host definitions) ──────────────────────────── */
+#ifndef BUMPY_PLAYABLE
 extern void restore_bg_view(u8 __far *view, u16 seg);    /* bgi_overlay.c 1000:80bc */
-extern void present_frame(u8 page);                       /* game_stubs.c            */
+#else
+/* RECONSTRUCTION FIDELITY — HOST TITLE-PATH restore_bg_view SHIM
+ * ─────────────────────────────────────────────────────────────────────────────
+ * screens.c models the engine's restore_bg_view (1000:80bc) with its ENGINE-
+ * FAITHFUL 2-arg far-pointer signature `(view, seg)` — the descriptor far ptr in
+ * DX:AX, the runtime DGROUP seg in BX — and treats it as a STUBBED BGI-overlay
+ * render leaf (see the "STUBBED render-core" note above): the observable title
+ * present is produced by the descriptor build + present_frame(1) that follow.
+ *
+ * bgi_overlay.c, however, reconstructs the SAME symbol with the EXPANDED host
+ * 3-arg form `restore_bg_view(u8 __huge *planes, const u8 __huge *vga_src,
+ * const bgi_view_desc __far *view)` (used by entity.c / player.c / host_view.c).
+ * Under __watcall (-ml) that body takes its first two far-ptr args in registers
+ * and its THIRD arg ON THE STACK, cleaning it with `retf 0x0004`.  screens.c's
+ * 2-arg call pushes NOTHING, so the shared `restore_bg_view_` `retf 4` pops 4
+ * bytes the caller never pushed → the stack unbalances by 4 and the title fn's
+ * own retf then pops a garbage frame (the observed 0824:5E38 wild jump → mode-0D
+ * crash before the menu).  The body also dereferenced an UNINITIALISED stack
+ * `view`, risking an OOB 4×8000-byte planar memcpy when word0e<=1.
+ *
+ * FIX (host build only): route screens.c's title/menu restore_bg_view(view,seg)
+ * calls to a host NOP leaf with the MATCHING 2-arg convention, so the host build
+ * never invokes the 3-arg bgi_overlay body with a mismatched ABI.  This preserves
+ * the documented "stubbed render leaf" semantics (NOP; present via present_frame)
+ * and is faithful to the engine's NOP-guard behaviour for these title views.  The
+ * DEFAULT BUMPY.EXE build is unaffected (the #ifndef branch above is byte-stable;
+ * that build is byte-compared, never executed, so its latent ABI mismatch is inert).
+ * Recorded in docs/reconstruction-fidelity.md ("playable host" section).  */
+static void screens_host_restore_bg_view(u8 __far *view, u16 seg)
+{
+    (void)view; (void)seg;   /* NOP: host present is via present_frame(1) below */
+}
+#define restore_bg_view(view, seg) screens_host_restore_bg_view((view), (seg))
+#endif
+extern void present_frame(u8 page);                       /* game_stubs.c / host_video.c */
 extern void init_fullscreen_view_desc(u8 mode, u8 flag);  /* game_stubs.c            */
 extern void wait_keypress(void);                          /* game_stubs.c 1000:328f  */
 extern void poll_input(void);                             /* input.c    1000:1dde    */

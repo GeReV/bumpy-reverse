@@ -1207,18 +1207,45 @@ These deviations exist ONLY in the `BUMPYP.EXE` playable build (`wmake play`); t
   default build's real call depth + host paths overflowed the 2 KB stack at boot.  DGROUP
   data is ~47 KB so the stack must fit under the 64 KB group limit; 16 KB is the headroom.
 
-### OPEN (Task-9 boot blocker — `BUMPYP.EXE` does not yet reach the per-tick loop)
+- **host title-path `restore_bg_view` shim** (screens.c, `BUMPY_PLAYABLE` only) — screens.c
+  models the engine's `restore_bg_view` (1000:80bc) with its ENGINE-FAITHFUL 2-arg far-ptr
+  signature `restore_bg_view(view, seg)` and treats it as a *stubbed* BGI-overlay render leaf
+  (the title present is produced by the descriptor build + `present_frame(1)` that follow).
+  But `bgi_overlay.c` reconstructs the SAME symbol with the EXPANDED host 3-arg form
+  `restore_bg_view(planes, vga_src, view)` (used by entity.c/player.c/host_view.c).  Under
+  `__watcall` (-ml) that body takes its first two far-ptr args in registers and its THIRD on
+  the STACK, cleaning it with `retf 0x0004`; screens.c's 2-arg call pushes nothing, so the
+  shared `restore_bg_view_` `retf 4` pops 4 bytes the caller never pushed → 4-byte stack
+  imbalance → the title fn's own `retf` then pops a garbage frame (the `0824:5E38` wild jump →
+  crash before the menu).  Under `BUMPY_PLAYABLE`, screens.c now routes its title/menu
+  `restore_bg_view(view,seg)` calls to a host NOP leaf (`screens_host_restore_bg_view`) with the
+  MATCHING 2-arg convention, so the host build never invokes the 3-arg body with a mismatched
+  ABI.  This preserves the documented "stubbed render leaf" semantics (NOP; present via
+  `present_frame`) and matches the engine's NOP-guard behaviour for these title views.  The
+  default `BUMPY.EXE` build is unaffected (the `#ifndef BUMPY_PLAYABLE` extern branch is
+  byte-stable; that build is byte-compared, never executed, so its latent ABI mismatch is inert).
 
-`BUMPYP.EXE` boots through DOS load → mode 0x0D → `init_game_session_state` →
-`run_game_session` (`current_level = 1`) → `game_loop` → `init_title_graphics` →
-`show_title_background`, then **faults in the title-screen present/iris path**: a `retf`
-at `show_title_background` epilogue (code `0824:5E38`) pops a corrupted return frame
-(`CS=DGROUP IP=stack-low`), so execution runs off into zeroed DGROUP and spins.  The saved
-return address was overwritten earlier in the title/present path (`restore_bg_view` /
-`present_frame` / the iris wipe), ES=A200 (VGA) at the fault.  This is a reconstruction-internal
-defect in the title-screen render path — the FIRST code to actually execute that path end-to-end
-(prior validation was per-function differential only; see open items #2/#3 above re: the
-under-exercised `bgi_overlay`/`restore_bg_view` paths).  It is NOT a Task-9 integration-wiring
-issue (the main entry, call wiring, ISR installs, DGROUP calibration, and view/handler binding
-are all correct and verified to advance the boot).  Next: trace the return-frame overwrite in
-`restore_bg_view`/`present_frame` under the host 4-plane model.
+### RESOLVED (Task-9 boot blocker — title-present crash) → boot now stable in mode 0x0D
+
+The Task-9 OPEN blocker (`retf` at `0824:5E38` popping a corrupted frame in the title/present
+path) was root-caused to the **`restore_bg_view` signature schism** above and FIXED (the host
+title-path shim).  Root-cause evidence: `wdis play/bgi_overlay.obj` shows `restore_bg_view_`
+reads its `view` arg from `0xa[bp]` (a STACK param) and ends `retf 0x0004`; `wdis play/screens.obj`
+shows `show_title_background`'s call site (`mov ax,render_descriptor_ptr; mov dx,…+2;
+mov bx,0x203b; call restore_bg_view_`) pushes NOTHING → the `retf 4` unbalances the stack.
+
+Boot progress after the fix (DOSBox headless, `tools/dosbox/scripts/bumpyp-boot.txt`,
+DGROUP 0x3fdd): BEFORE — stuck at wild `0008:3ec1` within ~6 frames of reaching mode 0x0D.
+AFTER — `BUMPYP.EXE` reaches mode 0x0D (frame 64, `current_level=1`) and runs **10 000+ frames
+stably with CS pinned to the real code segment `0824` and DS toggling to the correct DGROUP
+`0x3fdd`** — no crash.  It then settles into the title/intro/menu input-wait loop
+(IPs cycling `0824:3f7x`–`408x`).
+
+### OPEN (NEXT blocker — advancing past the title/intro idle loop to set `game_mode`)
+
+After the title present, `BUMPYP.EXE` runs a stable wait loop (no crash) but `game_mode` stays 0
+and it does not yet enter the level-1 per-tick gameplay loop.  This is the intro/menu input-advance
+path (`run_main_menu` / `level_intro_screen` `wait_keypress` / the intro animation idle), driven by
+the scripted FIRE pulses — a SEPARATE, non-crash bring-up item (input/script timing or an idle-loop
+leaf that needs the host to advance it), to be addressed next.  The title-present crash that was the
+Task-9 blocker is resolved.
