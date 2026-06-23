@@ -42,7 +42,7 @@ extern s16 sound_device_state;   /* player.c — DGROUP 0x689c (==4 → OPL/char
 extern u8 __far *tilemap;        /* game.c   — level tilemap far ptr (DGROUP 0xa0d8)  */
 
 /* Cross-module globals the exit/teleport functions (T4) touch (owned by player.c). */
-extern u8  move_step_count;      /* player.c — DGROUP 0x855e — jump/move-step counter */
+extern u8  p1_step_col_count;    /* player.c — DGROUP 0x855e — cursor/move-step COLUMN counter */
 extern u8  p1_move_step_idx;     /* player.c — DGROUP 0x792a — move-step sub-index    */
 extern u8  physics_frozen;       /* player.c — DGROUP 0xa0ce — physics-freeze flag    */
 extern s16 p1_pixel_y;           /* player.c — DGROUP 0x9292 — P1 pixel-Y             */
@@ -192,14 +192,17 @@ void move_step_read_item(void)
  * check_exit_tile_vert — 1000:6372
  * --------------------------------------------------------------------------
  * Vertical exit-tile detection.  If the player is NOT at the row edge
- * (move_step_count != 7) AND the neighbour tile one row below (tilemap[p1_cell +
+ * (p1_step_col_count != 7) AND the neighbour tile one row below (tilemap[p1_cell +
  * 0x30]) is an exit tile (0x0c), commit the level-exit transition: reset the
  * move-step sub-index (p1_move_step_idx = 0), freeze physics (physics_frozen = 1),
  * enter end-of-level game mode 0x2e (enter_game_mode), and play the exit sound
  * (device-dependent: 0x0d on the OPL device, else 0x03).  Otherwise no-op.
  *
  * Verified against disasm 1000:6372–63bd:
- *   637e CMP [0x855e],7 / JZ → move_step_count != 7
+ *   637e CMP [0x855e],7 / JZ → p1_step_col_count != 7
+ *     (the binary reads DGROUP 0x855e = p1_step_col_count, the cursor/move-step
+ *      COLUMN counter — NOT move_step_count @ 0x824c; Ghidra mislabels 0x855e as
+ *      "move_step_count", which is the counter-aliasing bug this corrects.)
  *   6390 CMP ES:[BX+0x30],0xc / JNZ → tilemap[p1_cell+0x30] == 0x0c
  *   6397 MOV [0x792a],0 → p1_move_step_idx = 0
  *   639c MOV [0xa0ce],1 → physics_frozen = 1
@@ -214,10 +217,12 @@ void check_exit_tile_vert(void)
 {
     u8 sound_id;
 
-    /* move_step_count != 7  AND  tilemap[p1_cell + 0x30] == 0x0c (exit tile).
+    /* p1_step_col_count != 7  AND  tilemap[p1_cell + 0x30] == 0x0c (exit tile).
        The tilemap deref mirrors the engine's LES BX,[tilemap]; CMP ES:[BX+
-       p1_cell+0x30],0xc — the +0x30 neighbour one grid-row below p1_cell. */
-    if ((move_step_count != '\a') &&
+       p1_cell+0x30],0xc — the +0x30 neighbour one grid-row below p1_cell.
+       The counter read is DGROUP 0x855e (CMP [0x855e],7) = p1_step_col_count,
+       the COLUMN counter — NOT move_step_count @ 0x824c (see disasm note above). */
+    if ((p1_step_col_count != '\a') &&
         ((s8)tilemap[(u16)p1_cell + 0x30] == '\f')) {
         p1_move_step_idx = 0;
         physics_frozen = 1;
@@ -255,7 +260,7 @@ void check_exit_tile_vert(void)
  * RECONSTRUCTION FIDELITY: apply_cell_animation + play_sound stay stubs (FX/audio
  * leaves, Phase 5/6).  enter_game_mode + dispatch_move_step are reconstructed in
  * player.c (they write game_mode / the move-step dispatch — not validated SNAP
- * fields here).  p1_set_pixel_from_cell (1000:4906) writes move_step_count +
+ * fields here).  p1_set_pixel_from_cell (1000:4906) writes p1_step_col_count +
  * p1_pixel_y from the DGROUP cell-coord table (BOTH in the validated SNAP); it is a
  * player.c move/teleport leaf NOT yet reconstructed there, so for the BUMPY.EXE
  * link it is a faithful-signature stub in game_stubs.c (DEFERRED to the player

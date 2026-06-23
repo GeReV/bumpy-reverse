@@ -78,14 +78,14 @@
 /* ── Engine globals ──────────────────────────────────────────────────────────
    Declared here; defined in level.c.  These mirror the engine's DGROUP globals
    as documented in the decomp.  current_level is a u8 (the engine uses a byte
-   at DGROUP:0x8f40).
+   at DGROUP:0x79b2).
 
    RECONSTRUCTION FIDELITY: the engine stores current_level as a 1-byte global;
    start_level is parameterless and reads it directly.  We add (world, level)
    parameters for clarity but also keep current_level so the copy-protection
    guard (1 < current_level) is directly reconstructable.
 */
-extern u8 current_level;    /* DGROUP:0x8f40 — current level index (1-based) */
+extern u8 current_level;    /* DGROUP:0x79b2 — current level index (1-based) */
 extern u8 copyprotect_flag; /* DGROUP:?  — copy-protection state: 0=ok, -1=fail */
 
 extern u8 p1_start_x;       /* DGROUP:? — p1 start pixel X                */

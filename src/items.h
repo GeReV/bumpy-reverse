@@ -32,7 +32,7 @@
  *      level_complete_flag    0xa1b1           u8   (player.c)
  *      anim_target_cell       0x856f           u8   (player.c)
  *      p1_cell                0x856e           u8   (player.c)
- *      move_step_count        0x855e           u8   (player.c)
+ *      p1_step_col_count      0x855e           u8   (player.c) — cursor/move-step COLUMN counter
  *      physics_frozen         0xa0ce           u8   (player.c)
  *      p1_pixel_y             0x9292           s16  (player.c)
  *      sound_device_state     0x689c           s16  (player.c) — ==4 selects OPL ids

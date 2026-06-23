@@ -10,7 +10,7 @@
  * Unlike the Phase-2 physics harness (continuous px/py trajectory, desync-prone),
  * this validates DISCRETE semantic events: score / items_remaining /
  * level_exit_cell / level_complete_flag / level_complete_anim_counter /
- * p1_item_code / p1_cell / anim_target_cell / current_level / move_step_count /
+ * p1_item_code / p1_cell / anim_target_cell / current_level / p1_step_col_count /
  * physics_frozen / p1_pixel_y, plus the tilemap layer-C item byte at
  * tilemap[p1_cell+0x60].  There is therefore ONE comparator: a per-function
  * differential.
@@ -79,7 +79,16 @@ u8  copyprotect_flag;            /* level.c  — 0x119a          */
 u8  level_complete_flag;         /* player.c — 0xa1b1          */
 u8  anim_target_cell;            /* player.c — 0x856f          */
 u8  p1_cell;                     /* player.c — 0x856e          */
-u8  move_step_count;             /* player.c — 0x855e          */
+u8  p1_step_col_count;           /* player.c — 0x855e — cursor/move-step COLUMN counter */
+/* DECOY counter-aliasing guard (Phase-9.1 methodology — mirrors physics_ctest.c).
+   The REAL move_step_count is DGROUP 0x824c (jump_step_counter), a DISTINCT global
+   from p1_step_col_count @ 0x855e.  check_exit_tile_vert's binary read is
+   CMP [0x855e],7 = p1_step_col_count.  We define move_step_count here ONLY as a
+   decoy: seed_globals sets it to a value DISTINCT from the SNAP's p1_step_col_count
+   so that if check_exit_tile_vert ever reverts to reading move_step_count, the gate
+   FAILS.  Nothing in the reconstruction reads it (the items.c read was corrected to
+   p1_step_col_count); it exists solely to catch a regression. */
+u8  move_step_count;             /* player.c — 0x824c (decoy — read by nothing) */
 u8  p1_move_step_idx;            /* player.c — 0x792a          */
 u8  physics_frozen;              /* player.c — 0xa0ce          */
 s16 p1_pixel_y;                  /* player.c — 0x9292          */
@@ -99,24 +108,24 @@ void apply_cell_animation(unsigned char f){ (void)f; }    /* 1000:69aa */
    — the same convention as play_sound/apply_cell_animation above):
      - enter_game_mode / dispatch_move_step write game_mode + the move-step
        dispatch, NEITHER in the validated SNAP -> no-op shims.
-     - p1_set_pixel_from_cell (1000:4906) writes move_step_count + p1_pixel_y
+     - p1_set_pixel_from_cell (1000:4906) writes p1_step_col_count + p1_pixel_y
        (BOTH in the SNAP), so its host shim reproduces the engine leaf FAITHFULLY:
          p1_grid_row  = p1_cell >> 3
-         move_step_count = p1_cell - p1_grid_row*8   (the in-row column index)
+         p1_step_col_count = p1_cell - p1_grid_row*8   (the in-row column index)
          p1_pixel_x = posC_X[p1_cell] + 7
          p1_pixel_y = posC_Y[p1_cell] + 0xf
        The engine reads posC_X/Y from the DGROUP cell-coord table at 0x274/0x276;
        that table is the same grid geometry level.c's level_populate_dg computes —
        posC_X[cell] = col*40 + 8, posC_Y[cell] = row*32 + 8 — so the shim derives
        the two coord values analytically (matches the captured trace exactly:
-       teleport to cell 0x0a -> move_step_count=2, p1_pixel_y=0x28+0xf+0xd=0x44). */
+       teleport to cell 0x0a -> p1_step_col_count=2, p1_pixel_y=0x28+0xf+0xd=0x44). */
 void enter_game_mode(unsigned char m)    { (void)m; }     /* 1000:4263 */
 void dispatch_move_step(void)            {}               /* 1000:238e */
 void p1_set_pixel_from_cell(void)        /* 1000:4906 */
 {
     u8 row = (u8)(p1_cell >> 3);
     u8 col = (u8)(p1_cell - (u8)(row * 8));
-    move_step_count = col;
+    p1_step_col_count = col;
     p1_pixel_x = (s16)((u16)col * 40u + 8u) + 7;   /* posC_X[cell] + 7 (not in SNAP) */
     p1_pixel_y = (s16)((u16)row * 32u + 8u) + 0xf; /* posC_Y[cell] + 0xf            */
 }
@@ -134,7 +143,7 @@ void p1_set_pixel_from_cell(void)        /* 1000:4906 */
  *  SNAP (18 B LE, struct.pack "<HHBBBBBBBBBBhBB"):
  *    score_lo(u16) score_hi(u16) items_remaining(u8) level_exit_cell(u8)
  *    level_complete_flag(u8) level_complete_anim_counter(u8) p1_item_code(u8)
- *    p1_cell(u8) anim_target_cell(u8) current_level(u8) move_step_count(u8)
+ *    p1_cell(u8) anim_target_cell(u8) current_level(u8) p1_step_col_count(u8)
  *    physics_frozen(u8) p1_pixel_y(s16) tilemap_item_byte(u8) pad(u8).
  * ════════════════════════════════════════════════════════════════════════════ */
 #define SNAP_SIZE 18
@@ -143,7 +152,7 @@ typedef struct {
     u16 score_lo, score_hi;
     u8  items_remaining, level_exit_cell, level_complete_flag,
         level_complete_anim_counter, p1_item_code, p1_cell, anim_target_cell,
-        current_level, move_step_count, physics_frozen;
+        current_level, p1_step_col_count, physics_frozen;
     s16 p1_pixel_y;
     u8  tilemap_item_byte, pad;
 } snap_t;
@@ -177,7 +186,7 @@ static void parse_snap(const u8 *p, snap_t *s)
     s->p1_cell                    = p[9];
     s->anim_target_cell           = p[10];
     s->current_level              = p[11];
-    s->move_step_count            = p[12];
+    s->p1_step_col_count          = p[12];
     s->physics_frozen             = p[13];
     s->p1_pixel_y                 = (s16)rd16(p + 14);
     s->tilemap_item_byte          = p[16];
@@ -247,7 +256,17 @@ static void seed_globals(const snap_t *s)
     p1_cell                     = s->p1_cell;
     anim_target_cell            = s->anim_target_cell;
     current_level               = s->current_level;
-    move_step_count             = s->move_step_count;
+    p1_step_col_count           = s->p1_step_col_count;
+    /* DECOY: seed the REAL move_step_count @ 0x824c to a value DISTINCT from the
+       SNAP's p1_step_col_count, so that if check_exit_tile_vert ever reverts to
+       reading move_step_count, it reads this decoy and the gate FAILS (the
+       counter-aliasing guard — mirrors physics_ctest.c's 0x824c≠0x855e decoy).
+       The reconstruction reads p1_step_col_count; nothing reads move_step_count
+       unless the bug is reintroduced.  Pick 7 when the column counter is != 7
+       (so a wrong read flips check_exit_tile_vert's `!= 7` guard to no-op), else
+       a value != the column counter and != 7. */
+    move_step_count = (s->p1_step_col_count != 7) ? 7
+                    : (u8)(s->p1_step_col_count ^ 0xff);
     physics_frozen              = s->physics_frozen;
     p1_pixel_y                  = s->p1_pixel_y;
 }
@@ -277,7 +296,7 @@ static const char *cmp_exit(const snap_t *e, u8 entry_cell, long *got, long *wan
     FLD("p1_cell",             p1_cell,                     e->p1_cell);
     FLD("anim_target_cell",    anim_target_cell,            e->anim_target_cell);
     FLD("current_level",       current_level,               e->current_level);
-    FLD("move_step_count",     move_step_count,             e->move_step_count);
+    FLD("p1_step_col_count",   p1_step_col_count,           e->p1_step_col_count);
     FLD("physics_frozen",      physics_frozen,              e->physics_frozen);
     FLD("p1_pixel_y",          p1_pixel_y,                  e->p1_pixel_y);
     FLD("tilemap_item_byte",   live_tilemap_item_byte(entry_cell), e->tilemap_item_byte);

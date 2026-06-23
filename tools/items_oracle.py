@@ -49,7 +49,10 @@ disassembly operands of the 5 functions + read_tile_layer2 6bf4 + start_level 2d
                                              is wrong for this build; 0x79b2 is the real one,
                                              matching physics_oracle OFF_CURRENT_LEVEL)
   copyprotect_flag           0x119a (s8)     start_level 2d14 / [0x119a]
-  move_step_count            0x855e (u8)     check_exit_tile_vert 6372 cmp [0x855e],7
+  p1_step_col_count          0x855e (u8)     check_exit_tile_vert 6372 cmp [0x855e],7
+                                             (the cursor/move-step COLUMN counter; Ghidra
+                                              mislabels 0x855e as "move_step_count" — the real
+                                              move_step_count is 0x824c.  See Phase-9.1.)
   p1_move_step_idx           0x792a (u8)     set to 0 in 6372
   physics_frozen             0xa0ce (u8)     set to 1 in 6372
   p1_pixel_y                 0x9292 (s16)    teleport nudges +0xd
@@ -90,7 +93,7 @@ TRACE LAYOUT (little-endian) — FROZEN; Task-2 (items_ctest.c) parses this exac
     u8   p1_cell                 (0x856e)
     u8   anim_target_cell        (0x856f)
     u8   current_level           (0x79b2)
-    u8   move_step_count         (0x855e)
+    u8   p1_step_col_count       (0x855e)
     u8   physics_frozen          (0xa0ce)
     s16  p1_pixel_y              (0x9292)
     u8   tilemap_item_byte       (tilemap[p1_cell+0x60] — the layer-C item code at p1_cell)
@@ -141,7 +144,7 @@ OFF_P1_ITEM_CODE: int = 0x79b8       # u8
 OFF_P1_CELL: int = 0x856e            # u8
 OFF_ANIM_TARGET_CELL: int = 0x856f   # u8
 OFF_CURRENT_LEVEL: int = 0x79b2      # u8
-OFF_MOVE_STEP_COUNT: int = 0x855e    # u8
+OFF_P1_STEP_COL_COUNT: int = 0x855e  # u8  (cursor/move-step COLUMN counter; NOT move_step_count @ 0x824c)
 OFF_PHYSICS_FROZEN: int = 0xa0ce     # u8
 OFF_P1_PIXEL_Y: int = 0x9292         # s16
 OFF_P1_MOVE_STEP_IDX: int = 0x792a   # u8
@@ -184,7 +187,7 @@ SNAP_SIZE: int = struct.calcsize(SNAP_FMT)
 SNAP_FIELDS = [
     "score_lo", "score_hi", "items_remaining", "level_exit_cell",
     "level_complete_flag", "level_complete_anim_counter", "p1_item_code",
-    "p1_cell", "anim_target_cell", "current_level", "move_step_count",
+    "p1_cell", "anim_target_cell", "current_level", "p1_step_col_count",
     "physics_frozen", "p1_pixel_y", "tilemap_item_byte", "pad",
 ]
 assert len(SNAP_FIELDS) == 15
@@ -535,7 +538,7 @@ def main() -> None:
             rd8(OFF_ITEMS_REMAINING), rd8(OFF_LEVEL_EXIT_CELL),
             rd8(OFF_LEVEL_COMPLETE_FLAG), rd8(OFF_LEVEL_COMPLETE_ANIM_CTR),
             rd8(OFF_P1_ITEM_CODE), cell, rd8(OFF_ANIM_TARGET_CELL),
-            rd8(OFF_CURRENT_LEVEL), rd8(OFF_MOVE_STEP_COUNT),
+            rd8(OFF_CURRENT_LEVEL), rd8(OFF_P1_STEP_COL_COUNT),
             rd8(OFF_PHYSICS_FROZEN), rd_s16(OFF_P1_PIXEL_Y),
             item_byte_at(cell), 0)
 
@@ -787,7 +790,7 @@ def main() -> None:
              "anim_target_cell<-level_exit_cell(0x%02x)" % (last_cell, s3_pre_exit)))
 
     # Scenario 4: EXIT-TILE detection/read (check_exit_tile_vert / move_step_read_item).
-    # Seed neighbor tile (+0x30) = exit code 0x0c and move_step_count != 7, then call
+    # Seed neighbor tile (+0x30) = exit code 0x0c and p1_step_col_count != 7, then call
     # check_exit_tile_vert. Also re-exercise move_step_read_item on an EMPTY item cell
     # (no-collect path) to capture the read-only branch.
     print("[items_oracle] === scenario 4 (exit_detect) ===", flush=True)
@@ -795,7 +798,7 @@ def main() -> None:
     cur_records.clear()
     exit_probe_cell = NORMAL_CELL
     wr8(OFF_P1_CELL, exit_probe_cell & 0xFF)
-    wr8(OFF_MOVE_STEP_COUNT, 0)            # != 7 so the branch is taken
+    wr8(OFF_P1_STEP_COL_COUNT, 0)          # != 7 so the branch is taken
     wr_tile((exit_probe_cell + 0x30) & 0xFFFF, TILE_EXIT_NEIGHBOR)  # 0x0c neighbor = exit
     capturing["on"] = True
     call_engine_fn(0x6372)                 # check_exit_tile_vert
@@ -812,7 +815,7 @@ def main() -> None:
     scenario_blobs.append(dict(
         id=4, name="exit_detect", records=list(cur_records), setup=SETUP_SEEDED,
         start_cell=exit_probe_cell,
-        note="seeded tilemap[cell+0x30]=0x0c (exit neighbor) + move_step_count=0; "
+        note="seeded tilemap[cell+0x30]=0x0c (exit neighbor) + p1_step_col_count=0; "
              "invoked check_exit_tile_vert (expect physics_frozen=1, mode 0x2e enter); "
              "then move_step_read_item on empty cell 0x%s (read-only, no collect)"
              % ("%02x" % empty_cell if empty_cell is not None else "NA")))
@@ -894,7 +897,7 @@ def main() -> None:
         ("level_complete_anim_counter", 0x8550, "u8"),
         ("p1_item_code", 0x79b8, "u8"), ("p1_cell", 0x856e, "u8"),
         ("anim_target_cell", 0x856f, "u8"), ("current_level", 0x79b2, "u8"),
-        ("move_step_count", 0x855e, "u8"), ("physics_frozen", 0xa0ce, "u8"),
+        ("p1_step_col_count", 0x855e, "u8"), ("physics_frozen", 0xa0ce, "u8"),
         ("p1_pixel_y", 0x9292, "s16"), ("copyprotect_flag", 0x119a, "s8"),
         ("p1_move_step_idx", 0x792a, "u8"), ("sound_mode_selector", 0x689c, "u16"),
         ("tilemap_ptr (off/seg)", 0xa0d8, "far ptr; item byte = tilemap[cell+0x60]"),
@@ -925,7 +928,7 @@ def main() -> None:
     lines.append("- **p1_collect_item_score (1000:6c95)**: queue erase of player cell view; "
                  "32-bit score (score_hi:score_lo) += 250 base; '#'→+250 & inc settle_countdown; "
                  "'/'→+10000; '0'→+50000; else +250.\n")
-    lines.append("- **check_exit_tile_vert (1000:6372)**: if move_step_count!=7 AND "
+    lines.append("- **check_exit_tile_vert (1000:6372)**: if p1_step_col_count!=7 AND "
                  "tilemap[p1_cell+0x30]==0x0c (exit): p1_move_step_idx=0, physics_frozen=1, "
                  "enter_game_mode(0x2e), play exit sound. Else no-op.\n")
     lines.append("- **move_step_read_item (1000:6627)**: read_tile_layer2(p1_cell) sets "
