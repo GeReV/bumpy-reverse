@@ -1,29 +1,42 @@
 # BUMPYCAP input script — drive the PLAYABLE BUMPYP.EXE from boot to level-1 gameplay.
 # Format: <frame-dec> <scancode-hex> <value>   (1=key down, 0=key up; '#'=comment)
 # Applied by tools/dosbox/patches/01-bumpycap-hook.patch.  For BUMPYP.EXE the hook is
-# driven with BUMPYCAP_KEYTBL_DIRECT=1 + BUMPYCAP_OFF_KEYTBL=0x99fe (g_key_state_table
-# is a DIRECT DGROUP array in the reconstruction, not the original's near pointer),
-# so it writes the polled key state at DGROUP:0x99fe + scancode.
+# driven with BUMPYCAP_KEYTBL_DIRECT=1 + BUMPYCAP_OFF_KEYTBL=0x9dbe (g_key_state_table
+# is a DIRECT DGROUP array in the reconstruction at RUNTIME DGROUP offset 0x9dbe, not the
+# original's near pointer), so it writes the polled key state at DGROUP:0x9dbe + scancode.
+# (NB: BUMPYP.MAP can be STALE relative to the relinked EXE — the runtime BSS offsets
+#  0x9dbe keytbl / 0x05c2 current_level / 0x9eca game_mode were verified live, by locating
+#  the installed g_joystick_handler_table[0] -> s_kbd_handler_script far ptr in DGROUP.)
+# Full run env (DGROUP runtime seg 0x3fdd):
+#   BUMPYCAP_DGROUP=0x3fdd BUMPYCAP_KEYTBL_DIRECT=1 BUMPYCAP_OFF_KEYTBL=0x9dbe \
+#   BUMPYCAP_OFF_CURLEVEL=0x05c2 BUMPYCAP_OFF_GAMEMODE=0x9eca
 #
 # ── NO F2/F5 ──  BUMPYP.EXE hardcodes palette_mode=2 and SKIPS gfx_driver_init's
 # interactive F2/F5 palette-select screen (documented deviation, src/main.c).  So the
 # only input the boot path needs is FIRE = Enter (0x1c), which the seeded keyboard
 # handler script (host_boot.c s_kbd_handler_script) maps to input_state bit 0x10.
 #
-# Gate A: run_main_menu — cursor starts at option 0 (Start); FIRE selects it.
+# Gate A: run_main_menu — cursor starts at option 0 (Start); FIRE selects it (returns 0).
 # Gate B: level_intro_screen / show_level_intro_screen — wait_keypress consumes a FIRE.
 # Deterministic conf (core=normal, cycles=fixed 6000) => identical frames every run.
 #
-# FIRE pulses spaced out so each gate's poll sees a fresh down->up edge.
+# The menu's release-debounce (run_main_menu lines 898-900: spin while poll_action!=0)
+# requires a clean DOWN..UP edge per selection.  Use WIDE holds (~60 frames down) so a
+# menu iteration cannot miss the key-down window, and a clear gap before the next pulse
+# so the debounce sees the release.  Repeat several FIRE pulses to walk title->menu->intro.
+#
+# Pulse 1 — select Start in run_main_menu (cursor at 0 => FIRE returns 0)
 200 1c 1
-210 1c 0
-260 1c 1
-270 1c 0
-320 1c 1
-330 1c 0
-400 1c 1
-410 1c 0
-480 1c 1
-490 1c 0
-560 1c 1
-570 1c 0
+260 1c 0
+# Pulse 2 — level_intro_screen wait_keypress (enter the round)
+360 1c 1
+420 1c 0
+# Pulse 3 — any follow-on wait_keypress
+520 1c 1
+580 1c 0
+# Pulse 4
+680 1c 1
+740 1c 0
+# Pulse 5
+840 1c 1
+900 1c 0
