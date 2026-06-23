@@ -1,0 +1,430 @@
+diff --git i/src/debug/debug.cpp w/src/debug/debug.cpp
+index 44f9b4f..4e5e1d8 100644
+--- i/src/debug/debug.cpp
++++ w/src/debug/debug.cpp
+@@ -6093,7 +6093,425 @@ void DEBUG_HeavyWriteLogInstruction(void) {
+ 	DEBUG_ShowMsg("DEBUG: Done.\n");
+ }
+ 
++/* ════════════════════════════════════════════════════════════════════════════
++ *  BUMPYCAP int8-SNAP capture (Phase-10 end-to-end gate, Task 5).
++ *  ----------------------------------------------------------------------------
++ *  Emits a binary frame trace of the REAL BUMPY.EXE per-tick gameplay loop, to
++ *  be replayed tick-for-tick against the reconstructed src/ game_tick().
++ *
++ *  AUTHORITATIVE LAYOUT: tools/int8_trace.h.  This code CANNOT include that
++ *  header (host vs. emulator TU), so it MIRRORS the layout byte-for-byte by
++ *  writing each field explicitly little-endian into a flat buffer.  The header's
++ *  INT8_VERSION is the drift guard: the version literal written here MUST equal
++ *  int8_trace.h's INT8_VERSION (1) or the replay harness (tools/int8_ctest.c
++ *  read_trace) hard-fails the trace.  On ANY int8_trace.h layout change, bump the
++ *  version there AND update this emitter (the static-size checks below catch a
++ *  size drift at runtime).
++ *
++ *  FRAME-BOUNDARY TRIGGER: the innermost per-tick loop TOP of game_loop
++ *  (FUN_1000_0c18).  In Ghidra that loop body's first statement is
++ *  `rng_frame = rand();` at 1000:0cda (CALL rand) / 1000:0cdd (MOV [0x79b3],AL),
++ *  with the loop-back branch JMP 1000:0cda at 1000:0d5e.  Runtime mapping
++ *  (runtime = ghidra - 0x7DC for the seg; offsets identical): cs=0x0824,
++ *  ip=0x0cda.  We trigger on (cs==0x0824 && ip==0x0cda), i.e. once per tick at
++ *  the loop top BEFORE rand() runs — so rng_frame/input_state still hold the
++ *  just-completed tick's TRAILING values (the convention int8_ctest.c expects:
++ *  FRAME[k>=1] carries the rng/input that DROVE the tick producing FRAME[k].state).
++ *
++ *  FRAME-COUNT / FRAME[0] CONVENTION (must match int8_ctest.c run_replay, which
++ *  loops k=1..frame_count comparing FRAME[k]):
++ *    - FRAME[0]  = mirror of the INIT scalars (state), rng/input = seed values.
++ *    - FRAME[k]  (k>=1) = one captured tick, carrying that tick's trailing
++ *                rng/input + the resulting state.
++ *    - header.frame_count = N (number of TICK frames).  The file therefore holds
++ *      N+1 int8_frame records; read_trace validates sz >= header+init+N*frame
++ *      (the extra FRAME[0] only makes sz larger -> passes).
++ *
++ *  All guest reads via phys_readb at DGROUP(0x185f):offset (runtime calibration;
++ *  see docs/dosbox-int8-capture.md).  Every offset below is grounded in the
++ *  per-function oracle/ctest gates (physics/p1_spine/items/anim/spawn/p2).
++ *
++ *  Gated entirely behind BUMPYCAP_INT8_OUT (output path) + BUMPYCAP_INT8_FRAMES
++ *  (N); a run without those env vars is completely unaffected.
++ * ════════════════════════════════════════════════════════════════════════════ */
++#include <stdlib.h>   /* getenv */
++#include <stdio.h>    /* FILE   */
++#include <stdint.h>
++
++void DoKillSwitch(void);   /* gui/sdlmain.cpp — clean emulator shutdown (throw 1) */
++
++/* runtime DGROUP base (ghidra 0x203b -> 0x185f at run time; offsets == unpacked image). */
++#define BUMPYCAP_DG          ((PhysPt)0x185f0u)
++/* per-tick loop top: ghidra 1000:0cda -> runtime 0824:0cda. */
++#define BUMPYCAP_TICK_SEG    0x0824u
++#define BUMPYCAP_TICK_OFF    0x0cdau
++
++/* int8_trace.h mirror — constants. */
++#define BUMPYCAP_INT8_VERSION    1
++#define BUMPYCAP_TILEMAP_SIZE    0x300
++#define BUMPYCAP_ANIM_A_SLOTS    3
++#define BUMPYCAP_ANIM_B_SLOTS    4
++#define BUMPYCAP_ANIM_N_SLOTS    (BUMPYCAP_ANIM_A_SLOTS + BUMPYCAP_ANIM_B_SLOTS)   /* 7  */
++#define BUMPYCAP_ANIM_REC_LEN    12
++#define BUMPYCAP_ANIM_RECS_LEN   (BUMPYCAP_ANIM_N_SLOTS * BUMPYCAP_ANIM_REC_LEN)   /* 84 */
++#define BUMPYCAP_ENTITY_LEN      0x200
++/* fixed record sizes (mirror int8_trace.h _Static_asserts: 81/1445/55/61). */
++#define BUMPYCAP_HEADER_SIZE      14
++#define BUMPYCAP_SCALARS_SIZE     81
++#define BUMPYCAP_INIT_SIZE        (BUMPYCAP_TILEMAP_SIZE + BUMPYCAP_ANIM_RECS_LEN + BUMPYCAP_ENTITY_LEN + BUMPYCAP_SCALARS_SIZE)  /* 1445 */
++#define BUMPYCAP_FRAME_STATE_SIZE 55
++#define BUMPYCAP_FRAME_SIZE       (1 + 1 + 4 + BUMPYCAP_FRAME_STATE_SIZE)   /* 61 */
++
++/* ── DGROUP field offsets (oracle-grounded; see tools/*_oracle.py) ── */
++#define OFF_TILEMAP_PTR      0xa0d8u   /* far (off@0xa0d8 / seg@0xa0da) */
++#define OFF_ANIM_A_TBL       0x4c70u   /* far-ptr slot table, 3 slots, stride 4 (off@+0,seg@+2) */
++#define OFF_ANIM_B_TBL       0x4cbcu   /* far-ptr slot table, 4 slots, stride 4 */
++/* s16 */
++#define OFF_P1_PIXEL_X       0x9290u
++#define OFF_P1_PIXEL_Y       0x9292u
++#define OFF_P1_GRID_X_NEW    0x9d36u
++#define OFF_P1_GRID_Y_NEW    0x9d38u
++#define OFF_P1_GRID_X        0x857au
++#define OFF_P1_GRID_Y        0x857cu
++#define OFF_P1_GRID_X_PREV   0x8882u
++#define OFF_P1_GRID_Y_PREV   0x8e88u
++#define OFF_P1_SCROLL_X      0x9ba4u
++#define OFF_P1_SCROLL_Y      0x9b9cu
++#define OFF_PVP_P1_X0        0x84cu
++#define OFF_PVP_P1_X1        0x84eu
++#define OFF_PVP_P1_Y0        0x850u
++#define OFF_PVP_P1_Y1        0x852u
++#define OFF_PENDING_ERASE_X  0x9b9au
++#define OFF_PENDING_ERASE_Y  0x9ba2u
++#define OFF_SOUND_DEV_STATE  0x689cu
++/* u16 */
++#define OFF_SCORE_LO         0xa0d4u
++#define OFF_SCORE_HI         0xa0d6u
++#define OFF_P2_FRAME_BASE    0xa0deu
++#define OFF_G_ANIM_STREAM    0xa0beu   /* off@0xa0be / seg@0xa0c0 (channel-A working stream) */
++#define OFF_ANIM_B_STREAM    0xa0c2u   /* off@0xa0c2 / seg@0xa0c4 (channel-B working stream) */
++/* u8 */
++#define OFF_P1_MOVE_ANIM     0x824au
++#define OFF_GAME_MODE        0x792cu
++#define OFF_P1_MOVE_STEP_IDX 0x792au
++#define OFF_P1_FACING_LEFT   0x9baeu
++#define OFF_P1_MOVE_STEPS_LEFT 0x824du
++#define OFF_INPUT_STATE      0x8244u
++#define OFF_PHYSICS_FROZEN   0xa0ceu
++#define OFF_MOVE_OVERRIDE    0xa1a7u
++#define OFF_P1_CELL          0x856eu
++#define OFF_MOVE_LOCKED      0x8242u
++#define OFF_PREV_GAME_MODE   0x8552u
++#define OFF_P1_STEP_COL_CNT  0x855eu
++#define OFF_PENDING_ERASE_CNT 0xa1a8u
++#define OFF_LEVEL_COMPLETE_FLAG 0xa1b1u
++#define OFF_ITEMS_REMAINING  0xa0cfu
++#define OFF_LEVEL_EXIT_CELL  0x8572u
++#define OFF_LEVEL_COMPLETE_ANIM_CTR 0x8550u
++#define OFF_P1_ITEM_CODE     0x79b8u
++#define OFF_ANIM_TARGET_CELL 0x856fu
++#define OFF_CURRENT_LEVEL    0x79b2u
++#define OFF_MOVE_STEP_COUNT  0x855eu   /* aliases p1_step_col_count (same DGROUP slot) */
++#define OFF_G_ANIM_CHANNEL_IDX 0x856cu
++#define OFF_G_ANIM_CUR_CMD_BYTE 0x8578u
++#define OFF_ANIM_B_LOOP_IDX  0x8566u
++#define OFF_ANIM_B_CUR_FRAME_BYTE 0x8579u
++#define OFF_P2_CELL          0x8571u
++#define OFF_P2_MOVE_STATE    0x8562u
++#define OFF_P2_AI_THRESHOLD  0x7920u
++#define OFF_ROUND_CONTINUE   0x9d30u
++#define OFF_SESSION_CONTINUE 0x856du
++#define OFF_FRAME_ABORT      0x928du
++#define OFF_SETTLE_COUNTDOWN 0x791au
++#define OFF_RNG_FRAME        0x79b3u
++
++/* little-endian word read at DGROUP:off. */
++static inline uint16_t bumpycap_rdw(unsigned off) {
++	return (uint16_t)(phys_readb(BUMPYCAP_DG + (PhysPt)off) |
++	                  (phys_readb(BUMPYCAP_DG + (PhysPt)(off + 1)) << 8));
++}
++static inline uint8_t bumpycap_rdb(unsigned off) {
++	return phys_readb(BUMPYCAP_DG + (PhysPt)off);
++}
++
++/* FNV-1a over a guest tilemap window (matches int8_tilemap_hash). */
++static uint32_t bumpycap_tilemap_hash(void) {
++	uint16_t tm_off = bumpycap_rdw(OFF_TILEMAP_PTR);
++	uint16_t tm_seg = bumpycap_rdw(OFF_TILEMAP_PTR + 2);
++	PhysPt lin = (PhysPt)(((uint32_t)tm_seg << 4) + tm_off);
++	uint32_t h = 2166136261u;
++	for (unsigned i = 0; i < BUMPYCAP_TILEMAP_SIZE; i++) {
++		h ^= phys_readb(lin + (PhysPt)i);
++		h *= 16777619u;
++	}
++	return h;
++}
++
++/* little-endian byte-buffer writers. */
++static inline void bc_put8(uint8_t **p, uint8_t v)  { *(*p)++ = v; }
++static inline void bc_put16(uint8_t **p, uint16_t v) { *(*p)++ = (uint8_t)v; *(*p)++ = (uint8_t)(v >> 8); }
++static inline void bc_put32(uint8_t **p, uint32_t v) {
++	*(*p)++ = (uint8_t)v; *(*p)++ = (uint8_t)(v >> 8);
++	*(*p)++ = (uint8_t)(v >> 16); *(*p)++ = (uint8_t)(v >> 24);
++}
++
++/* Emit the int8_scalars block (81 bytes), in int8_trace.h struct field order. */
++static void bumpycap_emit_scalars(uint8_t **p) {
++	/* s16 player/physics + grid + bbox state */
++	bc_put16(p, bumpycap_rdw(OFF_P1_PIXEL_X));
++	bc_put16(p, bumpycap_rdw(OFF_P1_PIXEL_Y));
++	bc_put16(p, bumpycap_rdw(OFF_P1_GRID_X_NEW));
++	bc_put16(p, bumpycap_rdw(OFF_P1_GRID_Y_NEW));
++	bc_put16(p, bumpycap_rdw(OFF_P1_GRID_X));
++	bc_put16(p, bumpycap_rdw(OFF_P1_GRID_Y));
++	bc_put16(p, bumpycap_rdw(OFF_P1_GRID_X_PREV));
++	bc_put16(p, bumpycap_rdw(OFF_P1_GRID_Y_PREV));
++	bc_put16(p, bumpycap_rdw(OFF_P1_SCROLL_X));
++	bc_put16(p, bumpycap_rdw(OFF_P1_SCROLL_Y));
++	bc_put16(p, bumpycap_rdw(OFF_PVP_P1_X0));
++	bc_put16(p, bumpycap_rdw(OFF_PVP_P1_X1));
++	bc_put16(p, bumpycap_rdw(OFF_PVP_P1_Y0));
++	bc_put16(p, bumpycap_rdw(OFF_PVP_P1_Y1));
++	bc_put16(p, bumpycap_rdw(OFF_PENDING_ERASE_X));
++	bc_put16(p, bumpycap_rdw(OFF_PENDING_ERASE_Y));
++	bc_put16(p, bumpycap_rdw(OFF_SOUND_DEV_STATE));
++	/* u16 score + spawn frame base + anim stream far ptrs */
++	bc_put16(p, bumpycap_rdw(OFF_SCORE_LO));
++	bc_put16(p, bumpycap_rdw(OFF_SCORE_HI));
++	bc_put16(p, bumpycap_rdw(OFF_P2_FRAME_BASE));
++	bc_put16(p, bumpycap_rdw(OFF_G_ANIM_STREAM));       /* g_anim_stream_off */
++	bc_put16(p, bumpycap_rdw(OFF_G_ANIM_STREAM + 2));   /* g_anim_stream_seg */
++	bc_put16(p, bumpycap_rdw(OFF_ANIM_B_STREAM));       /* anim_b_stream_off */
++	bc_put16(p, bumpycap_rdw(OFF_ANIM_B_STREAM + 2));   /* anim_b_stream_seg */
++	/* u8 player/physics flags + cells */
++	bc_put8(p, bumpycap_rdb(OFF_P1_MOVE_ANIM));
++	bc_put8(p, bumpycap_rdb(OFF_GAME_MODE));
++	bc_put8(p, bumpycap_rdb(OFF_P1_MOVE_STEP_IDX));
++	bc_put8(p, bumpycap_rdb(OFF_P1_FACING_LEFT));
++	bc_put8(p, bumpycap_rdb(OFF_P1_MOVE_STEPS_LEFT));
++	bc_put8(p, bumpycap_rdb(OFF_INPUT_STATE));
++	bc_put8(p, bumpycap_rdb(OFF_PHYSICS_FROZEN));
++	bc_put8(p, bumpycap_rdb(OFF_MOVE_OVERRIDE));
++	bc_put8(p, bumpycap_rdb(OFF_P1_CELL));
++	bc_put8(p, bumpycap_rdb(OFF_MOVE_LOCKED));
++	bc_put8(p, bumpycap_rdb(OFF_PREV_GAME_MODE));
++	bc_put8(p, bumpycap_rdb(OFF_P1_STEP_COL_CNT));
++	bc_put8(p, bumpycap_rdb(OFF_PENDING_ERASE_CNT));
++	bc_put8(p, bumpycap_rdb(OFF_LEVEL_COMPLETE_FLAG));
++	/* u8 item/exit/level semantic state */
++	bc_put8(p, bumpycap_rdb(OFF_ITEMS_REMAINING));
++	bc_put8(p, bumpycap_rdb(OFF_LEVEL_EXIT_CELL));
++	bc_put8(p, bumpycap_rdb(OFF_LEVEL_COMPLETE_ANIM_CTR));
++	bc_put8(p, bumpycap_rdb(OFF_P1_ITEM_CODE));
++	bc_put8(p, bumpycap_rdb(OFF_ANIM_TARGET_CELL));
++	bc_put8(p, bumpycap_rdb(OFF_CURRENT_LEVEL));
++	bc_put8(p, bumpycap_rdb(OFF_MOVE_STEP_COUNT));
++	/* u8 anim-channel scalars */
++	bc_put8(p, bumpycap_rdb(OFF_G_ANIM_CHANNEL_IDX));
++	bc_put8(p, bumpycap_rdb(OFF_G_ANIM_CUR_CMD_BYTE));
++	bc_put8(p, bumpycap_rdb(OFF_ANIM_B_LOOP_IDX));
++	bc_put8(p, bumpycap_rdb(OFF_ANIM_B_CUR_FRAME_BYTE));
++	/* s8/u8 player-2 spawn state */
++	bc_put8(p, bumpycap_rdb(OFF_P2_CELL));
++	bc_put8(p, bumpycap_rdb(OFF_P2_MOVE_STATE));
++	bc_put8(p, bumpycap_rdb(OFF_P2_AI_THRESHOLD));
++	/* u8 session / level / frame-boundary control */
++	bc_put8(p, bumpycap_rdb(OFF_ROUND_CONTINUE));
++	bc_put8(p, bumpycap_rdb(OFF_SESSION_CONTINUE));
++	bc_put8(p, bumpycap_rdb(OFF_FRAME_ABORT));
++	bc_put8(p, bumpycap_rdb(OFF_SETTLE_COUNTDOWN));
++	bc_put8(p, bumpycap_rdb(OFF_RNG_FRAME));   /* FRAME[0] mirror of the seed rng */
++}
++
++/* Emit the int8_frame_state assert-set (55 bytes), in int8_trace.h field order. */
++static void bumpycap_emit_frame_state(uint8_t **p) {
++	bc_put16(p, bumpycap_rdw(OFF_P1_PIXEL_X));
++	bc_put16(p, bumpycap_rdw(OFF_P1_PIXEL_Y));
++	bc_put16(p, bumpycap_rdw(OFF_P1_GRID_X_NEW));
++	bc_put16(p, bumpycap_rdw(OFF_P1_GRID_Y_NEW));
++	bc_put16(p, bumpycap_rdw(OFF_P1_GRID_X));
++	bc_put16(p, bumpycap_rdw(OFF_P1_GRID_Y));
++	bc_put16(p, bumpycap_rdw(OFF_P1_GRID_X_PREV));
++	bc_put16(p, bumpycap_rdw(OFF_P1_GRID_Y_PREV));
++	bc_put16(p, bumpycap_rdw(OFF_PVP_P1_X0));
++	bc_put16(p, bumpycap_rdw(OFF_PVP_P1_X1));
++	bc_put16(p, bumpycap_rdw(OFF_PVP_P1_Y0));
++	bc_put16(p, bumpycap_rdw(OFF_PVP_P1_Y1));
++	bc_put16(p, bumpycap_rdw(OFF_P1_PIXEL_Y));   /* p1_pixel_y_dup (items' separate compare) */
++	bc_put16(p, bumpycap_rdw(OFF_SCORE_LO));
++	bc_put16(p, bumpycap_rdw(OFF_SCORE_HI));
++	bc_put8(p, bumpycap_rdb(OFF_P1_MOVE_ANIM));
++	bc_put8(p, bumpycap_rdb(OFF_GAME_MODE));
++	bc_put8(p, bumpycap_rdb(OFF_P1_MOVE_STEP_IDX));
++	bc_put8(p, bumpycap_rdb(OFF_P1_FACING_LEFT));
++	bc_put8(p, bumpycap_rdb(OFF_P1_MOVE_STEPS_LEFT));
++	bc_put8(p, bumpycap_rdb(OFF_INPUT_STATE));
++	bc_put8(p, bumpycap_rdb(OFF_PHYSICS_FROZEN));
++	bc_put8(p, bumpycap_rdb(OFF_MOVE_OVERRIDE));
++	bc_put8(p, bumpycap_rdb(OFF_P1_CELL));
++	bc_put8(p, bumpycap_rdb(OFF_MOVE_LOCKED));
++	bc_put8(p, bumpycap_rdb(OFF_PREV_GAME_MODE));
++	bc_put8(p, bumpycap_rdb(OFF_P1_STEP_COL_CNT));
++	bc_put8(p, bumpycap_rdb(OFF_PENDING_ERASE_CNT));
++	bc_put8(p, bumpycap_rdb(OFF_LEVEL_COMPLETE_FLAG));
++	bc_put8(p, bumpycap_rdb(OFF_ITEMS_REMAINING));
++	bc_put8(p, bumpycap_rdb(OFF_LEVEL_EXIT_CELL));
++	bc_put8(p, bumpycap_rdb(OFF_LEVEL_COMPLETE_ANIM_CTR));
++	bc_put8(p, bumpycap_rdb(OFF_P1_ITEM_CODE));
++	bc_put8(p, bumpycap_rdb(OFF_ANIM_TARGET_CELL));
++	bc_put8(p, bumpycap_rdb(OFF_CURRENT_LEVEL));
++	bc_put8(p, bumpycap_rdb(OFF_MOVE_STEP_COUNT));
++	bc_put8(p, bumpycap_rdb(OFF_P2_CELL));
++	bc_put8(p, bumpycap_rdb(OFF_P2_MOVE_STATE));
++	{ uint16_t fb = bumpycap_rdw(OFF_P2_FRAME_BASE);
++	  bc_put8(p, (uint8_t)(fb & 0xff));          /* p2_frame_base_lo */
++	  bc_put8(p, (uint8_t)((fb >> 8) & 0xff)); } /* p2_frame_base_hi */
++}
++
++/* Emit one int8_frame (61 bytes): rng, input, tilemap_hash, frame_state. */
++static void bumpycap_emit_frame(uint8_t **p) {
++	bc_put8(p, bumpycap_rdb(OFF_RNG_FRAME));
++	bc_put8(p, bumpycap_rdb(OFF_INPUT_STATE));
++	bc_put32(p, bumpycap_tilemap_hash());
++	bumpycap_emit_frame_state(p);
++}
++
++/* Read the 7 (3 A + 4 B) 12-byte anim channel records via their far-ptr slot
++ * tables (mirrors anim_oracle.read_slot_recs) into the 84-byte dst. */
++static void bumpycap_read_anim_records(uint8_t *dst) {
++	unsigned tbl, slots, base = 0;
++	int t;
++	for (t = 0; t < 2; t++) {
++		if (t == 0) { tbl = OFF_ANIM_A_TBL; slots = BUMPYCAP_ANIM_A_SLOTS; }
++		else        { tbl = OFF_ANIM_B_TBL; slots = BUMPYCAP_ANIM_B_SLOTS; }
++		for (unsigned i = 0; i < slots; i++) {
++			uint16_t rec_off = bumpycap_rdw(tbl + i * 4);
++			uint16_t rec_seg = bumpycap_rdw(tbl + 2 + i * 4);
++			PhysPt lin = (PhysPt)(((uint32_t)rec_seg << 4) + rec_off);
++			for (unsigned b = 0; b < BUMPYCAP_ANIM_REC_LEN; b++)
++				dst[base + b] = phys_readb(lin + (PhysPt)b);
++			base += BUMPYCAP_ANIM_REC_LEN;
++		}
++	}
++}
++
++/* bumpycap_int8_boundary — called once per per-tick-loop top (cs:ip trigger).
++ * Arms only in a real level; writes header+INIT+FRAME[0] on the first armed hit,
++ * one FRAME[k] per subsequent hit; after N tick-frames flushes, closes, and
++ * requests a clean emulator exit. */
++static void bumpycap_int8_boundary(void) {
++	static int    bc_inited = 0;
++	static int    bc_enabled = 0;
++	static FILE  *bc_fp = NULL;
++	static unsigned bc_frames_target = 0;    /* N tick frames */
++	static unsigned bc_tick_count = 0;       /* tick frames written so far (FRAME[1..N]) */
++	static int    bc_armed = 0;
++	static int    bc_done = 0;
++
++	if (!bc_inited) {
++		bc_inited = 1;
++		const char *out = getenv("BUMPYCAP_INT8_OUT");
++		const char *nf  = getenv("BUMPYCAP_INT8_FRAMES");
++		if (out != NULL && *out != '\0') {
++			bc_frames_target = (nf != NULL) ? (unsigned)strtoul(nf, NULL, 0) : 0u;
++			if (bc_frames_target == 0u) bc_frames_target = 40u;   /* sane default */
++			bc_fp = fopen(out, "wb");
++			if (bc_fp != NULL) {
++				bc_enabled = 1;
++				LOG_MSG("BUMPYCAP int8: capturing %u frames to %s", bc_frames_target, out);
++			} else {
++				LOG_MSG("BUMPYCAP int8: cannot open %s for write", out);
++			}
++		}
++	}
++	if (!bc_enabled || bc_done) return;
++
++	/* Arm only inside a real level (skip title/menu loop-top hits, where the
++	 * inner per-tick loop is not the gameplay loop).  current_level >= 1 and a
++	 * non-zero game_mode = gameplay engaged. */
++	if (!bc_armed) {
++		uint8_t cur = bumpycap_rdb(OFF_CURRENT_LEVEL);
++		uint8_t gm  = bumpycap_rdb(OFF_GAME_MODE);
++		if (cur < 1u || gm == 0u) return;
++		bc_armed = 1;
++
++		/* First armed hit: header + INIT + FRAME[0]. */
++		uint8_t hdr[BUMPYCAP_HEADER_SIZE];
++		uint8_t *hp = hdr;
++		bc_put8(&hp, 'B'); bc_put8(&hp, 'I'); bc_put8(&hp, 'N'); bc_put8(&hp, 'T');
++		bc_put16(&hp, (uint16_t)BUMPYCAP_INT8_VERSION);
++		bc_put16(&hp, (uint16_t)0x185f);                    /* dgroup_seg */
++		bc_put16(&hp, (uint16_t)bc_frames_target);          /* frame_count = N */
++		bc_put16(&hp, (uint16_t)BUMPYCAP_INIT_SIZE);        /* init_size  */
++		bc_put16(&hp, (uint16_t)BUMPYCAP_FRAME_SIZE);       /* frame_stride */
++		fwrite(hdr, 1, BUMPYCAP_HEADER_SIZE, bc_fp);
++
++		/* INIT: tilemap[0x300] + anim_channels[84] + entity_state[0x200] + scalars. */
++		{
++			uint16_t tm_off = bumpycap_rdw(OFF_TILEMAP_PTR);
++			uint16_t tm_seg = bumpycap_rdw(OFF_TILEMAP_PTR + 2);
++			PhysPt lin = (PhysPt)(((uint32_t)tm_seg << 4) + tm_off);
++			for (unsigned i = 0; i < BUMPYCAP_TILEMAP_SIZE; i++) {
++				uint8_t b = phys_readb(lin + (PhysPt)i);
++				fwrite(&b, 1, 1, bc_fp);
++			}
++		}
++		{
++			uint8_t anim[BUMPYCAP_ANIM_RECS_LEN];
++			bumpycap_read_anim_records(anim);
++			fwrite(anim, 1, BUMPYCAP_ANIM_RECS_LEN, bc_fp);
++		}
++		{
++			/* entity_state[0x200] reserved — emit zeros (host harness carries it
++			   but does not yet unpack it; see int8_trace.h). */
++			uint8_t z[64]; memset(z, 0, sizeof z);
++			unsigned left = BUMPYCAP_ENTITY_LEN;
++			while (left > 0) { unsigned n = (left < sizeof z) ? left : sizeof z;
++			                   fwrite(z, 1, n, bc_fp); left -= n; }
++		}
++		{
++			uint8_t sc[BUMPYCAP_SCALARS_SIZE];
++			uint8_t *sp = sc;
++			bumpycap_emit_scalars(&sp);
++			fwrite(sc, 1, BUMPYCAP_SCALARS_SIZE, bc_fp);
++		}
++
++		/* FRAME[0]: mirror of INIT scalars (rng/input = seed values). */
++		{
++			uint8_t fr[BUMPYCAP_FRAME_SIZE];
++			uint8_t *fp = fr;
++			bumpycap_emit_frame(&fp);
++			fwrite(fr, 1, BUMPYCAP_FRAME_SIZE, bc_fp);
++		}
++		return;
++	}
++
++	/* Subsequent armed hits: one FRAME[k] per tick (trailing rng/input + state). */
++	{
++		uint8_t fr[BUMPYCAP_FRAME_SIZE];
++		uint8_t *fp = fr;
++		bumpycap_emit_frame(&fp);
++		fwrite(fr, 1, BUMPYCAP_FRAME_SIZE, bc_fp);
++	}
++	bc_tick_count++;
++	if (bc_tick_count >= bc_frames_target) {
++		fflush(bc_fp);
++		fclose(bc_fp);
++		bc_fp = NULL;
++		bc_done = 1;
++		LOG_MSG("BUMPYCAP int8: captured %u tick frames; requesting exit", bc_tick_count);
++		DoKillSwitch();   /* clean shutdown (throw 1, caught by the main loop) */
++	}
++}
++
+ bool DEBUG_HeavyIsBreakpoint(void) {
++	/* BUMPYCAP int8-SNAP frame-boundary trigger: the innermost per-tick loop top
++	 * of game_loop (runtime cs=0x0824, ip=0x0cda).  Additional to the 01 VGA hook;
++	 * no-op unless BUMPYCAP_INT8_OUT is set (env-gated inside the callee). */
++	if (SegValue(cs) == BUMPYCAP_TICK_SEG && reg_ip == BUMPYCAP_TICK_OFF) {
++		bumpycap_int8_boundary();
++	}
++
+ 	if (cpuLog) {
+ 		if (cpuLogCounter>0) {
+ 			LogInstruction(SegValue(cs),reg_eip,cpuLogFile);

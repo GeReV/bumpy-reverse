@@ -23,5 +23,34 @@ source. No DOSBox fork is vendored — only these patches.
 
   The runtime DGROUP segment is hard-coded `0x185f` (calibration in
   `docs/dosbox-int8-capture.md`). This patch is the bring-up + input-drive instrumentation;
-  the frame-boundary SNAP capture (binary trace at the logical present boundary) will be a
-  follow-on patch that builds on the same hook.
+  the frame-boundary SNAP capture (binary trace at the logical present boundary) is the
+  follow-on `02` patch that builds on the same calibration.
+
+- **`02-int8-snap-capture.patch`** — the int8-synced frame-boundary SNAP emitter, applied
+  ON TOP of `01`. Adds a CS:IP-triggered capture to the heavy-debug per-instruction hook
+  (`DEBUG_HeavyIsBreakpoint` in `src/debug/debug.cpp`, called once per instruction under
+  the `--enable-debug=heavy` build). The trigger is the innermost per-tick loop TOP of the
+  original `game_loop` (`FUN_1000_0c18`) — the `rng_frame = rand();` site at ghidra
+  `1000:0cda`, runtime **`cs=0x0824, ip=0x0cda`** (runtime = ghidra − 0x7DC for the seg;
+  offsets identical to the unpacked image). Captured at loop-top (before `rand()` runs) so
+  `rng_frame` (DGROUP `0x79b3`) / `input_state` (`0x8244`) still hold the just-completed
+  tick's TRAILING values.
+
+  On each armed hit it emits a binary trace whose layout MIRRORS `tools/int8_trace.h`
+  byte-for-byte (header magic `"BINT"`, `version = INT8_VERSION = 1`, `dgroup_seg 0x185f`,
+  `frame_count = N`, `init_size 1445`, `frame_stride 61`), then the INIT record (live
+  tilemap `0x300` via the `0xa0d8` far ptr + the 7×12 anim-channel records via the
+  `0x4c70`/`0x4cbc` slot tables + reserved `entity_state[0x200]` + the 81-byte scalar
+  union), then `FRAME[0]` (INIT-scalar mirror) and one `FRAME[k]` per tick (trailing
+  rng/input + FNV-1a `tilemap_hash` + the assert-set state). The file holds `N+1` frame
+  records; `frame_count = N` matches `tools/int8_ctest.c` `read_trace`/`run_replay` (which
+  loops `k=1..frame_count` over `FRAME[k]`). Every DGROUP field offset is grounded in the
+  per-function oracle gates (`tools/*_oracle.py`). All guest reads via `phys_readb` at
+  `DGROUP(0x185f):offset`.
+
+  Arms only inside a real level (`current_level (0x79b2) >= 1` and `game_mode (0x792c) != 0`)
+  so title/menu/level-intro loop-top hits are skipped; after N tick frames it flushes,
+  closes, and `DoKillSwitch()`es for a clean headless exit. Entirely gated behind
+  `BUMPYCAP_INT8_OUT` (output path) + `BUMPYCAP_INT8_FRAMES` (N) — a run without those env
+  vars is unaffected. `INT8_VERSION` in `int8_trace.h` is the drift guard: on any layout
+  change bump it there and update this emitter (stale traces then hard-fail at load).
