@@ -59,7 +59,7 @@ integrated-DOS dosbox-x; BUMPY.EXE boots and **runs** under it.
   + the input pollers, so it rarely catches the brief `game_loop`/physics frames directly.
 - **Engine state advances under scripted input (SNAP core proven).** A gameplay-state
   read-out in the hook (the per-function gates' globals, read live from DGROUP:
-  `game_mode 0x792c`, `current_level 0x8f40`, `p1_pixel_x/y 0x9290/0x9292`, `score
+  `game_mode 0x792c`, `current_level 0x79b2`, `p1_pixel_x/y 0x9290/0x9292`, `score
   0xa0d4/0xa0d6`) shows them **zeroed pre-gameplay** then, once the FIRE train drives past
   the menu/intro, **advancing every frame**: `p1_pixel_x` locks to the grid start column
   (`15`) while `p1_pixel_y` animates and `game_mode` cycles through movement states. So the

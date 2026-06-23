@@ -193,8 +193,8 @@ struct int8_frame {
 
 #pragma pack(pop)
 
-/* Layout pins — recompute and update the literals on ANY field change (still v1,
- * pre-release).  Values measured on the x86 host (see Task 3 report). */
+/* Layout pins — recompute and update the literals on ANY field change (bump
+ * INT8_VERSION too; currently v3).  Values measured on the x86 host. */
 _Static_assert(sizeof(struct int8_scalars)     ==    85, "int8_scalars layout pinned");
 _Static_assert(sizeof(struct int8_init)        == 19369, "int8_init layout pinned");
 _Static_assert(sizeof(struct int8_frame_state) ==   55, "int8_frame_state layout pinned");
