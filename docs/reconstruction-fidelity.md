@@ -1241,11 +1241,65 @@ stably with CS pinned to the real code segment `0824` and DS toggling to the cor
 `0x3fdd`** — no crash.  It then settles into the title/intro/menu input-wait loop
 (IPs cycling `0824:3f7x`–`408x`).
 
-### OPEN (NEXT blocker — advancing past the title/intro idle loop to set `game_mode`)
+### RESOLVED (Task-9 debug3 — the `0x3f7x`–`0x408x` idle spin was an anim-channel infinite loop)
 
-After the title present, `BUMPYP.EXE` runs a stable wait loop (no crash) but `game_mode` stays 0
-and it does not yet enter the level-1 per-tick gameplay loop.  This is the intro/menu input-advance
-path (`run_main_menu` / `level_intro_screen` `wait_keypress` / the intro animation idle), driven by
-the scripted FIRE pulses — a SEPARATE, non-crash bring-up item (input/script timing or an idle-loop
-leaf that needs the host to advance it), to be addressed next.  The title-present crash that was the
-Task-9 blocker is resolved.
+The "stable wait loop, `game_mode` stays 0" symptom (IPs cycling `0824:3f7x`–`408x`) was NOT a
+starved `wait_keypress` and NOT a re-looping intro — it was an **infinite loop inside
+`draw_anim_channels_a` (anim.c, 1000:165e)**, which `game_tick()` calls every tick.  The game DID
+reach the per-tick `game_tick()` loop; it just never completed a single tick.
+
+Root-cause trace (debug3):
+- Mapped the spin: `ndisasm` of `BUMPYP.EXE` at the live CS:IP `0824:3f76` matched the
+  `mov bl,[bp-4]; shl bx,1; shl bx,1; mov si,ss:[bx-54ae]` channel-loop body; that exact byte
+  signature is found ONLY in `play/anim.obj` → the spin is in `anim.c`.  Sub-mapping by obj offset
+  put it in `step_anim_channels_a` ↔ `draw_anim_channels_a`.
+- Added temporary DGROUP observability (`input_state`@0x9e83, `key[0x1c]`): across the whole run
+  `input_state` stayed 0 even while `key[0x1c]=1` during the FIRE windows — the spin never polls
+  input, so it is not any keypress wait; it is a pure compute loop.
+- `draw_anim_channels_a` / `_b` (and the erase variants) terminate ONLY when a slot's `active`
+  byte reads `0xFF`: `do { slot = anim_channels_a_tbl[i++]; active = slot->active; … } while
+  (active != 0xFF);`.  The slot tables `anim_channels_a_tbl[]` / `anim_channels_b_tbl[]` are
+  far-ptr arrays the engine's level-load path populates with pointers to the per-channel records
+  **plus a 0xFF-terminator record**.  In the reconstruction the records + terminators are anim.c
+  statics, but the table-pointer **wiring** was left to the caller (the ctest harnesses
+  `tools/anim_chan_ctest.c` / `tools/int8_ctest.c` do it).  The **playable build had no such
+  caller** → the tables were all-NULL → the `while (active != 0xFF)` scan dereferenced NULL slots
+  and walked off the array forever (no terminator ever seen).
+
+Fix (`#ifdef BUMPY_PLAYABLE`, host_view.c `init_sprite_structs`): wire the slot tables to the
+anim.c records + 0xFF terminators (the same wiring the harnesses do), at `game_loop`'s one-time
+`init_sprite_structs` setup, before `start_level`/`spawn_and_draw_level_entities` deref the slots.
+The default `BUMPY.EXE` build is unaffected (host_view.c is not compiled there; md5 stays
+`cac9ff236a832284fec6fafff2d8602b`).  This is a host-side WIRING of engine-owned data that the
+slice deferred to the harness — recorded as a Playable-host divergence.
+
+### VERIFIED (Task-9 debug3 — `BUMPYP.EXE` now reaches the level-1 per-tick gameplay loop)
+
+With the anim-wiring fix, `BUMPYP.EXE` boots end-to-end into gameplay (DOSBox headless, the
+deterministic `bumpyp.conf`, boot script `tools/dosbox/scripts/bumpyp-boot.txt`):
+
+```
+frame=70-350   level=1 mode=0   IP 0824:1ddf-1e71 (DGROUP 0x3fe4)   ← run_main_menu (FIRE picks Start)
+frame=385      level=1 mode=4   IP ba51:1218       ← game_mode flips 0→4: PER-TICK GAMEPLAY ENTERED
+frame=385-3500 level=1 mode=4                       ← game_tick() loop runs stably (dispatching to the BGI overlay)
+```
+
+`game_mode` transitions 0→4 at frame 385 and holds `mode=4` (active gameplay) for the rest of the
+run — the documented success criterion (reach the per-tick `game_tick()` region with `mode != 0`).
+The IP at `ba51:1218` is the dynamically-loaded BGI render overlay the per-tick draw path far-calls
+into (with periodic `f000:caXX` BIOS dips), i.e. the engine's per-tick render/timer loop executing.
+
+NB on the runtime DGROUP segment: adding the wiring to `init_sprite_structs` grew the code image by
+0x70 bytes (entry IP 0x9EB0→0x9F20), shifting the runtime DGROUP segment 0x3FDD→**0x3FE4**.  The
+DGROUP-INTERNAL offsets are unchanged (no new globals added), so `BUMPYCAP_OFF_KEYTBL=0x9dbe`,
+`OFF_CURLEVEL=0x05c2`, `OFF_GAMEMODE=0x9eca` stay valid; only `BUMPYCAP_DGROUP` must be `0x3fe4`
+for this build (verified live: `input_state` still at DGROUP 0x9e83, byte-signature confirmed).
+
+Methodology note (recorded so it does not recur): the BUMPYCAP dosbox hook lives in
+`hardware/vga_draw.cpp`, which is archived into `hardware/libhardware.a` before the final link.  A
+plain `make` after editing `vga_draw.cpp` recompiles the `.o` but does NOT always re-archive
+`libhardware.a`, so the relinked `dosbox-x` can silently keep STALE hook code.  After any hook edit,
+force `rm hardware/vga_draw.o hardware/libhardware.a src/dosbox-x` before `make`, and verify with
+`strings src/dosbox-x | grep BUMPYCAP`.  (An earlier debug3 run was misdiagnosed as an "0xa358
+allocator hang" purely because a stale `libhardware.a` ran old hook code; the clean rebuild showed
+the game reaching `mode=4` normally.)

@@ -146,6 +146,35 @@ static u8 __far *hv_saveunder_buf = (u8 __far *)0;
 void init_sprite_structs(void)
 {
     u8 __far *dg;
+    u8        i;
+
+    /* ── HOST: wire the anim-channel slot tables (RECONSTRUCTION FIDELITY) ──────────
+     * In the engine the channel-A/B slot tables (DGROUP 0x4c70/0x4c72 off/seg and
+     * 0x4cbc/0x4cbe) are far-ptr arrays the LEVEL-LOAD path populates with pointers
+     * to the per-channel records plus a 0xFF-terminator record (so the steppers,
+     * the apply_cell_animation allocator, and the draw/erase `do … while
+     * (slot->active != 0xFF)` scans terminate).  The reconstruction keeps the
+     * records as anim.c-owned static storage (anim_a_records / anim_b_records +
+     * anim_a_terminator / anim_b_terminator) and — exactly as the ctest harnesses
+     * (tools/anim_chan_ctest.c, tools/int8_ctest.c) — leaves the table-pointer
+     * WIRING to the caller, since a portable static initialiser cannot take the
+     * address of a far array element across compilers.  The default BUMPY.EXE link
+     * (and its differential ctests) supply this wiring; the playable build had NO
+     * such caller, so the tables stayed all-NULL and game_tick()'s
+     * draw_anim_channels_a `do … while (active != 0xFF)` never found a terminator →
+     * infinite spin (it dereferenced NULL slots forever, never reaching the
+     * per-tick loop body).  Wire them here, at init_sprite_structs (game_loop's
+     * one-time per-game setup, the faithful point this channel-struct init belongs
+     * to), BEFORE start_level / spawn_and_draw_level_entities deref the slots.
+     * Recorded in docs/reconstruction-fidelity.md. */
+    for (i = 0; i < ANIM_A_SLOTS; i = i + 1) {
+        anim_channels_a_tbl[i] = &anim_a_records[i];
+    }
+    anim_channels_a_tbl[ANIM_A_SLOTS] = &anim_a_terminator;
+    for (i = 0; i < ANIM_B_SLOTS; i = i + 1) {
+        anim_channels_b_tbl[i] = &anim_b_records[i];
+    }
+    anim_channels_b_tbl[ANIM_B_SLOTS] = &anim_b_terminator;
 
     dg = level_get_entity_dg();
     if (dg == (u8 __far *)0) {
