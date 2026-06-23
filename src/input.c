@@ -1,4 +1,7 @@
 #include "input.h"
+#ifdef BUMPY_PLAYABLE
+#include "host/host.h"   /* host_keyboard_isr_install */
+#endif
 
 /*
  * input.c — keyboard input layer.  Faithful structural port (Phase-1 Task 5).
@@ -114,6 +117,16 @@ void install_keyboard_isr(void)
 #else
         (void)g_saved_kbd_isr_off;
         (void)g_saved_kbd_isr_seg;
+#endif
+#ifdef BUMPY_PLAYABLE
+        /* Host platform layer: install the real INT9 keyboard ISR (host_input.c).
+           Called after the table is zeroed + buffer flushed, exactly as the engine
+           would install its own ISR at this point in install_keyboard_isr.
+           BUMPY_PLAYABLE is always a real DOS binary (never BUMPY_CTEST), so this
+           runs after the INT 21h/0x35 save above.  The host_input.c ISR uses its
+           own s_old_int9_handler; the g_saved_kbd_isr_off/seg here are retained
+           for structural fidelity to the engine's save/restore scheme. */
+        host_keyboard_isr_install();
 #endif
     }
 }

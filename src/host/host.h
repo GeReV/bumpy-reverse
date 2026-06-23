@@ -27,4 +27,7 @@ void host_fb_init(void);             /* allocate + register the page table into 
 /* Timer */
 extern volatile unsigned host_tick;  /* ISR-incremented frame counter */
 void host_timer_teardown(void);      /* restore old INT8 vector + BIOS PIT divisor */
+/* Keyboard (INT9) */
+void host_keyboard_isr_install(void); /* save old INT9 vector + install host ISR */
+void restore_keyboard_isr(void);      /* restore old INT9 vector (teardown) */
 #endif
