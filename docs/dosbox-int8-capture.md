@@ -1,7 +1,10 @@
 # int8-synced end-to-end capture via an instrumented DOSBox
 
-**Status:** in progress (capture harness bring-up). This documents what is being set
-up, why, and how to reproduce it from a clean checkout.
+**Status:** DONE — the capture harness is built and the int8-synced end-to-end gate
+(`tools/validate_int8.sh`) PASSES: the reconstructed `game_tick()` replays the real
+captured 150-frame level-1 scenario tick-for-tick, every gameplay scalar field matching,
+`--perturb` caught, oracle anchor agreeing. This documents the realised design and how to
+reproduce it from a clean checkout. (See "Design (capture + replay) — as realised" below.)
 
 **Bring-up findings (spike, 2026-06-22/23):** the reproducible build produces a working
 integrated-DOS dosbox-x; BUMPY.EXE boots and **runs** under it.
@@ -172,10 +175,22 @@ reproduces the instrumented emulator.
    tools/dosbox/build-dosbox-x.sh
    ```
 
-3. **Capture** (TODO — driver + config land with the patch):
+3. **Capture** — the instrumented emulator emits the trace directly when run with the
+   capture env vars; no separate driver is needed (the `02-int8-snap-capture.patch`
+   frame-boundary hook does the work). Use the frozen deterministic conf
+   (`tools/dosbox/bumpy-capture.conf`, with the mount path filled in for your tree)
+   and the level-1 scripted-gameplay input (`tools/dosbox/scripts/level1-scripted.txt`):
    ```
-   tools/dosbox/capture.py --script <input-script> --frames N --out local/build/render/int8_trace.bin
+   HOME="$TMPDIR" SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
+     BUMPYCAP_SCRIPT="$PWD/tools/dosbox/scripts/level1-scripted.txt" \
+     BUMPYCAP_INT8_OUT="$PWD/local/build/render/int8_trace.bin" BUMPYCAP_INT8_FRAMES=150 \
+     timeout 200 local/toolchain/dosbox-x-src/src/dosbox-x \
+       -conf <run-conf-with-abs-mount> -nomenu -nogui
    ```
+   `BUMPYCAP_SCRIPT` **must be an absolute path** (the emulator's cwd differs from the
+   shell's). The whole capture→replay→perturb→oracle pipeline is wrapped by the
+   one-command gate **`tools/validate_int8.sh`** (it builds the emulator + captures the
+   trace on demand if either is missing).
 
 ## Environment notes (why the deps step is manual)
 
@@ -184,28 +199,69 @@ Ubuntu archive — so `apt install` of the SDL2 dev headers must be run by a hum
 Everything after the deps step (fetch pinned source from GitHub, patch, build, run) is
 reproducible inside the normal toolchain.
 
-## Design (capture + replay) — for reference
+## Design (capture + replay) — as realised
 
-- **Boundary:** capture once per frame, right after the last state mutation and before
-  `present_frame` (so each SNAP is a fully-advanced tick; render/timing — the stubbed parts —
-  are excluded by construction).
-- **Calibration:** read the load segment after the TinyProg self-unpack (PSP/MCB), map
-  DGROUP (static-image seg 0x203b) + CODE (seg 0x1000) to live linear addresses.
-- **Determinism:** `core=normal`, `cycles=fixed`, frozen config, scripted input.
-- **Input injection:** write the next script entry into the engine's raw key-state table
-  (`g_key_state_table` @ 0x4d42) from the frame hook, then let the real `poll_input` /
-  `read_input_action` pipeline process it — frame-aligned and deterministic, while still
-  exercising the real input path (the keyboard layer itself is already per-function gated).
-- **Frame SNAP:** the union of the gameplay globals the per-function gates already track
-  (p1/p2 pixel x/y, cells, `game_mode`, the move-step counters, score, `items_remaining`,
-  anim-channel records, `current_level`, rng/prng, `input_state`, the round/session flags).
-  Pure render/hardware state (VGA pages, DAC, the sound ISR's private tone frame) is **not**
-  in the SNAP — sidestepping the async-int8 problem the same way the L5 ISR is a documented
-  carve-out elsewhere.
-- **Replay harness (host side):** seed the initial frame, run the reconstructed `game_loop`
-  per-tick body once per captured frame feeding the same input script, assert reconstructed
-  state == captured state each frame. First divergence pinpoints a composition bug.
-- **Trust:** cross-check the DOSBox capture against the per-function oracles at a few
-  boundaries (e.g. the gameplay state at the first physics-fn call should match what
-  `physics_oracle.py` already captured) so the new reference is tied to established ground
-  truth.
+The capture + replay is implemented and the end-to-end gate **passes**: the
+reconstructed `game_tick()` replays the real captured 150-frame level-1 scenario
+tick-for-tick with every gameplay scalar field matching, the `--perturb` differential
+caught, and the oracle calibration anchor agreeing. One-command gate:
+`tools/validate_int8.sh`.
+
+- **Boundary (CS:IP, not a call site):** the SNAP fires at the innermost per-tick loop
+  TOP of `game_loop` — runtime `cs=0x0824, ip=0x0cda` (Ghidra `1000:0cda`, the
+  `rng_frame = rand()` at the loop head). Triggered from the heavy-debug per-instruction
+  hook (`DEBUG_HeavyIsBreakpoint`). At the loop top BEFORE `rand()` runs, `rng_frame` /
+  `input_state` still hold the just-completed tick's TRAILING values, so `FRAME[k>=1]`
+  carries the rng/input that DROVE the tick producing `FRAME[k].state`. (The spec named
+  the `rotate_timing_flags_and_wait` site; the loop top gives a clean symmetric
+  seed/compare — see Task 7 notes.) Arms only inside a real level
+  (`current_level >= 1 && game_mode != 0`).
+- **Calibration:** runtime DGROUP seg `0x185f` (= Ghidra `0x203b − 0x7DC`); offsets are
+  identical to the unpacked image. Confirmed live (`get_key_state` @ `0x4d42`) and
+  cross-checked by `tools/int8_oracle_check.py` (the `update_p1_bbox` pixel→AABB anchor).
+- **Determinism:** `core=normal`, `cycles=fixed 6000`, frozen conf
+  (`tools/dosbox/bumpy-capture.conf`), scripted input
+  (`tools/dosbox/scripts/level1-scripted.txt`).
+- **Input injection:** the `01` hook writes the next script entry into the engine's raw
+  key-state table (`g_key_state_table` @ `0x4d42`); the real `poll_input` /
+  `read_input_action` pipeline then processes it — frame-aligned, deterministic, real
+  input path.
+- **Trace layout (`tools/int8_trace.h`, the authoritative side; the `02` patch mirrors
+  it):** `header(14) + INIT + (N+1)×FRAME(61)`. `INIT` (v3, 19369 B) =
+  `tilemap[0x300]` + 7×12-byte anim records + `entity_state[0x200]` (now the P1/P2
+  sprite-object descriptor pointee blocks — the `+0x14/+0x16` origin words the grid
+  recompute reads) + a `move_data[0x4600]` low-DGROUP static-data window (the
+  move-script `mode_script_tbl`/headers/`[anim,dx,dy]` arrays AND the cell-animation
+  tiledef/frame/grid/pos tables + their tile-def/frame/stream blobs) + an 85-byte scalar
+  union. `FRAME` = trailing `rng`/`input` + a tilemap FNV hash + the 55-byte
+  gameplay-state assert-set. `INT8_VERSION` guards stale traces (hard-fail on mismatch);
+  it is **3** (the read-set was extended twice: v2 added the sprite descriptors +
+  move-script window + `p1_move_script` ptr and fixed the `move_step_count` offset bug,
+  0x855e→0x824c; v3 widened the window to the whole low-DGROUP move+anim static region).
+- **Frame SNAP scalars:** the union of the per-function gates' compared fields (p1/p2
+  pixel x/y, grid cells + history, bbox, `game_mode`/move-step machine, score,
+  `items_remaining`, exit/level/anim state, `move_override`, the round/session flags,
+  …). Pure render/hardware state (VGA pages, DAC, the sound ISR's private tone frame) is
+  **not** in the SNAP — the documented render/sound carve-out partition.
+- **Replay harness (host side, `tools/int8_ctest.c`):** seed the live reconstructed
+  engine globals ONCE from `INIT` (`seed_from_init` — scalars, the tilemap window, the
+  7 anim records, the sprite descriptors, and the move+anim DGROUP window placed into
+  host far-memory at the captured runtime DGROUP linear base so every far-pointer hop
+  resolves 1:1), then per FRAME feed the trailing rng/input, call the REAL `game_tick()`,
+  and compare the evolved scalars against `FRAME[k].state`. First divergence prints
+  `(frame, field, got/want)`. `--perturb` corrupts one seeded field so a tick must
+  diverge.
+- **One precise exclusion (NOT a tolerance):** the per-frame `tilemap_hash` is excluded
+  from the compare. The replay reproduces every gameplay-collision tilemap write 1:1
+  (item-collection, contact-action, cell-animation); the only residual full-tilemap
+  divergence is the **animated-tile FX-graphics layer** (cell+0xa0, e.g. cell `0xc8` =
+  anim-slot cell `0x28` + `0xa0` cycling its displayed tile-graphic +6/tick), written
+  INSIDE the carved-out BGI render core (`render_player_view` → `bgi_set_mode_10` → the
+  un-analyzed EGAVGA overlay handler `1ab9:0db0`). No gameplay-collision callee reads
+  that layer; it is render-only, so it is legitimately excluded from the state-spine
+  SNAP. The collision-layer tilemap is validated per-cell by the items/anim/spawn
+  per-function gates. (See `tools/int8_ctest.c` `run_replay` + `docs/reconstruction-fidelity.md`.)
+- **Trust anchor:** `tools/int8_oracle_check.py` boots the real `BUMPY.EXE` under Unicorn
+  to level 1 and cross-checks the DOSBox capture's INIT + first frames against the
+  `update_p1_bbox` per-function oracle (the closed-form pixel→AABB map) — tying the new
+  reference to established per-function ground truth.

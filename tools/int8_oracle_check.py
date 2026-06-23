@@ -90,14 +90,15 @@ STOP_OFF = 0x0008
 # Trace layout constants — MUST match tools/int8_trace.h byte-for-byte.
 # ---------------------------------------------------------------------------
 INT8_MAGIC = b"BINT"
-INT8_VERSION = 1
+INT8_VERSION = 3
 HEADER_FMT = "<4sHHHHH"
 HEADER_SIZE = struct.calcsize(HEADER_FMT)               # 14
 TILEMAP_SIZE = 0x300
 ANIM_RECS_LEN = 84
 ENTITY_LEN = 0x200
-SCALARS_SIZE = 81
-INIT_SIZE = TILEMAP_SIZE + ANIM_RECS_LEN + ENTITY_LEN + SCALARS_SIZE   # 1445
+MOVE_DATA_LEN = 0x4600   # [move/anim] low-DGROUP static-data window (INT8_VERSION 3)
+SCALARS_SIZE = 85
+INIT_SIZE = TILEMAP_SIZE + ANIM_RECS_LEN + ENTITY_LEN + MOVE_DATA_LEN + SCALARS_SIZE  # 19369
 FRAME_SIZE = 61
 
 # int8_frame_state field layout (55 bytes) — mirrors struct int8_frame_state.
@@ -121,7 +122,8 @@ SCALARS_S16 = ["p1_pixel_x", "p1_pixel_y", "p1_grid_x_new", "p1_grid_y_new",
                "p1_scroll_x", "p1_scroll_y", "pvp_p1_x0", "pvp_p1_x1", "pvp_p1_y0",
                "pvp_p1_y1", "pending_erase_x", "pending_erase_y", "sound_device_state"]
 SCALARS_U16 = ["score_lo", "score_hi", "p2_frame_base", "g_anim_stream_off",
-               "g_anim_stream_seg", "anim_b_stream_off", "anim_b_stream_seg"]
+               "g_anim_stream_seg", "anim_b_stream_off", "anim_b_stream_seg",
+               "p1_move_script_off", "p1_move_script_seg"]
 SCALARS_U8 = ["p1_move_anim", "game_mode", "p1_move_step_idx", "p1_facing_left",
               "p1_move_steps_left", "input_state", "physics_frozen", "move_override",
               "p1_cell", "move_locked", "prev_game_mode", "p1_step_col_count",
@@ -176,7 +178,7 @@ def parse_trace(path: str) -> Tuple[Dict[str, int], Dict[str, int], List[Dict[st
                          % (init_sz, fstride, INIT_SIZE, FRAME_SIZE))
     header = dict(magic=magic, version=ver, dgroup_seg=dg, frame_count=fc,
                   init_size=init_sz, frame_stride=fstride)
-    sc_off = HEADER_SIZE + TILEMAP_SIZE + ANIM_RECS_LEN + ENTITY_LEN
+    sc_off = HEADER_SIZE + TILEMAP_SIZE + ANIM_RECS_LEN + ENTITY_LEN + MOVE_DATA_LEN
     init = parse_scalars(buf, sc_off)
     fr0 = HEADER_SIZE + init_sz
     n_records = (len(buf) - fr0) // FRAME_SIZE   # = frame_count + 1 (FRAME[0] mirror)

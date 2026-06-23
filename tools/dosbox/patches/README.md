@@ -37,11 +37,13 @@ source. No DOSBox fork is vendored — only these patches.
   tick's TRAILING values.
 
   On each armed hit it emits a binary trace whose layout MIRRORS `tools/int8_trace.h`
-  byte-for-byte (header magic `"BINT"`, `version = INT8_VERSION = 1`, `dgroup_seg 0x185f`,
-  `frame_count = N`, `init_size 1445`, `frame_stride 61`), then the INIT record (live
+  byte-for-byte (header magic `"BINT"`, `version = INT8_VERSION = 3`, `dgroup_seg 0x185f`,
+  `frame_count = N`, `init_size 19369`, `frame_stride 61`), then the INIT record (live
   tilemap `0x300` via the `0xa0d8` far ptr + the 7×12 anim-channel records via the
-  `0x4c70`/`0x4cbc` slot tables + reserved `entity_state[0x200]` + the 81-byte scalar
-  union), then `FRAME[0]` (INIT-scalar mirror) and one `FRAME[k]` per tick (trailing
+  `0x4c70`/`0x4cbc` slot tables + `entity_state[0x200]` carrying the P1/P2 sprite-object
+  descriptor pointees + a `move_data[0x4600]` low-DGROUP static window (the move-script +
+  cell-animation tables and their tile-def/frame/stream blobs) + the 85-byte scalar union),
+  then `FRAME[0]` (INIT-scalar mirror) and one `FRAME[k]` per tick (trailing
   rng/input + FNV-1a `tilemap_hash` + the assert-set state). The file holds `N+1` frame
   records; `frame_count = N` matches `tools/int8_ctest.c` `read_trace`/`run_replay` (which
   loops `k=1..frame_count` over `FRAME[k]`). Every DGROUP field offset is grounded in the

@@ -1,8 +1,8 @@
 diff --git i/src/debug/debug.cpp w/src/debug/debug.cpp
-index 44f9b4f..4e5e1d8 100644
+index 44f9b4f..db97d69 100644
 --- i/src/debug/debug.cpp
 +++ w/src/debug/debug.cpp
-@@ -6093,7 +6093,425 @@ void DEBUG_HeavyWriteLogInstruction(void) {
+@@ -6093,7 +6093,456 @@ void DEBUG_HeavyWriteLogInstruction(void) {
  	DEBUG_ShowMsg("DEBUG: Done.\n");
  }
  
@@ -16,7 +16,7 @@ index 44f9b4f..4e5e1d8 100644
 + *  header (host vs. emulator TU), so it MIRRORS the layout byte-for-byte by
 + *  writing each field explicitly little-endian into a flat buffer.  The header's
 + *  INT8_VERSION is the drift guard: the version literal written here MUST equal
-+ *  int8_trace.h's INT8_VERSION (1) or the replay harness (tools/int8_ctest.c
++ *  int8_trace.h's INT8_VERSION (3) or the replay harness (tools/int8_ctest.c
 + *  read_trace) hard-fails the trace.  On ANY int8_trace.h layout change, bump the
 + *  version there AND update this emitter (the static-size checks below catch a
 + *  size drift at runtime).
@@ -60,7 +60,7 @@ index 44f9b4f..4e5e1d8 100644
 +#define BUMPYCAP_TICK_OFF    0x0cdau
 +
 +/* int8_trace.h mirror — constants. */
-+#define BUMPYCAP_INT8_VERSION    1
++#define BUMPYCAP_INT8_VERSION    3
 +#define BUMPYCAP_TILEMAP_SIZE    0x300
 +#define BUMPYCAP_ANIM_A_SLOTS    3
 +#define BUMPYCAP_ANIM_B_SLOTS    4
@@ -68,10 +68,13 @@ index 44f9b4f..4e5e1d8 100644
 +#define BUMPYCAP_ANIM_REC_LEN    12
 +#define BUMPYCAP_ANIM_RECS_LEN   (BUMPYCAP_ANIM_N_SLOTS * BUMPYCAP_ANIM_REC_LEN)   /* 84 */
 +#define BUMPYCAP_ENTITY_LEN      0x200
-+/* fixed record sizes (mirror int8_trace.h _Static_asserts: 81/1445/55/61). */
++/* move-script DGROUP static-data window (INT8_VERSION 2 read-set extension). */
++#define BUMPYCAP_MOVE_DATA_OFF   0x0000u
++#define BUMPYCAP_MOVE_DATA_LEN   0x4600u
++/* fixed record sizes (mirror int8_trace.h _Static_asserts: 85/19369/55/61). */
 +#define BUMPYCAP_HEADER_SIZE      14
-+#define BUMPYCAP_SCALARS_SIZE     81
-+#define BUMPYCAP_INIT_SIZE        (BUMPYCAP_TILEMAP_SIZE + BUMPYCAP_ANIM_RECS_LEN + BUMPYCAP_ENTITY_LEN + BUMPYCAP_SCALARS_SIZE)  /* 1445 */
++#define BUMPYCAP_SCALARS_SIZE     85
++#define BUMPYCAP_INIT_SIZE        (BUMPYCAP_TILEMAP_SIZE + BUMPYCAP_ANIM_RECS_LEN + BUMPYCAP_ENTITY_LEN + BUMPYCAP_MOVE_DATA_LEN + BUMPYCAP_SCALARS_SIZE)  /* 19369 */
 +#define BUMPYCAP_FRAME_STATE_SIZE 55
 +#define BUMPYCAP_FRAME_SIZE       (1 + 1 + 4 + BUMPYCAP_FRAME_STATE_SIZE)   /* 61 */
 +
@@ -103,6 +106,10 @@ index 44f9b4f..4e5e1d8 100644
 +#define OFF_P2_FRAME_BASE    0xa0deu
 +#define OFF_G_ANIM_STREAM    0xa0beu   /* off@0xa0be / seg@0xa0c0 (channel-A working stream) */
 +#define OFF_ANIM_B_STREAM    0xa0c2u   /* off@0xa0c2 / seg@0xa0c4 (channel-B working stream) */
++#define OFF_P1_MOVE_SCRIPT   0xa1acu   /* off@0xa1ac / seg@0xa1ae (live move-script far ptr) */
++#define OFF_P1_SPRITE_FP     0x8884u   /* off@0x8884 / seg@0x8886 -> p1 sprite-object pointee */
++#define OFF_P2_SPRITE_FP     0x9b9eu   /* off@0x9b9e / seg@0x9ba0 -> p2 sprite-object pointee */
++#define BUMPYCAP_SPRITE_DESC_LEN 0x40u /* per-sprite descriptor block captured (covers +0x14/+0x16 origin) */
 +/* u8 */
 +#define OFF_P1_MOVE_ANIM     0x824au
 +#define OFF_GAME_MODE        0x792cu
@@ -124,7 +131,7 @@ index 44f9b4f..4e5e1d8 100644
 +#define OFF_P1_ITEM_CODE     0x79b8u
 +#define OFF_ANIM_TARGET_CELL 0x856fu
 +#define OFF_CURRENT_LEVEL    0x79b2u
-+#define OFF_MOVE_STEP_COUNT  0x855eu   /* aliases p1_step_col_count (same DGROUP slot) */
++#define OFF_MOVE_STEP_COUNT  0x824cu   /* jump_step_counter (DGROUP 0x824c; NOT 0x855e/p1_step_col_count) */
 +#define OFF_G_ANIM_CHANNEL_IDX 0x856cu
 +#define OFF_G_ANIM_CUR_CMD_BYTE 0x8578u
 +#define OFF_ANIM_B_LOOP_IDX  0x8566u
@@ -196,6 +203,8 @@ index 44f9b4f..4e5e1d8 100644
 +	bc_put16(p, bumpycap_rdw(OFF_G_ANIM_STREAM + 2));   /* g_anim_stream_seg */
 +	bc_put16(p, bumpycap_rdw(OFF_ANIM_B_STREAM));       /* anim_b_stream_off */
 +	bc_put16(p, bumpycap_rdw(OFF_ANIM_B_STREAM + 2));   /* anim_b_stream_seg */
++	bc_put16(p, bumpycap_rdw(OFF_P1_MOVE_SCRIPT));      /* p1_move_script_off */
++	bc_put16(p, bumpycap_rdw(OFF_P1_MOVE_SCRIPT + 2));  /* p1_move_script_seg */
 +	/* u8 player/physics flags + cells */
 +	bc_put8(p, bumpycap_rdb(OFF_P1_MOVE_ANIM));
 +	bc_put8(p, bumpycap_rdb(OFF_GAME_MODE));
@@ -375,12 +384,34 @@ index 44f9b4f..4e5e1d8 100644
 +			fwrite(anim, 1, BUMPYCAP_ANIM_RECS_LEN, bc_fp);
 +		}
 +		{
-+			/* entity_state[0x200] reserved — emit zeros (host harness carries it
-+			   but does not yet unpack it; see int8_trace.h). */
-+			uint8_t z[64]; memset(z, 0, sizeof z);
-+			unsigned left = BUMPYCAP_ENTITY_LEN;
-+			while (left > 0) { unsigned n = (left < sizeof z) ? left : sizeof z;
-+			                   fwrite(z, 1, n, bc_fp); left -= n; }
++			/* entity_state[0x200]: now carries the P1/P2 sprite-object descriptor
++			   pointee blocks (INT8_VERSION 2).  p1_update_grid_cell / p2_update_grid_cell
++			   read the sprite origin words at pointee+0x14/+0x16, which feed the COMPARED
++			   grid-cell scalars — so those descriptor bytes are a genuine read-set input.
++			   Layout: [0x00..0x40) = p1_sprite pointee, [0x40..0x80) = p2_sprite pointee,
++			   rest reserved zeros.  Each block is read via its DGROUP far ptr (off,seg). */
++			uint8_t ent[BUMPYCAP_ENTITY_LEN];
++			memset(ent, 0, sizeof ent);
++			for (int s = 0; s < 2; s++) {
++				unsigned fp = (s == 0) ? OFF_P1_SPRITE_FP : OFF_P2_SPRITE_FP;
++				uint16_t off = bumpycap_rdw(fp);
++				uint16_t seg = bumpycap_rdw(fp + 2);
++				PhysPt lin = (PhysPt)(((uint32_t)seg << 4) + off);
++				for (unsigned i = 0; i < BUMPYCAP_SPRITE_DESC_LEN; i++)
++					ent[(unsigned)s * BUMPYCAP_SPRITE_DESC_LEN + i] = phys_readb(lin + (PhysPt)i);
++			}
++			fwrite(ent, 1, BUMPYCAP_ENTITY_LEN, bc_fp);
++		}
++		{
++			/* move_data[0x4600]: the low-DGROUP static-data window @0x0000
++			   (move-script tbl+arrays AND the cell-animation tiledef/frame/grid/pos
++			   tbls + their tile-def/frame/stream blobs), read byte-exact from the live
++			   (loader-relocated) DGROUP so EVERY far-pointer move/anim read resolves
++			   1:1 (INT8_VERSION 3). */
++			for (unsigned i = 0; i < BUMPYCAP_MOVE_DATA_LEN; i++) {
++				uint8_t b = bumpycap_rdb(BUMPYCAP_MOVE_DATA_OFF + i);
++				fwrite(&b, 1, 1, bc_fp);
++			}
 +		}
 +		{
 +			uint8_t sc[BUMPYCAP_SCALARS_SIZE];

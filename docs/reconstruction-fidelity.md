@@ -915,14 +915,77 @@ carve-out boundary mechanically gated.
 
 **Deferred from Phase 9 (the remaining open items):**
 
-1. **int8-synced end-to-end (tick-for-tick) gate** — unchanged from Phases 2–8. The Unicorn
-   capture granularity does not match the engine's physics-frame rate; a frame-accurate capture
-   (the roadmap's DOSBox path) is needed before the full game loop can be replay-validated
-   tick-for-tick. All `src/` validation remains at the per-function / move-step / descriptor /
-   port-write granularity; this is the one standing project-wide validation deferral.
+1. **int8-synced end-to-end (tick-for-tick) gate** — **RESOLVED** (int8-snap, Task 7; see the
+   dedicated section below). A frame-accurate DOSBox capture now drives the reconstructed
+   `game_tick()` tick-for-tick; the gate `tools/validate_int8.sh` PASSES (150-frame replay,
+   every gameplay scalar field matched, `--perturb` caught, oracle anchor agreeing) with one
+   precise documented carve-out (the animated-tile FX-graphics layer, render-core-owned).
 2. **CODES.EXE registration RE** — the separate TinyProg-packed registration binary
    (`CODES.EXE` + `VS.VSN` + `VGUARD.DAT`), orphaned from `BUMPY.EXE` (Phase 7b finding). Its
-   own effort; deferred.
+   own effort; deferred. **(The one remaining project-wide deferral.)**
+
+## int8-synced end-to-end gate — RESOLVED (int8-snap, Task 7)
+
+The project's last standing composition deferral is closed. An **instrumented DOSBox-x**
+(`tools/dosbox/build-dosbox-x.sh` + `tools/dosbox/patches/01`+`02`) captures the REAL
+`BUMPY.EXE` per-tick gameplay loop at the int8 frame boundary (runtime `cs:ip = 0824:0cda`,
+the `game_loop` inner-loop top) into a binary trace (`tools/int8_trace.h` layout), and the
+host harness `tools/int8_ctest.c` replays it: seed the reconstructed engine globals ONCE
+from the captured `INIT`, then per frame feed the trailing `rng`/`input` and call the REAL
+`game_tick()`, asserting the evolved gameplay scalars == the captured `FRAME[k].state`. The
+one-command gate is `tools/validate_int8.sh` (build emulator + capture on demand → OW
+compile-check → build harness → oracle anchor → replay → perturb).
+
+**Result — PASS.** The reconstructed `game_tick()` matches the real captured 150-frame
+level-1 scenario tick-for-tick on **every** gameplay scalar field (the union of the
+per-function gates' compared fields: pixel/grid/bbox, the `game_mode`/move-step machine,
+score, items/exit/level/anim state, `move_override`, the round/session flags, …). The
+`--perturb` differential is caught (corrupting one seeded field diverges tick 0), and the
+calibration trust anchor (`tools/int8_oracle_check.py`, the `update_p1_bbox` pixel→AABB
+oracle booted under Unicorn) agrees on INIT + first frames. This proves the functions
+**compose** into a faithful running game — correct call order, inter-function state flow,
+loop timing — not just that each is faithful in isolation.
+
+**Read-set the gate had to capture (each a genuine input `game_tick` consumes; `INT8_VERSION`
+guards stale traces, bumped on every layout change):**
+
+- **Move-script system (v2/v3).** `p1_step_scripted_move` derefs the `p1_move_script` far
+  ptr each tick, and `enter_game_mode` re-arms it from `mode_script_tbl` (DGROUP 0x2252) →
+  a `[steps,facing,off,seg]` header → the `[anim,dx,dy]` step array. These are
+  loader-relocated static data; without them the first real replay read a NULL far ptr and
+  crashed. Captured as the live `p1_move_script` (off/seg) scalars + a low-DGROUP static
+  window.
+- **Sprite-object descriptors (v2).** `p1/p2_update_grid_cell` read the sprite origin words
+  at the `p1_sprite`/`p2_sprite` pointee `+0x14`/`+0x16` (which feed the COMPARED grid-cell
+  scalars). Captured into the `entity_state` block (previously reserved zeros) and seeded
+  into the host sprite backing buffers.
+- **Cell-animation tables (v3).** `apply_cell_animation` + the anim-channel steppers read
+  the anim far-ptr tables (`anim_a_tiledef_tbl` 0x2ede, `anim_a/b_frame_tbl` 0x3d6a/0x40a6,
+  the grid/pos tables) and follow them to the tile-def/frame/stream blobs. The v2 window was
+  widened (v3) to cover the whole low-DGROUP move+anim static region (0x0000..0x4600) so
+  every far hop resolves 1:1; without them `apply_cell_animation` read a zeroed tile-def and
+  spuriously stamped `tilemap[0x28]=0`, cascading into a `move_override` divergence.
+
+**Capture-calibration bug found + fixed (v2→v3):** the `02` patch read `move_step_count`
+from DGROUP `0x855e` (the `p1_step_col_count` slot) with an incorrect "aliases
+p1_step_col_count" comment. `move_step_count` (`jump_step_counter`) is actually DGROUP
+**`0x824c`** (confirmed live: `gamemode_default_idle` 1000:2905 `MOV byte ptr [0x824c],0x8`).
+The host computed the real value (8); the mis-read capture stored 0. Fixed to 0x824c.
+
+**One precise exclusion (NOT a tolerance) — the render-core animated-tile FX layer.** After
+closing the read-set above, the only residual divergence is the per-frame `tilemap_hash`,
+caused by a single FX cell (e.g. `0xc8` = active anim-slot cell `0x28` + `0xa0`) cycling its
+**displayed tile-graphic index** (+6/tick). That write is produced INSIDE the carved-out BGI
+render core: `draw_anim_channels_a` → `render_player_view` (1000:93b8) → `bgi_set_mode_10` →
+the un-analyzed EGAVGA overlay handler (`1ab9:0db0`) — the documented render-leaf carve-out
+(`src/anim.c` FIDELITY note; `docs/rendering-pipeline.md`). No reconstructed (or original)
+`game_tick` state-callee writes that FX layer (confirmed by decompiling `draw_anim_channels_a`
+/ `step_anim_channels_a` / `render_player_view`), and NO gameplay-collision callee READS it
+(collision reads only `tilemap[cell]`/`+0x30`/`+0x60`, all of which match across all 150
+frames). So `tilemap_hash` is excluded from `run_replay`'s compare with an in-code
+justification; the collision-layer tilemap is validated per-cell by the items/anim/spawn
+per-function gates. This is the render-core partition `validate_integration.sh` already
+asserts — a single named exclusion, not a broad tolerance.
 
 ## Phase-1 slice status (vertical slice — session → loop → modules)
 

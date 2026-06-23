@@ -12,8 +12,30 @@
 #include <stddef.h>
 
 #define INT8_MAGIC   "BINT"
-#define INT8_VERSION 1
+#define INT8_VERSION 3
 #define INT8_TILEMAP_SIZE 0x300   /* matches p1_spine_ctest.c TILEMAP_SIZE */
+
+/* Low-DGROUP static-data window (INT8_VERSION 2/3 read-set extension).
+ * The per-tick P1 spine reads two families of static, loader-relocated DGROUP data
+ * through far pointers that are NOT in the scalar union:
+ *   (a) the MOVE-SCRIPT system — enter_game_mode() reads mode_script_tbl[mode]
+ *       (DGROUP 0x2252) -> a [steps,facing,off,seg] header -> p1_move_script (the
+ *       [anim,dx,dy] step array), and p1_step_scripted_move derefs it every tick;
+ *   (b) the CELL-ANIMATION system — apply_cell_animation()/the anim-channel steppers
+ *       read anim_a_tiledef_tbl (0x2ede), anim_a_frame_tbl (0x3d6a), anim_b_frame_tbl
+ *       (0x40a6), the grid/pos tables (0xf4/0x32be/0x343e/0x3f4) and the tile-def /
+ *       frame-data / byte-stream blobs they point at — which drive the tilemap
+ *       cell-animation writes and the slot stream pointers.
+ * Both families are static data the loader relocated to the runtime DGROUP segment.
+ * Without them a real replay read NULL/zero far ptrs (crash) or zeroed tile-defs
+ * (spurious tilemap writes -> downstream move_override/grid divergence).  We capture
+ * ONE contiguous low-DGROUP window [MOVE_DATA_OFF, +MOVE_DATA_LEN) covering the whole
+ * region (measured extent from the unpacked image: 0x137c..0x41a6), plus the live
+ * p1_move_script far ptr, and seed it into the host far-memory at the captured
+ * runtime DGROUP linear base so every far hop resolves 1:1. */
+#define INT8_MOVE_DATA_OFF 0x0000   /* DGROUP offset of the captured window start  */
+#define INT8_MOVE_DATA_LEN 0x4600   /* covers 0x0000..0x4600 (move + anim static;
+                                       last table anim_b_frame_tbl@0x40a6 ends 0x44a6) */
 
 /* Channel-record table geometry — must match src/anim.h (3 A + 4 B slots, each a
  * 12-byte anim_chan_rec) and tools/spawn_ctest.c / anim_chan_ctest.c's 7*12 SNAP.
@@ -73,6 +95,8 @@ struct int8_scalars {
     uint16_t g_anim_stream_seg; /* [anim] channel-A stream far seg */
     uint16_t anim_b_stream_off; /* [anim] channel-B stream far off */
     uint16_t anim_b_stream_seg; /* [anim] channel-B stream far seg */
+    uint16_t p1_move_script_off;/* [move] live p1_move_script far off (DGROUP 0xa1ac) */
+    uint16_t p1_move_script_seg;/* [move] live p1_move_script far seg (DGROUP 0xa1ae) */
 
     /* ── u8 player/physics flags + cells ── */
     uint8_t  p1_move_anim;      /* [phys] 0x792a-ish move-anim state */
@@ -124,7 +148,11 @@ struct int8_scalars {
 struct int8_init {
     uint8_t  tilemap[INT8_TILEMAP_SIZE];          /* DAT_a0d8 grid */
     uint8_t  anim_channels[INT8_ANIM_RECS_LEN];   /* 3 A + 4 B records, 12 bytes each */
-    uint8_t  entity_state[0x200];                 /* spawn/entity arrays (reserved) */
+    uint8_t  entity_state[0x200];                 /* [v2] [0x00..0x40)=p1_sprite pointee,
+                                                     [0x40..0x80)=p2_sprite pointee (the
+                                                     +0x14/+0x16 origin words p1/p2_update_
+                                                     grid_cell read); rest reserved zeros */
+    uint8_t  move_data[INT8_MOVE_DATA_LEN];       /* [v2/v3] low-DGROUP move+anim static window */
     struct int8_scalars scalars;
 };
 
@@ -167,8 +195,8 @@ struct int8_frame {
 
 /* Layout pins — recompute and update the literals on ANY field change (still v1,
  * pre-release).  Values measured on the x86 host (see Task 3 report). */
-_Static_assert(sizeof(struct int8_scalars)     ==   81, "int8_scalars layout pinned");
-_Static_assert(sizeof(struct int8_init)        == 1445, "int8_init layout pinned");
+_Static_assert(sizeof(struct int8_scalars)     ==    85, "int8_scalars layout pinned");
+_Static_assert(sizeof(struct int8_init)        == 19369, "int8_init layout pinned");
 _Static_assert(sizeof(struct int8_frame_state) ==   55, "int8_frame_state layout pinned");
 _Static_assert(sizeof(struct int8_frame)       ==   61, "int8_frame layout pinned");
 
