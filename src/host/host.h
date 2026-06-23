@@ -24,4 +24,7 @@
 /* the host framebuffer (flat 4-plane RAM image the blitters compose into) */
 extern u8 __huge *host_framebuffer;  /* 4 * HOST_PLANE_SIZE */
 void host_fb_init(void);             /* allocate + register the page table into it */
+/* Timer */
+extern volatile unsigned host_tick;  /* ISR-incremented frame counter */
+void host_timer_teardown(void);      /* restore old INT8 vector + BIOS PIT divisor */
 #endif
