@@ -539,11 +539,14 @@ static int run_replay(const char *path)
     }
 
     for (uint16_t k = 1; k <= hdr.frame_count; k++) {
-        const struct int8_frame *f = &frames[k - 1];   /* FRAME[0] mirrors INIT; we
-                                                           evolve into FRAME[k]. */
+        /* FRAME[k] carries BOTH the trailing rng/input that drive the tick AND the
+           resulting state to assert.  Feed rng/input from the SAME frame we compare
+           against (frames[k], i.e. want) — not frames[k-1] as the original
+           mistakenly did.  Per int8_trace.h: "for k>=1, replay tick k-1 by feeding
+           rng+input then asserting state" — all three live in the same FRAME[k]. */
         const struct int8_frame *want = &frames[k];
-        g_fed_rng   = f->rng;     /* the rng_frame value that drove this tick */
-        g_fed_input = f->input;   /* the input_state value that drove this tick */
+        g_fed_rng   = want->rng;     /* the rng_frame value that drives this tick */
+        g_fed_input = want->input;   /* the input_state value that drives this tick */
         game_tick();
         long got = 0, wv = 0;
         const char *bad = cmp_frame(want, &got, &wv);
@@ -615,15 +618,19 @@ static void write_synth_trace(const char *path, int match)
     init.tilemap[0]     = 0x5a;
     init.tilemap[0x2ff] = 0xa5;
 
-    /* FRAME[0] mirrors the seed; its rng/input drive tick 0 (the only tick). */
+    /* FRAME[0] mirrors the seed (rng/input unused by the corrected loop).
+       FRAME[1] carries the rng/input that DRIVE tick 0 AND the resulting state.
+       Per the corrected run_replay: for k=1, feed frames[1].rng/input, tick, compare
+       frames[1].state — so set f1.rng/f1.input to the exact values fed. */
     struct int8_frame f0, f1;
     memset(&f0, 0, sizeof f0);
     memset(&f1, 0, sizeof f1);
-    f0.rng = 0x00; f0.input = 0x00;
+    /* The rng/input values fed into the single tick: 0x00 / 0x00. */
+    f1.rng = 0x00; f1.input = 0x00;
 
-    /* Compute the TRUE next state: seed, feed f0's rng/input, tick once, snapshot. */
+    /* Compute the TRUE next state: seed, feed f1's rng/input, tick once, snapshot. */
     seed_from_init(&init);
-    g_fed_rng = f0.rng; g_fed_input = f0.input;
+    g_fed_rng = f1.rng; g_fed_input = f1.input;
     game_tick();
     snapshot_state(&f1.state);
     f1.tilemap_hash = int8_tilemap_hash((const uint8_t *)tilemap);
