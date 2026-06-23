@@ -982,6 +982,9 @@ void check_pvp_collision(void)
 /* ── Present/blit leaf stubs — the render-core call sites (see the FIDELITY note at
  *    the head of the T5 section).  Faithful-signature no-ops: they preserve the
  *    wrapper call sites 1:1 without re-driving the Phase-0 work-buffer render core. */
+/* Default build: NOP stubs.  Under -dBUMPY_PLAYABLE the real bodies come from
+ * src/host/host_render.c (blit leaf → validated blitter into the host framebuffer). */
+#ifndef BUMPY_PLAYABLE
 void p2_blit_sprite_leaf(u16 obj_off, u16 obj_seg)
 {
     (void)obj_off; (void)obj_seg;
@@ -997,3 +1000,4 @@ void p2_restore_view_leaf(u8 __far *view)
     (void)view;
     return;
 }
+#endif /* !BUMPY_PLAYABLE */

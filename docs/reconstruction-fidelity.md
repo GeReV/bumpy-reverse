@@ -1024,6 +1024,72 @@ session→loop→module graph:
    loop reaches `start_level` / the per-tick spine it cannot load level data; the
    boot run spins rather than exiting cleanly. Expected and deferred.
 
+## Playable host platform (Plan A — the *Devilution-X*-flavored runnable side)
+
+The playable build (`BUMPYP.EXE`, `wmake play`, all TUs compiled `-dBUMPY_PLAYABLE`)
+links the `src/host/*.c` platform layer instead of the faithful default's
+`game_stubs.c`.  The faithful default build (`BUMPY.EXE`) is **byte-unchanged** by
+this work (verified: md5 identical; `validate_integration.sh` green); every edit to a
+gameplay TU is a minimal `#ifndef BUMPY_PLAYABLE` guard around an existing stub body,
+so the real body comes from the host layer only under the flag.
+
+**Task 2 — host framebuffer + render-leaf binding (`src/host/host_render.c`) — the
+documented CORE render divergence:**
+
+- **Flat 4-plane RAM framebuffer vs VGA A000/A200 hardware.** The original engine
+  blits straight to VGA: the planar blitter programs the Sequencer / Graphics-
+  Controller registers (`out 0x3c4 / 0x3ce` map-mask + bit-mask) and writes into the
+  A000/A200 MMIO window, double-buffering across two VGA pages and presenting via a
+  CRTC start-address page flip.  `host_fb_init` instead allocates a single flat
+  `4 × 0x10000 B` RAM image (`host_framebuffer`) — the SAME memory image the validated
+  blitters (`sprite_blit_planar_vga`, `bg_render_grid`) and the composite gate
+  (`tools/composite_ctest.c`) already produce byte-exact.  The two VGA pages are
+  modelled as byte offsets `0x0000` (page0/a000) and `0x2000` (page1/a200) WITHIN each
+  plane.  `host_video.c`'s present path packs page-0 and copies that RAM image to real
+  VGA.  This is a behavior-faithful **memory model** of the hardware port writes +
+  double-buffer, NOT a 1:1 transcription of the register sequence.
+
+- **Page table as real host globals.** The engine's `sprite_table_base` (DGROUP
+  `0x5415`, two far ptrs page1/page0) and `cur_sprite_data` (DGROUP `0x56e2/0x56e4`,
+  the current draw page) are reconstructed as real C globals in `host_render.c`
+  (`host_sprite_table_off/seg[2]`, `host_cur_sprite_data_off/seg`) pointing into
+  `host_framebuffer`.  In the host memory model the "segment" is a synthetic VGA tag
+  (`0xa000`/`0xa200`) and the page is expressed purely through the `(off,seg)` pair the
+  blitter folds into the dest offset (`view->data_off/data_seg` → `desc[0x08/0x0a]` →
+  `voff`), exactly as `composite_ctest`'s view does.
+
+- **The render-leaf wrappers made real.** The engine's per-tick render leaves
+  (`blit_sprite` 1000:942a, `render_player_view` 1000:93b8, `restore_bg_view`
+  1000:80bc) are far-pointer calls that read the bank / DGROUP entity shadow / active
+  view from globals.  Their gameplay-module stubs (`anim_*_leaf`, `p1_*_leaf`,
+  `p2_*_leaf`) were faithful-signature NOPs because they carry no work-buffer context.
+  Under `BUMPY_PLAYABLE` the real bodies live in `host_render.c`:
+  - **Blit leaves** (`anim_blit_sprite_leaf` / `p1_blit_sprite_leaf` /
+    `p2_blit_sprite_leaf`) resolve the current draw page within `host_framebuffer`,
+    read the populated obj's X/Y/frame from the registered dg shadow at `obj_off`
+    (`0x792e` p1_sprite / `0x795a` p2_sprite), and re-run the **validated**
+    `entity_draw_p1`/`entity_draw_p2` pipeline into the framebuffer — the exact call
+    shape `composite_ctest` uses.  `level.c` registers the bank / dg / framebuffer via
+    `host_render_bind` (the engine's "leaf reads globals" convention).
+  - **View leaves** (`*_render_view_leaf` / `*_restore_view_leaf`) drive the
+    reconstructed `bgi_overlay.c` `render_player_view` / `restore_bg_view` with a
+    code-embedded NOP view (`word00=0xc3fb` / `word0e=0x85b3 > 1`) — STRUCTURAL NOPs in
+    the gameplay context, matching the engine (`present_model.md §5`).  The visible
+    per-tick pixels come solely from the blit leaves.
+  - **Out-of-scope leaves** (`anim_render_leaf_80ac` B-side render leaf, the BGI text
+    leaves) stay faithful NOPs (no clean decomp).
+
+- **`g_planes` aliases `host_framebuffer`.** Under the flag, `level.c`'s static level
+  compose and the per-tick leaf draws share one RAM image (`level_alloc_buffers` calls
+  `host_fb_init` and sets `g_planes = host_framebuffer`), and present blits that image.
+
+- **Validation.** `tools/validate_host_compose.sh` + `tools/host_compose_ctest.c` drive
+  a full level compose (bg → layerC → P1-via-`p1_blit_sprite_leaf` → P2 → layerA →
+  layerB) through the real host render layer and assert `host_framebuffer` ==
+  `composite_ctest`'s validated reference, **plane-for-plane, byte-exact (262144/262144)**.
+  The pixels the playable build composes through the leaves are identical to the
+  already-trusted composite gate.
+
 ## Host/validation tooling (not part of the decompilation)
 
 These are reimplementation/validation artifacts — the *Devilution-X*-flavored side — kept

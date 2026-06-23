@@ -349,6 +349,11 @@ void anim_render_view_leaf(u8 __far *view);       /* render_player_view 1000:93b
 void anim_blit_sprite_leaf(u16 obj_off, u16 obj_seg); /* blit_sprite   1000:942a */
 void anim_render_leaf_80ac(u8 __far *view);       /* FUN_1000_80ac     1000:80ac */
 
+/* The faithful default build defines these leaves as NOP stubs (the engine's
+ * render leaves carry no work-buffer context here — see the note above).  Under
+ * -dBUMPY_PLAYABLE the REAL bodies live in src/host/host_render.c, which routes the
+ * blit leaf through the validated blitter into the host framebuffer. */
+#ifndef BUMPY_PLAYABLE
 void anim_restore_bg_view_leaf(u8 __far *view) { (void)view; return; }
 void anim_render_view_leaf(u8 __far *view)     { (void)view; return; }
 void anim_blit_sprite_leaf(u16 obj_off, u16 obj_seg)
@@ -356,6 +361,7 @@ void anim_blit_sprite_leaf(u16 obj_off, u16 obj_seg)
     (void)obj_off; (void)obj_seg; return;
 }
 void anim_render_leaf_80ac(u8 __far *view)     { (void)view; return; }
+#endif /* !BUMPY_PLAYABLE */
 
 /* ════════════════════════════════════════════════════════════════════════════
  *  draw_anim_channels_a — 1000:165e  (draw the 3 channel-A overlay cells)

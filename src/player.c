@@ -2972,6 +2972,10 @@ void draw_p1_sprite(void)
 /* ── Present/blit leaf stubs (P1 spine) — faithful-signature no-ops; preserve the
  *    render-core call sites 1:1 without re-driving the Phase-0 work-buffer core (the
  *    same convention as player2.c's p2_*_leaf / anim.c's anim_*_leaf). */
+/* Default build: NOP stubs (no work-buffer context here).  Under -dBUMPY_PLAYABLE
+ * the real bodies come from src/host/host_render.c (blit leaf → validated blitter
+ * into the host framebuffer; the view leaves stay NOP per present_model.md §5). */
+#ifndef BUMPY_PLAYABLE
 void p1_render_view_leaf(u8 __far *view)  { (void)view; return; }
 void p1_restore_view_leaf(u8 __far *view) { (void)view; return; }
 void p1_blit_sprite_leaf(u16 obj_off, u16 obj_seg)
@@ -2979,3 +2983,4 @@ void p1_blit_sprite_leaf(u16 obj_off, u16 obj_seg)
     (void)obj_off; (void)obj_seg;
     return;
 }
+#endif /* !BUMPY_PLAYABLE */

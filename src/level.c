@@ -106,6 +106,10 @@
 #include <string.h>
 #include <dos.h>
 #include <malloc.h>    /* _fmalloc, _ffree, halloc, hfree */
+#ifdef BUMPY_PLAYABLE
+#include "host/host.h"  /* host_fb_init / host_framebuffer / host_render_bind */
+void host_render_bind(u8 __huge *bank, u32 bank_base_lin, const u8 __far *dg);
+#endif
 
 /* ── extern: op12 arena (declared in bvec_buf2.c) ─────────────────────────────
    Shared 0x8000-byte decode arena.  We extern it (do NOT redefine); op12.obj
@@ -170,10 +174,22 @@ static int level_alloc_buffers(void)
 {
     /* VGA planes shadow: 4 * 0x10000 = 0x40000 bytes = 256 KB.
        halloc(count, size) allocates huge memory via DOS INT 21h AH=48h. */
+#ifdef BUMPY_PLAYABLE
+    /* Playable host build (Plan A Task 2): the flat 4-plane framebuffer is owned by
+       the host layer (host_render.c).  g_planes aliases host_framebuffer so the
+       static level compose and the per-tick render-leaf draws (host_render.c blit
+       leaves) share one RAM image, and present blits that image to real VGA. */
+    if (g_planes == (u8 __huge *)0) {
+        host_fb_init();
+        g_planes = host_framebuffer;
+        if (g_planes == (u8 __huge *)0) { return -1; }
+    }
+#else
     if (g_planes == (u8 __huge *)0) {
         g_planes = (u8 __huge *)halloc(0x40000UL, 1);
         if (g_planes == (u8 __huge *)0) { return -1; }
     }
+#endif
 
     /* Sprite bank: 0x15c20 bytes = ~87 KB. */
     if (g_bank_buf == (u8 __huge *)0) {
@@ -477,6 +493,14 @@ static void render_level(void)
     bank = g_bank_buf;
     bank_base_lin = (u32)((u32)FP_SEG(g_bank_buf) << 4u) +
                     (u32)FP_OFF(g_bank_buf);
+
+#ifdef BUMPY_PLAYABLE
+    /* Register the render context for the per-tick blit leaves (host_render.c):
+       the engine's blit leaf reads bank / dg / view from globals; we hand it the
+       same three inputs so anim_blit_sprite_leaf / p1_blit_sprite_leaf can re-run
+       the validated blit into host_framebuffer's current draw page. */
+    host_render_bind(bank, bank_base_lin, dg);
+#endif
 
     /* Full-screen sprite viewport (left=0,right=40,top=0,bottom=199,
        height=199, data_off=0, data_seg=0xa000).
