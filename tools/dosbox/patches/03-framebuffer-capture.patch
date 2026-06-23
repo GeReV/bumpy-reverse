@@ -1,8 +1,8 @@
 diff --git i/src/debug/debug.cpp w/src/debug/debug.cpp
-index db97d69..5b13b42 100644
+index db97d69..9735815 100644
 --- i/src/debug/debug.cpp
 +++ w/src/debug/debug.cpp
-@@ -6535,6 +6535,132 @@ static void bumpycap_int8_boundary(void) {
+@@ -6535,6 +6535,143 @@ static void bumpycap_int8_boundary(void) {
  	}
  }
  
@@ -61,12 +61,22 @@ index db97d69..5b13b42 100644
 +	 * playable build (different DGROUP layout) arms correctly too. */
 +	static unsigned fb_off_curlevel = 0x79b2u;
 +	static unsigned fb_off_gamemode = 0x792cu;
++	/* arming DGROUP base — default the ORIGINAL's (BUMPYCAP_DG=0x185f0), but
++	 * env-overridable via BUMPYCAP_DGROUP (hex paragraph, same env patch 01 uses)
++	 * so the playable BUMPYP.EXE (runtime DGROUP 0x3fe4, a different relink) arms
++	 * on ITS current_level/game_mode, not the original's load address.  Default
++	 * unchanged => the int8/original FB path is unaffected. */
++	static PhysPt fb_dg = BUMPYCAP_DG;
 +
 +	if (!fb_inited) {
 +		fb_inited = 1;
 +		const char *out = getenv("BUMPYCAP_FB_OUT");
 +		const char *nf  = getenv("BUMPYCAP_FB_FRAMES");
 +		const char *e;
++		if ((e = getenv("BUMPYCAP_DGROUP")) != NULL) {
++			unsigned dgpara = 0u;
++			if (sscanf(e, "%x", &dgpara) == 1) fb_dg = (PhysPt)(dgpara << 4);
++		}
 +		if ((e = getenv("BUMPYCAP_OFF_CURLEVEL")) != NULL) sscanf(e, "%x", &fb_off_curlevel);
 +		if ((e = getenv("BUMPYCAP_OFF_GAMEMODE")) != NULL) sscanf(e, "%x", &fb_off_gamemode);
 +		if (out != NULL && *out != '\0') {
@@ -84,10 +94,11 @@ index db97d69..5b13b42 100644
 +	}
 +	if (!fb_enabled || fb_done) return;
 +
-+	/* Arm only inside a real level — same gate as the int8 capture. */
++	/* Arm only inside a real level — same gate as the int8 capture.  Reads from
++	 * fb_dg (BUMPYCAP_DGROUP-overridable) so the playable build arms correctly. */
 +	if (!fb_armed) {
-+		uint8_t cur = phys_readb(BUMPYCAP_DG + (PhysPt)fb_off_curlevel);
-+		uint8_t gm  = phys_readb(BUMPYCAP_DG + (PhysPt)fb_off_gamemode);
++		uint8_t cur = phys_readb(fb_dg + (PhysPt)fb_off_curlevel);
++		uint8_t gm  = phys_readb(fb_dg + (PhysPt)fb_off_gamemode);
 +		if (cur < 1u || gm == 0u) return;
 +		fb_armed = 1;
 +	}
@@ -135,7 +146,7 @@ index db97d69..5b13b42 100644
  bool DEBUG_HeavyIsBreakpoint(void) {
  	/* BUMPYCAP int8-SNAP frame-boundary trigger: the innermost per-tick loop top
  	 * of game_loop (runtime cs=0x0824, ip=0x0cda).  Additional to the 01 VGA hook;
-@@ -6543,6 +6669,25 @@ bool DEBUG_HeavyIsBreakpoint(void) {
+@@ -6543,6 +6680,25 @@ bool DEBUG_HeavyIsBreakpoint(void) {
  		bumpycap_int8_boundary();
  	}
  
