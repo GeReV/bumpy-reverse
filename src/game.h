@@ -49,6 +49,12 @@ extern u8 frame_abort_flag;
 
 void run_game_session(void);         /* 1000:0258 */
 void init_game_session_state(void);  /* 1000:0282 */
+#ifdef BUMPY_PLAYABLE
+/* host_view_descriptors_init (game.c, Task 9): bind backing storage to the
+   per-tick view-descriptor far pointers before init_view_anim_descriptors runs.
+   PLAYABLE-only host-leaf; default build byte-unchanged. */
+void host_view_descriptors_init(void);
+#endif
 void reset_game_state(void);         /* 1000:0bf9 */
 void game_loop(void);                /* 1000:0c18 */
 

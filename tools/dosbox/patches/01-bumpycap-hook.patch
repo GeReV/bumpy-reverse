@@ -18,7 +18,7 @@ index 5ec90e1..0040418 100644
  #include "time.h"
  #include "timer.h"
  #include "setup.h"
-@@ -5967,6 +5971,107 @@ Bitu DEBUG_EnableDebugger(void);
+@@ -5967,6 +5971,159 @@ Bitu DEBUG_EnableDebugger(void);
  static void VGA_VerticalTimer(Bitu /*val*/) {
  	double current_time = PIC_GetCurrentEventTime();
  
@@ -40,8 +40,43 @@ index 5ec90e1..0040418 100644
 +		static unsigned bumpycap_sval[512];
 +
 +		/* Runtime DGROUP segment (calibrated: ghidra 0x203b -> 0x185f at run time;
-+		 * runtime offsets identical to the unpacked image). See docs/dosbox-int8-capture.md. */
-+		const PhysPt dg = (PhysPt)0x185f0u;
++		 * runtime offsets identical to the unpacked image). See docs/dosbox-int8-capture.md.
++		 * Overridable via $BUMPYCAP_DGROUP (hex paragraph) so the SAME instrumented
++		 * emulator serves the original BUMPY.EXE (default 0x185f) AND the playable
++		 * BUMPYP.EXE (a different link layout — Task 9 re-derives its DGROUP from the
++		 * logged DS register below).  Default unchanged => the int8 harness is unaffected. */
++		static PhysPt dg = (PhysPt)0x185f0u;
++		/* DGROUP-relative offsets of the read-out / injection globals.  Defaults are
++		 * the ORIGINAL BUMPY.EXE Ghidra offsets (int8 harness unchanged); the playable
++		 * BUMPYP.EXE is a from-scratch Open Watcom relink with a DIFFERENT DGROUP layout,
++		 * so Task 9 overrides them via env (offsets read from local/build/src/BUMPYP.MAP).
++		 * off_keytbl: in the ORIGINAL, DGROUP:0x4d42 is a NEAR POINTER to the 0x80-byte
++		 * key table; in the reconstruction g_key_state_table IS a direct DGROUP array.
++		 * $BUMPYCAP_KEYTBL_DIRECT=1 selects the direct-array form (write dg+off+sc). */
++		static unsigned off_keytbl   = 0x4d42u;   /* orig: pointer; BUMPYP: array base */
++		static unsigned off_curlevel = 0x79b2u;
++		static unsigned off_gamemode = 0x792cu;
++		static int      keytbl_direct = 0;        /* 0 = orig pointer-deref; 1 = direct array */
++		if (!bumpycap_init) {
++			const char *dgs = getenv("BUMPYCAP_DGROUP");
++			if (dgs != NULL) {
++				unsigned dgpara = 0u;
++				if (sscanf(dgs, "%x", &dgpara) == 1) {
++					dg = (PhysPt)(dgpara << 4);
++					LOG_MSG("BUMPYCAP DGROUP override: seg=0x%04x base=0x%05lx",
++						dgpara, (unsigned long)dg);
++				}
++			}
++			{ const char *e;
++			  if ((e = getenv("BUMPYCAP_OFF_KEYTBL"))   != NULL) sscanf(e, "%x", &off_keytbl);
++			  if ((e = getenv("BUMPYCAP_OFF_CURLEVEL")) != NULL) sscanf(e, "%x", &off_curlevel);
++			  if ((e = getenv("BUMPYCAP_OFF_GAMEMODE")) != NULL) sscanf(e, "%x", &off_gamemode);
++			  if ((e = getenv("BUMPYCAP_KEYTBL_DIRECT"))!= NULL) keytbl_direct = atoi(e);
++			  if (off_keytbl != 0x4d42u || off_curlevel != 0x79b2u || keytbl_direct)
++				LOG_MSG("BUMPYCAP offsets: keytbl=0x%04x(direct=%d) curlevel=0x%04x gamemode=0x%04x",
++					off_keytbl, keytbl_direct, off_curlevel, off_gamemode);
++			}
++		}
 +
 +		if (!bumpycap_init) {
 +			bumpycap_init = 1;
@@ -75,10 +110,18 @@ index 5ec90e1..0040418 100644
 +		 * this VGA-render TU; phys_readb is explicitly allowed). Real-mode DOS: physical
 +		 * == linear, so BDA 0040:0049 (current video mode) is physical 0x449. */
 +		uint8_t bumpycap_vmode = phys_readb((PhysPt)0x449u);
++		/* Task-9 gameplay state read-out (DGROUP-relative, code-layout independent):
++		 * current_level (0x79b2) and game_mode (0x792c) prove the playable build
++		 * reached the level-1 per-tick loop.  DS is logged so BUMPYP.EXE's runtime
++		 * DGROUP can be re-derived (it differs from the original's link layout). */
++		uint8_t bumpycap_curlevel = phys_readb(dg + (PhysPt)off_curlevel);
++		uint8_t bumpycap_gamemode = phys_readb(dg + (PhysPt)off_gamemode);
 +		if ((bumpycap_frame % 35u) == 0u || bumpycap_vmode != bumpycap_lastmode) {
-+			LOG_MSG("BUMPYCAP frame=%u vmode=0x%02x CS:IP=%04x:%04x",
++			LOG_MSG("BUMPYCAP frame=%u vmode=0x%02x CS:IP=%04x:%04x DS=%04x level=%u mode=%u",
 +				bumpycap_frame, bumpycap_vmode,
-+				(unsigned)SegValue(cs), (unsigned)reg_ip);
++				(unsigned)SegValue(cs), (unsigned)reg_ip,
++				(unsigned)SegValue(ds), (unsigned)bumpycap_curlevel,
++				(unsigned)bumpycap_gamemode);
 +		}
 +
 +		/* One-shot dump of the live joystick/key handler script for handler 0
@@ -110,10 +153,19 @@ index 5ec90e1..0040418 100644
 +		 * 1=down, 0=up) — uniform across screens (works whether or not the game's
 +		 * INT9 ISR is installed; there is no real keyboard input in the headless run). */
 +		if (bumpycap_n != 0u) {
-+			unsigned tbl = phys_readb(dg + 0x4d42u) | (phys_readb(dg + 0x4d43u) << 8);
++			/* Resolve the key-table BASE: original = near pointer stored at dg+off_keytbl;
++			 * playable (keytbl_direct) = the array lives AT dg+off_keytbl. */
++			PhysPt kbase;
++			if (keytbl_direct) {
++				kbase = dg + (PhysPt)off_keytbl;
++			} else {
++				unsigned tbl = phys_readb(dg + (PhysPt)off_keytbl)
++					| (phys_readb(dg + (PhysPt)off_keytbl + 1u) << 8);
++				kbase = dg + (PhysPt)tbl;
++			}
 +			for (unsigned i = 0; i < bumpycap_n; i++) {
 +				if (bumpycap_sfr[i] == bumpycap_frame) {
-+					phys_writeb(dg + (PhysPt)tbl + (PhysPt)bumpycap_ssc[i], (uint8_t)bumpycap_sval[i]);
++					phys_writeb(kbase + (PhysPt)bumpycap_ssc[i], (uint8_t)bumpycap_sval[i]);
 +					LOG_MSG("BUMPYCAP f=%u key[%02x]=%u", bumpycap_frame, bumpycap_ssc[i], bumpycap_sval[i]);
 +				}
 +			}

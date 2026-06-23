@@ -46,6 +46,9 @@
 #include "video.h"    /* video_set_mode_0d                                      */
 
 #include <stdlib.h>   /* rand() — the engine calls the CRT rand (1000 rand thunk)*/
+#ifdef BUMPY_PLAYABLE
+#include <malloc.h>   /* _fmalloc — back the view-descriptor far pointers (Task 9) */
+#endif
 
 /* init_view_anim_descriptors writes its view-descriptor far-ptr SEG halves as the
    DS register (the runtime DGROUP segment).  The static-image link-time DS literal is
@@ -519,6 +522,75 @@ u8 __far *p2_anim_clear_view_8c8;          /* DGROUP 0x8c8 — P2 anim clear/dra
 u8 __far *p2_anim_clear_view_8cc;          /* DGROUP 0x8cc — P2 anim clear view (b)       */
 u8 __far *p2_anim_erase_view_8d8;          /* DGROUP 0x8d8 — P2 anim erase view (a)       */
 u8 __far *p2_anim_erase_view_8dc;          /* DGROUP 0x8dc — P2 anim erase view (b)       */
+
+#ifdef BUMPY_PLAYABLE
+/* ============================================================================
+ * host_view_descriptors_init — PLAYABLE-BUILD storage binding (Plan A, Task 9)
+ * ----------------------------------------------------------------------------
+ * INTEGRATION FIX (host-leaf; default build byte-unchanged — see note below).
+ *
+ * In the ORIGINAL engine the per-tick view-descriptor structs (p1_view 0x8b8,
+ * p2_view 0x8ec, the channel-A/B anim views 0x8bc..0x8e0, the four unnamed P2-side
+ * anim views 0x8c8..0x8dc, the in-game status render descriptor 0x574, and the
+ * deferred pending-erase view 0x8e4) live as fixed-offset storage inside DGROUP;
+ * the "far pointers" to them (LES BX,[view]) are simply DGROUP addresses set up at
+ * startup.  The reconstruction split each descriptor's POINTER into its own C
+ * global (owned by screens.c / player.c / player2.c / anim.c / game.c) but the
+ * BACKING STORAGE those pointers must reference was never allocated in the binary
+ * itself — only the differential test harnesses (the tools _ctest.c set) bound them
+ * to static buffers.  init_view_anim_descriptors (below) writes THROUGH every one of
+ * these pointers; with them left NULL (BSS-zero = far 0000:0000) the writes land in
+ * the interrupt vector table, and the next host INT8/PIT tick then vectors through
+ * the corrupted IVT → invalid-opcode (#UD) → triple fault.  (Diagnosed in the Task-9
+ * boot bring-up: fault at near-null CS:IP right after init_view_anim_descriptors.)
+ *
+ * This leaf allocates one far block and binds all 15 descriptor pointers to 0x40-byte
+ * slots within it (init_view_anim_descriptors writes at most +0x20 → 0x22 bytes;
+ * 0x40 matches the test harnesses' VIEW_LEN headroom).  Called from the playable
+ * main BEFORE run_game_session (which calls init_view_anim_descriptors).
+ *
+ * RECONSTRUCTION FIDELITY: this is a HOST-PLATFORM storage-binding leaf, not engine
+ * logic.  The original needs no such call (the structs are DGROUP-resident); the
+ * reconstruction's pointer-split layout requires the backing to be bound explicitly.
+ * It is #ifdef BUMPY_PLAYABLE and invoked only from the playable main, so the
+ * default BUMPY.EXE is byte-unchanged.  Recorded in docs/reconstruction-fidelity.md
+ * ("playable host: view-descriptor storage binding").
+ * ============================================================================ */
+#define HV_DESC_LEN   0x40u    /* per-descriptor slot (>= 0x22 written; harness uses 0x40) */
+#define HV_DESC_COUNT 15u      /* 15 view-descriptor pointers bound below */
+
+void host_view_descriptors_init(void)
+{
+    u8 __far *blk;
+    u16 i;
+
+    /* One contiguous far block, zero-initialised, carved into HV_DESC_COUNT slots. */
+    blk = (u8 __far *)_fmalloc((u16)(HV_DESC_LEN * HV_DESC_COUNT));
+    if (blk == (u8 __far *)0) {
+        return;   /* allocation failure — leave pointers NULL (host_view leaves guard) */
+    }
+    for (i = 0; i < (u16)(HV_DESC_LEN * HV_DESC_COUNT); i++) {
+        blk[i] = 0;
+    }
+
+    /* Bind each descriptor pointer to its own 0x40-byte slot. */
+    render_descriptor_ptr  = blk + 0x00u * HV_DESC_LEN;   /* screens.c 0x574 */
+    p1_view                = blk + 0x01u * HV_DESC_LEN;   /* player.c  0x8b8 */
+    p1_erase_view          = blk + 0x02u * HV_DESC_LEN;   /* player.c  0x8c4 */
+    pending_erase_view     = blk + 0x03u * HV_DESC_LEN;   /* player.c  0x8e4 */
+    p2_view                = blk + 0x04u * HV_DESC_LEN;   /* player2.c 0x8ec */
+    p2_erase_view          = blk + 0x05u * HV_DESC_LEN;   /* player2.c 0x8e8 */
+    anim_b_clear_view      = blk + 0x06u * HV_DESC_LEN;   /* anim.c    0x8bc */
+    anim_a_clear_view      = blk + 0x07u * HV_DESC_LEN;   /* anim.c    0x8c0 */
+    anim_b_draw_view       = blk + 0x08u * HV_DESC_LEN;   /* anim.c    0x8d0 */
+    anim_a_erase_view      = blk + 0x09u * HV_DESC_LEN;   /* anim.c    0x8d4 */
+    anim_a_draw_view       = blk + 0x0au * HV_DESC_LEN;   /* anim.c    0x8e0 */
+    p2_anim_clear_view_8c8 = blk + 0x0bu * HV_DESC_LEN;   /* game.c    0x8c8 */
+    p2_anim_clear_view_8cc = blk + 0x0cu * HV_DESC_LEN;   /* game.c    0x8cc */
+    p2_anim_erase_view_8d8 = blk + 0x0du * HV_DESC_LEN;   /* game.c    0x8d8 */
+    p2_anim_erase_view_8dc = blk + 0x0eu * HV_DESC_LEN;   /* game.c    0x8dc */
+}
+#endif /* BUMPY_PLAYABLE */
 
 /* ============================================================================
  * init_view_anim_descriptors — 1000:535e   (Phase-9 T3)

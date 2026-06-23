@@ -91,14 +91,58 @@ void init_timer_resource_table(u16 off, u16 seg)
      * bgi_cur_pos_x/bgi_cur_pos_y.  Not relevant to the host path. */
 }
 
-/* init_joystick_handlers 1000:7532 — zero the joystick handler table.
+/* init_joystick_handlers 1000:7532 — zero the joystick handler table, then (HOST)
+ * install the keyboard handler-script for handler 0.
+ *
  * Engine: zeros g_joystick_handler_table[16] (32 words) then calls
- * calibrate_joystick() twice.  HOST DEVIATION: table zeroed; calibration
- * skipped (keyboard-only Tier 1). */
+ * calibrate_joystick() twice; the keyboard handler SCRIPT for slot 0 is then
+ * populated by a runtime path (decoded from the resolved int8 capture — see
+ * docs/dosbox-int8-capture.md "scancode->input_state map" and src/input.c's
+ * read_input_action note: the script DATA's runtime populator was a Task-1 OPEN
+ * ITEM).  Without slot 0 populated, read_input_action(0) hits its null-script
+ * guard and calls dos_abort() on the FIRST poll_input — which is exactly what
+ * hung the Task-9 boot (run_main_menu's first poll aborted into runaway code,
+ * level/game_mode never advanced).
+ *
+ * HOST IMPLEMENTATION: bind slot 0 to the faithful keyboard handler script
+ * (s_kbd_handler_script below).  Joystick calibration is skipped (keyboard-only
+ * Tier 1) so only slot 0 is populated.
+ *
+ * RECONSTRUCTION FIDELITY (data, not logic): read_input_action (the INTERPRETER)
+ * is reconstructed 1:1.  The script DATA encodes the engine's decoded
+ * scancode->input_state map (the captured g_joystick_handler_table[0] content,
+ * decoded in the int8 bring-up):
+ *     0x01 = UP    (scancode 0x48)
+ *     0x02 = DOWN  (scancode 0x50)
+ *     0x04 = LEFT  (scancode 0x4b)
+ *     0x08 = RIGHT (scancode 0x4d)
+ *     0x10 = FIRE  (scancode 0x1c Enter, 0x39 Space, 0x74)
+ * in read_input_action's opcode format: a leading 0xFD opens phase 2 (skips the
+ * joystick-accumulate loop), then each group is <out-value> <scancode...>,
+ * groups separated by 0xFD, the final group's scancode list ended by 0xFE.
+ * Recorded in docs/reconstruction-fidelity.md ("playable host: keyboard handler
+ * script").  This is #ifdef BUMPY_PLAYABLE host code; default build unchanged. */
+static u8 s_kbd_handler_script[] = {
+    0xFD,                          /* phase-1 delimiter: open the keyboard-group scan */
+    0x01, 0x48,                    /* UP    <- up arrow                                */
+    0xFD,
+    0x02, 0x50,                    /* DOWN  <- down arrow                              */
+    0xFD,
+    0x04, 0x4B,                    /* LEFT  <- left arrow                              */
+    0xFD,
+    0x08, 0x4D,                    /* RIGHT <- right arrow                             */
+    0xFD,
+    0x10, 0x1C, 0x39, 0x74,        /* FIRE  <- Enter / Space / 0x74                    */
+    0xFE,                          /* end final group -> terminate phase 2            */
+};
+
 void init_joystick_handlers(void)
 {
     /* Zero all 16 far-pointer handler slots (matches engine's 32-word loop). */
     memset(g_joystick_handler_table, 0, sizeof(g_joystick_handler_table));
+    /* HOST: bind slot 0 to the faithful keyboard handler script so
+       read_input_action(0) resolves the menu/gameplay keys instead of aborting. */
+    g_joystick_handler_table[0] = (u8 __far *)s_kbd_handler_script;
     /* calibrate_joystick() x2 skipped — keyboard-only host, no joystick HW. */
 }
 
