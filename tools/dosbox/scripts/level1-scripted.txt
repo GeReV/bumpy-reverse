@@ -1,0 +1,125 @@
+# BUMPYCAP level-1 SCRIPTED GAMEPLAY input — boot to gameplay, then drive P1 with
+# the real movement verbs so the int8 capture records ADVANCING physics (not an
+# idle level-intro park).  Consumed by 01-bumpycap-hook.patch (writes the polled
+# key-state table at DGROUP:[0x4d42]+scancode; 1=down, 0=up).
+#
+# Format: <frame-dec> <scancode-hex> <value>   (1=key down, 0=key up; '#'=comment)
+# Deterministic config (core=normal, cycles=fixed 6000) => identical frames per run.
+#
+# Verb / scancode map (confirmed, docs/06-engine.md + game_oracle.py):
+#   UP 0x48   DOWN 0x50   LEFT 0x4b   RIGHT 0x4d   FIRE = Enter 0x1c
+#   boot gates: F2 0x3c (palette) -> F5 0x3f (graphics mode 0x0D) -> Enter past menu.
+#
+# ─── SEGMENT 1: boot to graphics (mirrors boot-to-graphics.txt) ───────────────
+# Gate 1: gfx_driver_init palette select — F2 (0x3c).
+120 3c 1
+300 3c 0
+# Gate 2: second overlay gate — F5 (0x3f); on press the BIOS video mode flips to 0x0D.
+340 3f 1
+348 3f 0
+360 3f 1
+368 3f 0
+380 3f 1
+388 3f 0
+#
+# ─── SEGMENT 2: pass title/menu/level-intro into live gameplay ────────────────
+# FIRE = Enter (0x1c).  A SUSTAINED pulse train is required: the stock single
+# triple-tap reaches level 1 but PARKS in the level-intro wait (game_mode==0, no
+# inner-loop ticks).  A pulse every ~30 frames over 600..3000 drives the engine
+# THROUGH the intro into the per-tick gameplay loop (game_mode cycles 0x03/0x04/0x06).
+# (Task-5 smoke finding: this is what ARMED the capture + reached current_level>=1.)
+600 1c 1
+606 1c 0
+640 1c 1
+646 1c 0
+680 1c 1
+686 1c 0
+720 1c 1
+726 1c 0
+760 1c 1
+766 1c 0
+800 1c 1
+806 1c 0
+840 1c 1
+846 1c 0
+880 1c 1
+886 1c 0
+920 1c 1
+926 1c 0
+960 1c 1
+966 1c 0
+1000 1c 1
+1006 1c 0
+1040 1c 1
+1046 1c 0
+1080 1c 1
+1086 1c 0
+1120 1c 1
+1126 1c 0
+1160 1c 1
+1166 1c 0
+1200 1c 1
+1206 1c 0
+1240 1c 1
+1246 1c 0
+1280 1c 1
+1286 1c 0
+1320 1c 1
+1326 1c 0
+1360 1c 1
+1366 1c 0
+1400 1c 1
+1406 1c 0
+1440 1c 1
+1446 1c 0
+1480 1c 1
+1486 1c 0
+1520 1c 1
+1526 1c 0
+1560 1c 1
+1566 1c 0
+1600 1c 1
+1606 1c 0
+1640 1c 1
+1646 1c 0
+1680 1c 1
+1686 1c 0
+1720 1c 1
+1726 1c 0
+1760 1c 1
+1766 1c 0
+1800 1c 1
+1806 1c 0
+1840 1c 1
+1846 1c 0
+1880 1c 1
+1886 1c 0
+1920 1c 1
+1926 1c 0
+1960 1c 1
+1966 1c 0
+2000 1c 1
+2006 1c 0
+#
+# ─── SEGMENT 3: real movement verbs (the captured gameplay differential) ──────
+# By ~frame 2100 the engine is in the live per-tick loop (capture ARMED).  Now
+# exercise the real verbs in sequence; each segment is a distinct physics path.
+#
+# (a) WALK RIGHT (0x4d) — held ~3s: drives the scripted walk move-step chain
+#     (game_mode 0x03/0x23/0x24), p1_pixel_x advances cell-by-cell.
+2100 4d 1
+2280 4d 0
+# (b) FALL — release all keys, let gravity carry P1 (game_mode 0x04 fall path).
+#     no key down here (gap) for ~1s.
+# (c) WALK LEFT (0x4b) — held ~2s: the mirror walk path, facing flips, px recedes.
+2400 4b 1
+2520 4b 0
+# (d) FIRE (0x1c) at the landing/contact — the contact-action verb (trigger/jump
+#     pending action; gamemode_25/26 contact handlers).
+2600 1c 1
+2606 1c 0
+2640 1c 1
+2646 1c 0
+# (e) WALK RIGHT again briefly to keep advancing through the remaining capture window.
+2700 4d 1
+2900 4d 0
