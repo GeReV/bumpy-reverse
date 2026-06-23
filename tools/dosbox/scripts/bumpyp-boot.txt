@@ -1,0 +1,29 @@
+# BUMPYCAP input script — drive the PLAYABLE BUMPYP.EXE from boot to level-1 gameplay.
+# Format: <frame-dec> <scancode-hex> <value>   (1=key down, 0=key up; '#'=comment)
+# Applied by tools/dosbox/patches/01-bumpycap-hook.patch.  For BUMPYP.EXE the hook is
+# driven with BUMPYCAP_KEYTBL_DIRECT=1 + BUMPYCAP_OFF_KEYTBL=0x99fe (g_key_state_table
+# is a DIRECT DGROUP array in the reconstruction, not the original's near pointer),
+# so it writes the polled key state at DGROUP:0x99fe + scancode.
+#
+# ── NO F2/F5 ──  BUMPYP.EXE hardcodes palette_mode=2 and SKIPS gfx_driver_init's
+# interactive F2/F5 palette-select screen (documented deviation, src/main.c).  So the
+# only input the boot path needs is FIRE = Enter (0x1c), which the seeded keyboard
+# handler script (host_boot.c s_kbd_handler_script) maps to input_state bit 0x10.
+#
+# Gate A: run_main_menu — cursor starts at option 0 (Start); FIRE selects it.
+# Gate B: level_intro_screen / show_level_intro_screen — wait_keypress consumes a FIRE.
+# Deterministic conf (core=normal, cycles=fixed 6000) => identical frames every run.
+#
+# FIRE pulses spaced out so each gate's poll sees a fresh down->up edge.
+200 1c 1
+210 1c 0
+260 1c 1
+270 1c 0
+320 1c 1
+330 1c 0
+400 1c 1
+410 1c 0
+480 1c 1
+490 1c 0
+560 1c 1
+570 1c 0

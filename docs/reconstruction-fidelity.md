@@ -1181,3 +1181,44 @@ clearly separate from the documentary `src/` mirror:
 3. **`restore_bg_view` inner blit**: the outer dispatch wrapper is reconstructed; the inner
    `1ab9:0aa0` bg-tile blitter is NOT separately exposed from `bg_render.c` — it is covered
    there as `bg_tile_run`.  Structural consolidation may be desirable for completeness.
+
+## Playable host build (Plan A, Task 9 — `-dBUMPY_PLAYABLE` / `BUMPYP.EXE`)
+
+These deviations exist ONLY in the `BUMPYP.EXE` playable build (`wmake play`); the default
+`BUMPY.EXE` is byte-identical (md5 `cac9ff236a832284fec6fafff2d8602b`, 233230 B).
+
+- **palette-select screen skip** — `BUMPYP.EXE`'s `main` (src/main.c) hardcodes
+  `palette_mode = 2` and skips `gfx_driver_init`'s interactive F2/F5 graphics/palette-select
+  front-end, going straight to the validated EGA/VGA path + mode 0x0D.  The F2/F5 UI is a
+  hardware-probe/config screen with no gameplay effect once the VGA path is chosen.  The
+  DOSBox boot input script therefore omits F2/F5 (only FIRE pulses).
+- **view-descriptor storage binding** — `host_view_descriptors_init` (game.c) binds the 15
+  per-tick view-descriptor far pointers to one **static DGROUP buffer** (`s_host_view_desc_blk`,
+  0x40 B × 15).  In the original these structs are DGROUP-resident; the reconstruction split
+  each descriptor's POINTER into its own C global without backing storage, so the playable
+  build binds them.  A static DGROUP buffer (not `_fmalloc`) is both faithful (DGROUP-resident)
+  and robust — the first WIP used `_fmalloc`, which returned NULL after `host_fb_init`'s
+  `halloc(256 KB)` exhausted the far heap, leaving the pointers NULL → `LDS BX,render_descriptor_ptr`
+  loaded 0000:0000 → writes corrupted the IVT → triple fault (diagnosed in the Task-9 bring-up).
+- **keyboard handler script** — `init_joystick_handlers` (host_boot.c) seeds slot 0 of
+  `g_joystick_handler_table` with a faithful `read_input_action` script (arrows + FIRE);
+  the original's runtime populator of this table was a Task-1 open item.
+- **16 KB stack** — `wmake play` links with `-k0x4000` (vs the Watcom 2 KB default); the
+  default build's real call depth + host paths overflowed the 2 KB stack at boot.  DGROUP
+  data is ~47 KB so the stack must fit under the 64 KB group limit; 16 KB is the headroom.
+
+### OPEN (Task-9 boot blocker — `BUMPYP.EXE` does not yet reach the per-tick loop)
+
+`BUMPYP.EXE` boots through DOS load → mode 0x0D → `init_game_session_state` →
+`run_game_session` (`current_level = 1`) → `game_loop` → `init_title_graphics` →
+`show_title_background`, then **faults in the title-screen present/iris path**: a `retf`
+at `show_title_background` epilogue (code `0824:5E38`) pops a corrupted return frame
+(`CS=DGROUP IP=stack-low`), so execution runs off into zeroed DGROUP and spins.  The saved
+return address was overwritten earlier in the title/present path (`restore_bg_view` /
+`present_frame` / the iris wipe), ES=A200 (VGA) at the fault.  This is a reconstruction-internal
+defect in the title-screen render path — the FIRST code to actually execute that path end-to-end
+(prior validation was per-function differential only; see open items #2/#3 above re: the
+under-exercised `bgi_overlay`/`restore_bg_view` paths).  It is NOT a Task-9 integration-wiring
+issue (the main entry, call wiring, ISR installs, DGROUP calibration, and view/handler binding
+are all correct and verified to advance the boot).  Next: trace the return-frame overwrite in
+`restore_bg_view`/`present_frame` under the host 4-plane model.

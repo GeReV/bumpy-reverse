@@ -46,9 +46,6 @@
 #include "video.h"    /* video_set_mode_0d                                      */
 
 #include <stdlib.h>   /* rand() — the engine calls the CRT rand (1000 rand thunk)*/
-#ifdef BUMPY_PLAYABLE
-#include <malloc.h>   /* _fmalloc — back the view-descriptor far pointers (Task 9) */
-#endif
 
 /* init_view_anim_descriptors writes its view-descriptor far-ptr SEG halves as the
    DS register (the runtime DGROUP segment).  The static-image link-time DS literal is
@@ -544,10 +541,22 @@ u8 __far *p2_anim_erase_view_8dc;          /* DGROUP 0x8dc — P2 anim erase vie
  * the corrupted IVT → invalid-opcode (#UD) → triple fault.  (Diagnosed in the Task-9
  * boot bring-up: fault at near-null CS:IP right after init_view_anim_descriptors.)
  *
- * This leaf allocates one far block and binds all 15 descriptor pointers to 0x40-byte
- * slots within it (init_view_anim_descriptors writes at most +0x20 → 0x22 bytes;
- * 0x40 matches the test harnesses' VIEW_LEN headroom).  Called from the playable
- * main BEFORE run_game_session (which calls init_view_anim_descriptors).
+ * This leaf binds all 15 descriptor pointers to 0x40-byte slots within ONE static
+ * DGROUP buffer (init_view_anim_descriptors writes at most +0x20 → 0x22 bytes; 0x40
+ * matches the test harnesses' VIEW_LEN headroom).  Called from the playable main
+ * BEFORE run_game_session (which calls init_view_anim_descriptors).
+ *
+ * Why a STATIC DGROUP buffer (not _fmalloc): in the original these structs ARE
+ * DGROUP-resident, so a static DGROUP block is the faithful backing.  It is also
+ * robust: the Task-9 boot bring-up first tried _fmalloc here, but host_fb_init's
+ * preceding halloc(4*0x10000 = 256 KB) huge-block allocation exhausted the far heap,
+ * so _fmalloc returned NULL, the binder early-returned, every descriptor pointer was
+ * left BSS-zero (far 0000:0000), and show_title_background's
+ * `LDS BX,render_descriptor_ptr` then loaded DS:BX = 0000:0000 and wrote the view
+ * fields straight into the interrupt vector table — the next PIT/INT8 tick vectored
+ * through the corrupted IVT and the CPU ran off into DGROUP (diagnosed live: DS→0000,
+ * a far-RET popping CS=DGROUP, IP sliding through zeroed BSS).  A static buffer has
+ * no allocation to fail and matches the engine's DGROUP-resident layout.
  *
  * RECONSTRUCTION FIDELITY: this is a HOST-PLATFORM storage-binding leaf, not engine
  * logic.  The original needs no such call (the structs are DGROUP-resident); the
@@ -559,16 +568,17 @@ u8 __far *p2_anim_erase_view_8dc;          /* DGROUP 0x8dc — P2 anim erase vie
 #define HV_DESC_LEN   0x40u    /* per-descriptor slot (>= 0x22 written; harness uses 0x40) */
 #define HV_DESC_COUNT 15u      /* 15 view-descriptor pointers bound below */
 
+/* Static DGROUP backing for the 15 view descriptors (faithful: DGROUP-resident; no
+ * far-heap dependency).  Zero-initialised by the C runtime (BSS). */
+static u8 s_host_view_desc_blk[HV_DESC_LEN * HV_DESC_COUNT];
+
 void host_view_descriptors_init(void)
 {
     u8 __far *blk;
     u16 i;
 
-    /* One contiguous far block, zero-initialised, carved into HV_DESC_COUNT slots. */
-    blk = (u8 __far *)_fmalloc((u16)(HV_DESC_LEN * HV_DESC_COUNT));
-    if (blk == (u8 __far *)0) {
-        return;   /* allocation failure — leave pointers NULL (host_view leaves guard) */
-    }
+    /* Far pointer to the static DGROUP block, then zero it (idempotent re-init). */
+    blk = (u8 __far *)s_host_view_desc_blk;
     for (i = 0; i < (u16)(HV_DESC_LEN * HV_DESC_COUNT); i++) {
         blk[i] = 0;
     }

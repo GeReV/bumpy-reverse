@@ -76,8 +76,16 @@ PLAY_OBJS = &
     $(PLAYDIR)/dosio.obj $(PLAYDIR)/prng.obj $(PLAYDIR)/globals.obj &
     $(PLAYDIR)/bvec_buf1.obj $(PLAYDIR)/bvec_buf2.obj
 
+# Stack size: the Watcom default DOS stack is 2 KB (-k not given), too small for the
+# playable build's real call depth + the 500 Hz host INT8 ISR frames — the Task-9 boot
+# bring-up overflowed it (SP ran below __STACKLOW into BSS, CS:IP fell off the end of
+# DGROUP).  DGROUP data is already ~47 KB, so the stack must fit in the remaining
+# 64 KB room: 0x4000 (16 KB) → DGROUP ~63 KB, under the 64 KB group limit.
+# Default build (BUMPY target above) is untouched, so its byte-image is unchanged.
+PLAY_STACK = 0x4000
+
 play: .SYMBOLIC $(PLAY_OBJS)
-	mkdir -p $(OUTDIR) && $(LINK) $(LFLAGS) -fe=$(PLAY) $(PLAY_OBJS)
+	mkdir -p $(OUTDIR) && $(LINK) $(LFLAGS) -k$(PLAY_STACK) -fe=$(PLAY) $(PLAY_OBJS)
 
 # host TUs — compile WITH -dBUMPY_PLAYABLE from host/ subdir.
 $(PLAYDIR)/host_video.obj: host/host_video.c
