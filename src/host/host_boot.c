@@ -76,7 +76,13 @@
 #include <string.h>      /* memset */
 
 /* init_timer_resource_table 1000:7bad (bgi_overlay_thunk_adab) — BGI cur-pos
- * store.  BENIGN NO-OP: BGI overlay not installed in the host build. */
+ * store.  BENIGN NO-OP: BGI overlay not installed in the host build.
+ *
+ * NOTE (name↔body uncertainty): the function name implies timer + resource-table
+ * init, but the Ghidra body at 1000:7bad is a BGI-overlay thunk.  The no-op is
+ * correct for the host (BGI overlay absent), but the name↔body mapping is
+ * uncertain — this may be a mislabel.  Do NOT treat the no-op as cementing a
+ * verified name↔body match. */
 void init_timer_resource_table(u16 off, u16 seg)
 {
     (void)off;
@@ -127,7 +133,11 @@ void set_disk_swap_callback(u16 int24_handler, u16 callback)
 
 /* set_resource_table 1000:7307 — store the resource-descriptor table far ptr.
  * BENIGN NO-OP: level.c start_level bypasses the resource table and builds
- * filenames directly (see level.c RECONSTRUCTION FIDELITY note #3). */
+ * filenames directly (see level.c RECONSTRUCTION FIDELITY note #3).
+ *
+ * TODO: populate resource_table_ptr once resource management is reconstructed.
+ * Until then this stub must not be treated as permanently complete — the engine
+ * does set this pointer, and a future faithful pass will need to wire it up. */
 void set_resource_table(u16 off, u16 seg)
 {
     (void)off;
@@ -167,8 +177,23 @@ void reset_opaque_session_globals(void)
  * See docs/reconstruction-fidelity.md row "host_boot.c". */
 void load_current_level_data(void)
 {
-    /* Reload the current level's resources via the real INT 21h file path.
-     * current_level is the 1-based level index (defined in level.c). */
+    /* HOST STAND-IN for engine's lightweight 0x32b0 header-copy (1000:32b0).
+     * The engine copies the current level's 0x96-byte header from the in-memory
+     * level archive (cur_level_ptr far pointer) — it does NOT re-read files.
+     * Here we call start_level(current_level, current_level) as a substitute
+     * because the host never populates the in-memory archive.
+     *
+     * DOUBLE-LOAD NOTE: game_loop (game.c ~line 345) ALSO calls start_level
+     * directly at the top of each round.  As a result start_level runs TWICE
+     * per round: once here (via reset_game_state → load_current_level_data) and
+     * once in game_loop itself.  This is harmless — start_level is idempotent
+     * (overwrites the same static buffers with the same data, and has no path
+     * back to reset_game_state, so there is no recursion) — but it is wasteful.
+     *
+     * TODO (future faithful pass): implement the real 1000:32b0 lightweight copy
+     * (copy 0x96 bytes from the in-memory level archive into the tilemap buffer)
+     * and remove this start_level call.  Cross-ref: game_loop (game.c ~345) and
+     * engine addr 1000:32b0. */
     start_level(current_level, current_level);
 }
 
