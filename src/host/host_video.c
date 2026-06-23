@@ -77,10 +77,17 @@ void init_crtc_window(u16 a, u16 b, u16 c, u16 d)
     u16 start = a;   /* select page 0 CRTC start address at init */
     (void)b; (void)c; (void)d;
 
-    /* Write CRTC Start Address HI (index 0x0C). */
+    /* Write CRTC Start Address HI (index 0x0C) then LO (index 0x0D).
+     * RECONSTRUCTION FIDELITY — UNGUARDED CRTC WRITE (DELIBERATE):
+     * The HI/LO pair is written as two non-atomic outp calls with no
+     * interrupt guard (_disable/_enable).  This is intentional: the CRTC
+     * latches the start address only at vertical retrace, so the corruption
+     * window is benign in practice.  The original engine's CRTC programming
+     * at this site is unresolved, and almost certainly uses the same unguarded
+     * pair — adding a guard the original lacks would be LESS faithful.  Revisit
+     * only if the original's CRTC sequence is recovered and shown to guard. */
     outp(CRTC_INDEX, CRTC_START_HI);
     outp(CRTC_DATA,  (u8)((start >> 8u) & 0xFFu));
-    /* Write CRTC Start Address LO (index 0x0D). */
     outp(CRTC_INDEX, CRTC_START_LO);
     outp(CRTC_DATA,  (u8)(start & 0xFFu));
 }
@@ -141,6 +148,12 @@ void set_display_page(u8 page)
     } else {
         start = CRTC_PAGE0_ADDR;  /* page 0: A000:0000 */
     }
+    /* RECONSTRUCTION FIDELITY — UNGUARDED CRTC WRITE (DELIBERATE):
+     * Same rationale as init_crtc_window above: the HI/LO pair is written
+     * without an interrupt guard because the original engine's page-flip code
+     * is unresolved and almost certainly does the same; the CRTC latches start
+     * address at vretrace so the tear window is benign.  Do not add a guard
+     * the original lacks.  Revisit if the original's CRTC sequence is recovered. */
     outp(CRTC_INDEX, CRTC_START_HI);
     outp(CRTC_DATA,  (u8)((start >> 8u) & 0xFFu));
     outp(CRTC_INDEX, CRTC_START_LO);
@@ -161,13 +174,18 @@ void clear_viewport(void)
     u8 plane;
     u8 __far *vga_page0;
     u8 __far *vga_page1;
-    u32 i;
 
-    /* Zero the host framebuffer (4-plane flat RAM image, 4 * HOST_PLANE_SIZE). */
+    /* Zero the host framebuffer (4-plane flat RAM image, 4 * HOST_PLANE_SIZE = 256 KB).
+     * Open Watcom's _fmemset size argument is 16-bit (unsigned int, max 0xFFFF), so a
+     * single call cannot span the full 64 KB plane (0x10000 bytes).  We split each
+     * plane into two 0x8000-byte halves.  4 planes × 2 halves × 0x8000 = 256 KB total.
+     * _hmemset is not available in this Open Watcom -ml DOS model build. */
     if (host_framebuffer != (u8 __huge *)0) {
-        u32 total = 4UL * HOST_PLANE_SIZE;
-        for (i = 0; i < total; i++) {
-            host_framebuffer[i] = 0u;
+        u8 p;
+        for (p = 0u; p < 4u; p++) {
+            u8 __far *base = (u8 __far *)(host_framebuffer + (u32)p * HOST_PLANE_SIZE);
+            _fmemset(base,            0, (u16)0x8000u);
+            _fmemset(base + 0x8000u,  0, (u16)0x8000u);
         }
     }
 
