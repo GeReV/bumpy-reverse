@@ -56,3 +56,34 @@ source. No DOSBox fork is vendored — only these patches.
   `BUMPYCAP_INT8_OUT` (output path) + `BUMPYCAP_INT8_FRAMES` (N) — a run without those env
   vars is unaffected. `INT8_VERSION` in `int8_trace.h` is the drift guard: on any layout
   change bump it there and update this emitter (stale traces then hard-fail at load).
+
+- **`03-framebuffer-capture.patch`** — the per-frame VGA `A000` 4-plane framebuffer dump,
+  applied ON TOP of `01`+`02` (it adds a second hook to the same `DEBUG_HeavyIsBreakpoint`
+  in `src/debug/debug.cpp`; `01`/`02` are unchanged). It is the rendered-pixel companion to
+  `02`'s int8 state SNAP: it dumps the displayed VGA page so the playable `BUMPYP.EXE`'s
+  rendered frames can be diffed pixel-for-pixel against the original `BUMPY.EXE`'s (the
+  Task-11 frame-compare gate).
+
+  The trigger is the SAME per-tick loop TOP as `02` (so an FB frame lines up 1:1 with the
+  int8 tick at that loop iteration — the just-presented frame), but the trigger CS:IP is
+  **env-overridable** (`BUMPYCAP_FB_TRIG_CS` / `BUMPYCAP_FB_TRIG_IP`, hex), default = the
+  original's `cs=0x0824 ip=0x0cda`, so Task 11 can retarget the playable relink's different
+  code offsets. Arming reuses the in-level gate (`current_level >= 1 && game_mode != 0`),
+  honoring the `01`-overridable offsets `BUMPYCAP_OFF_CURLEVEL` / `BUMPYCAP_OFF_GAMEMODE`.
+
+  **VGA planar read:** dosbox-x does NOT store VGA RAM in the system memory image, so
+  `phys_readb(0xA0000)` is wrong (it reads unmapped system RAM = `0xFF`). Instead the planes
+  are read the way the renderer does — from `vga.mem.linear[]`, which holds the 4 planes
+  INTERLEAVED as one byte each per byte-offset (the EGA latch dword; see
+  `VGA_Generic_Read_Handler` in `src/hardware/vga_memory.cpp`): plane P at byte offset `off`
+  = `vga.mem.linear[(off*4 + P) & memmask]`. The displayed page is selected by the CRTC Start
+  Address (`vga.crtc.start_address_high`/`_low`, word units): page0 → byte 0, page1 → byte
+  `0x2000` (the original double-buffers `A000`(page0)/`A200`(page1) at the same linear
+  addresses, masked to the `A000` 16KB aperture). `VGA_PLANE_BYTES = 0x1F40` (8000 =
+  320×200/8, the visible area) bytes per plane are read.
+
+  **Record:** per frame = 4 planes × `0x1F40` bytes, plane order 0,1,2,3 — a flat raw stream,
+  no header. Total file = `frames * 4 * 0x1F40`. Lifecycle mirrors `02`: env-gated init,
+  in-level arm, one record per armed hit, then flush/close + `DoKillSwitch()` after N frames.
+  Entirely gated behind `BUMPYCAP_FB_OUT` (output path) + `BUMPYCAP_FB_FRAMES` (N, default 150)
+  — a run without those env vars is unaffected.
