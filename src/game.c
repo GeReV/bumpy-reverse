@@ -265,6 +265,55 @@ void reset_game_state(void)
  * the named owned global and the local key byte is `key`.  The control flow,
  * comparisons (`== -1`, `== 1`, `!= 0`), and call order are reproduced verbatim.
  * ============================================================================ */
+
+/* ============================================================================
+ * game_tick — one iteration of game_loop's innermost per-tick loop.
+ * ----------------------------------------------------------------------------
+ * RECONSTRUCTION FIDELITY (extraction-only deviation): the original game_loop
+ * (1000:0c18) inlines this body inside its innermost `while` (game.c 331-367).
+ * It is extracted here VERBATIM — same statements, same order — so the int8
+ * end-to-end harness (tools/int8_ctest.c) can drive one tick at a time.  No
+ * statement is added, removed, or reordered.  Recorded in the fidelity audit.
+ * ============================================================================ */
+void game_tick(void)
+{
+    u8 key;
+
+    rng_frame = (u8)rand();
+    p1_advance_grid_history();
+    p2_advance_grid_history();
+    p1_step_scripted_move();
+    p2_step_scripted_move();
+    p1_update_grid_cell();
+    p2_update_grid_cell();
+    step_anim_channels_a();
+    step_anim_channels_b();
+    erase_p2_view();
+    erase_p1_view();
+    restore_bg_pending();
+    draw_anim_channels_a();
+    draw_anim_channels_b();
+    update_p1_bbox();
+    update_p2_bbox();
+    erase_anim_channels_a();
+    erase_anim_channels_b();
+    render_p1_view();
+    render_p2_view();
+    draw_p1_sprite();
+    draw_p2_sprite();
+    present_frame(1);
+    rotate_timing_flags_and_wait();
+    game_post_present();
+    handle_gameplay_input();
+    p2_tile_move_check();
+    check_pvp_collision();
+    game_post_input();
+    key = get_key_state(0x19);
+    if (key != 0) {
+        show_pause_screen();
+    }
+}
+
 void game_loop(void)
 {
     u8 key;
@@ -331,39 +380,7 @@ LAB_0c2c:
                     while (frame_abort_flag == 0 &&
                            session_continue_flag == 0 &&
                            round_continue_flag == 0) {
-                        rng_frame = (u8)rand();
-                        p1_advance_grid_history();
-                        p2_advance_grid_history();
-                        p1_step_scripted_move();
-                        p2_step_scripted_move();
-                        p1_update_grid_cell();
-                        p2_update_grid_cell();
-                        step_anim_channels_a();
-                        step_anim_channels_b();
-                        erase_p2_view();
-                        erase_p1_view();
-                        restore_bg_pending();
-                        draw_anim_channels_a();
-                        draw_anim_channels_b();
-                        update_p1_bbox();
-                        update_p2_bbox();
-                        erase_anim_channels_a();
-                        erase_anim_channels_b();
-                        render_p1_view();
-                        render_p2_view();
-                        draw_p1_sprite();
-                        draw_p2_sprite();
-                        present_frame(1);
-                        rotate_timing_flags_and_wait();
-                        game_post_present();             /* 1000:629c */
-                        handle_gameplay_input();
-                        p2_tile_move_check();
-                        check_pvp_collision();
-                        game_post_input();                /* 1000:233a */
-                        key = get_key_state(0x19);
-                        if (key != 0) {
-                            show_pause_screen();
-                        }
+                        game_tick();
                     }
                     if (frame_abort_flag != (u8)-1) {
                         break;

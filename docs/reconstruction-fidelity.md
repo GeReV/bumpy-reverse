@@ -860,6 +860,8 @@ new structural gate that enforces it.
   (233 230 bytes, no duplicate symbols); 39 spine callees all in real module `.obj`; 58 stub
   symbols all allowlisted carve-outs. No-regression across the full gate set (see the Phase-9
   consolidated status below).
+- **`game_tick` (game.c) — extraction-only factoring of `game_loop`'s innermost per-tick loop
+  body for the int8 end-to-end harness; verbatim statements, no reorder.**
 
 ## Phase-9 status (final integration — spine wiring + dispatch resolution)
 

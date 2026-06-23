@@ -52,6 +52,13 @@ void init_game_session_state(void);  /* 1000:0282 */
 void reset_game_state(void);         /* 1000:0bf9 */
 void game_loop(void);                /* 1000:0c18 */
 
+/* game_tick — one iteration of game_loop's innermost per-tick loop (game.c
+   331-367), factored out so the int8 end-to-end harness can drive the per-tick
+   body once per captured tick.  RECONSTRUCTION FIDELITY: pure extraction — the
+   statement sequence and order are byte-identical to the inline loop body; no
+   reordering, no added logic.  See docs/reconstruction-fidelity.md. */
+void game_tick(void);
+
 /* ── Session/loop spine callees (forward declarations) ────────────────────────
  * These declare the engine functions the session/loop spine transitively calls,
  * so game.c compiles as a structure-faithful mirror.  As of Phase-9 T4 MOST have
