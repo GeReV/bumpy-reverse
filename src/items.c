@@ -57,7 +57,7 @@ extern void apply_cell_animation(u8 fx);    /* 1000:69aa — anim-channel alloc 
 /* Player-spine callees the exit/teleport functions invoke (owned by player.c, all
    reconstructed there in Phase 2).  enter_game_mode + dispatch_move_step write
    game_mode/the move-step dispatch (NOT in the validated SNAP); p1_set_pixel_from_cell
-   writes move_step_count + p1_pixel_y from the cell-coord table (IN the SNAP — so it
+   writes p1_step_col_count (0x855e) + p1_pixel_y from the cell-coord table (IN the SNAP — so it
    is a faithful reconstruction in player.c, not a stub). */
 extern void enter_game_mode(u8 mode);       /* 1000:4263 — game-mode transition       */
 extern void dispatch_move_step(void);       /* 1000:238e — move-step sub-dispatch      */
