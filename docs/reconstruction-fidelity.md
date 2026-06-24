@@ -1357,3 +1357,18 @@ INT6 storm is eliminated (5.7M hits → 0). NOTE: full headless mode-4 gameplay 
 pending — recompiling shifts the BUMPYCAP injection calibration (DGROUP/keytbl offsets) so the
 scripted menu-drive needs re-derivation; interactive keyboard play (which needs no calibration)
 is the confirmation. Default `BUMPY.EXE` unchanged (host_view.c is play-only; md5 cac9ff23).
+
+UPDATE (hardening + audit): the first fix seeded only p2_state_handler_tbl[1..4] (the indices
+tools/p2_ctest.c's captured scenario exercises).  Interactive play still crashed — P2 is
+AI-controlled (active even in 1-player), so its move_state at dispatch can be an index outside
+1..4 (0, or the engine's other states), which was still a NULL slot → the same INT6 storm.
+HARDENED: seed ALL 16 slots — [1..4] = the four p2_cell_move_* handlers, the rest = a safe host
+no-op (hv_p2_state_noop) — so no slot can be a NULL far-call.  DIVERGENCE: faithful values for the
+non-1..4 slots are unknown; the no-op prevents the crash (documented).  AUDIT: a disassembly scan of
+ALL playable objects for indirect far-call dispatch (`call dword ptr [...]`) finds p2_state_handler_tbl
+(player2.obj 049E) is the ONLY such table in the gameplay path — P1's game_mode_handlers[] is a
+fully-initialised C array, the move-step dispatch goes through move_step_handler_for_offset, and the
+0x870 P2 path (p2_dispatch_move_state_handler) is a clean empty stub.  So this fully closes the
+wild-far-call (INT6) crash class.  NOTE: not yet re-verified in headless gameplay — the scripted-input
+calibration (DGROUP/keytbl offsets) drifts every recompile, leaving the automated drive stuck at the
+title wait; interactive keyboard play is the confirmation.  Default BUMPY.EXE unchanged (cac9ff23).

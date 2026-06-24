@@ -138,6 +138,14 @@ static u8 __far *hv_saveunder_buf = (u8 __far *)0;
  * seeded in init_sprite_structs.  16 far code-ptr slots, [1..4] = the cell-move
  * handlers (see the wiring note in init_sprite_structs). */
 static void (__far *hv_p2_state_handlers[16])(void);
+
+/* Safe no-op for the table slots the engine's captured data does not cover (index 0
+ * and 5..15).  p2_ctest only ever exercises move_states 1..4; the original's other
+ * entries are unknown, so the playable build points them at this no-op rather than
+ * leave them NULL (a NULL slot is an indirect far-call to 0000:0000 → invalid-opcode
+ * storm).  DIVERGENCE: faithful values for these slots are not recovered; documented
+ * in docs/reconstruction-fidelity.md. */
+static void __far hv_p2_state_noop(void) {}
 #define HV_SAVEUNDER_SIZE (4u * 0x1F40u)   /* 4 planes × 8000 B = 32000 B */
 
 /* ── init_sprite_structs — 1000:33c5 ───────────────────────────────────────────
@@ -205,7 +213,7 @@ void init_sprite_structs(void)
      * four cell-move handlers at their captured/natural indices (1..4), identical to
      * p2_ctest, and point the shadow at it.  Recorded in docs/reconstruction-fidelity.md. */
     for (i = 0; i < 16u; i = i + 1) {
-        hv_p2_state_handlers[i] = (void (__far *)(void))0;
+        hv_p2_state_handlers[i] = hv_p2_state_noop; /* no NULL slots (see note) */
     }
     hv_p2_state_handlers[1] = p2_cell_move_up;      /* cell -= 8 (row up)    */
     hv_p2_state_handlers[2] = p2_cell_move_down;    /* cell += 8 (row down)  */
