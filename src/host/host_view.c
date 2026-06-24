@@ -9,6 +9,16 @@
                                   palette_mode, draw_number, upload_vga_dac_palette,
                                   play_iris_wipe_transition */
 #include "../anim.h"          /* p1_sprite */
+
+/* P2 move-state handler table + its four cell-move handlers (player2.c).  Declared
+ * locally rather than via player2.h: that header and game.h carry an inconsistent
+ * p2_step_scripted_move prototype that only collides when both are pulled into one
+ * TU, and host_view.c only needs these five symbols. */
+extern void (__far * __far *p2_state_handler_tbl)(void);
+extern void p2_cell_move_up(void);
+extern void p2_cell_move_down(void);
+extern void p2_cell_move_left(void);
+extern void p2_cell_move_right(void);
 #include "../level.h"         /* level_get_entity_dg, DG_P1_OBJ, DG_P2_OBJ,
                                   OBJ_FTBL_OFF, OBJ_FTBL_SEG */
 #include "../input.h"         /* get_key_state */
@@ -123,6 +133,11 @@ extern void anim_blit_sprite_leaf(u16 obj_off, u16 obj_seg);
  * Sized to hold one full VGA page in planar form: 4 × 8000 = 32000 B.
  * (BGI_PAGE_SIZE = 0x1F40 = 8000 B; BGI_PLANE_SIZE = 0x10000 = host plane stride.) */
 static u8 __far *hv_saveunder_buf = (u8 __far *)0;
+
+/* Backing storage for the P2 move-state handler table (p2_state_handler_tbl shadow);
+ * seeded in init_sprite_structs.  16 far code-ptr slots, [1..4] = the cell-move
+ * handlers (see the wiring note in init_sprite_structs). */
+static void (__far *hv_p2_state_handlers[16])(void);
 #define HV_SAVEUNDER_SIZE (4u * 0x1F40u)   /* 4 planes × 8000 B = 32000 B */
 
 /* ── init_sprite_structs — 1000:33c5 ───────────────────────────────────────────
@@ -175,6 +190,28 @@ void init_sprite_structs(void)
         anim_channels_b_tbl[i] = &anim_b_records[i];
     }
     anim_channels_b_tbl[ANIM_B_SLOTS] = &anim_b_terminator;
+
+    /* ── HOST: wire the P2 move-state handler table (RECONSTRUCTION FIDELITY) ───────
+     * p2_run_move_state_handler (player2.c 1000:5003), reached every per-tick when
+     * P2 has steps left, dispatches `(*p2_state_handler_tbl[p2_move_state])()` once
+     * p2_step_idx==5 — an indirect FAR call through the DGROUP 0x085c shadow table.
+     * The engine populates that table at level/round init; the reconstruction keeps
+     * it a host-seeded far shadow (player2.c decl note) and — exactly as the
+     * differential harness tools/p2_ctest.c (seed_state_handler_tbl) — leaves the
+     * WIRING to the caller.  The default BUMPY.EXE link + its p2 ctest supply it; the
+     * playable build had NO caller, so p2_state_handler_tbl stayed NULL and the first
+     * P2 dispatch did `call far [0000:p2_move_state*4]` → executed the IVT/wild memory
+     * → invalid-opcode (INT6) storm (the "reaches mode=4 then hangs" crash).  Seed the
+     * four cell-move handlers at their captured/natural indices (1..4), identical to
+     * p2_ctest, and point the shadow at it.  Recorded in docs/reconstruction-fidelity.md. */
+    for (i = 0; i < 16u; i = i + 1) {
+        hv_p2_state_handlers[i] = (void (__far *)(void))0;
+    }
+    hv_p2_state_handlers[1] = p2_cell_move_up;      /* cell -= 8 (row up)    */
+    hv_p2_state_handlers[2] = p2_cell_move_down;    /* cell += 8 (row down)  */
+    hv_p2_state_handlers[3] = p2_cell_move_left;    /* cell -= 1 (col left)  */
+    hv_p2_state_handlers[4] = p2_cell_move_right;   /* cell += 1 (col right) */
+    p2_state_handler_tbl = hv_p2_state_handlers;
 
     dg = level_get_entity_dg();
     if (dg == (u8 __far *)0) {

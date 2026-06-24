@@ -1332,3 +1332,28 @@ CS:IP probe of the running playable `game_loop` (the analogue of the original's 
 capture produced no frames". This is a **validation-harness calibration** gap only: reconstruction
 correctness is already gated tick-for-tick by the int8 end-to-end gate and byte-exact by the
 composite/host-compose gates; the pixel frame-compare is additional present/flip-glue assurance.
+
+### VERIFIED+FIXED (Task-11 interactive bring-up — the mode-4 NULL P2-handler crash)
+
+Running `BUMPYP.EXE` interactively (real keyboard) revealed that the earlier "reaches the
+per-tick `game_tick()` loop / `mode=4` holds" result was a **false positive**: `game_mode` flips
+to 4, then the very first P2 per-tick dispatch jumps through a NULL pointer and the CPU storms
+INT6 (invalid opcode) forever — no image, just the runaway error counter the user saw.
+
+Root cause (traced via a dosbox CS:IP ring buffer at the wild jump): `p2_run_move_state_handler`
+(player2.c, 1000:5003) does `(*p2_state_handler_tbl[p2_move_state])()` — an indirect FAR call
+through the DGROUP 0x085c shadow table — once `p2_step_idx==5`. The disasm at the fault is
+`les bx, p2_state_handler_tbl ; add bx, move_state*4 ; call far [bx]`, and the table base was
+**NULL** → `call far [0000:state*4]` executes the IVT/wild memory (landed at the all-`0xFF`
+`BA51:1218`). The engine populates that table at level/round init; the reconstruction keeps it a
+host-seeded far shadow (player2.c decl) and — like the anim-channel slot tables — leaves the
+WIRING to the caller. The default `BUMPY.EXE` + its `tools/p2_ctest.c` seed it; the playable
+build had no caller, so it stayed NULL.
+
+Fix (`#ifdef`-free, host-only `host_view.c init_sprite_structs`, alongside the anim-slot wiring):
+seed a 16-slot far-ptr table `[1]=p2_cell_move_up [2]=down [3]=left [4]=right` (verbatim the
+indices `seed_state_handler_tbl` in p2_ctest uses) and point `p2_state_handler_tbl` at it. The
+INT6 storm is eliminated (5.7M hits → 0). NOTE: full headless mode-4 gameplay re-verification is
+pending — recompiling shifts the BUMPYCAP injection calibration (DGROUP/keytbl offsets) so the
+scripted menu-drive needs re-derivation; interactive keyboard play (which needs no calibration)
+is the confirmation. Default `BUMPY.EXE` unchanged (host_view.c is play-only; md5 cac9ff23).
