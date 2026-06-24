@@ -1303,3 +1303,32 @@ force `rm hardware/vga_draw.o hardware/libhardware.a src/dosbox-x` before `make`
 `strings src/dosbox-x | grep BUMPYCAP`.  (An earlier debug3 run was misdiagnosed as an "0xa358
 allocator hang" purely because a stale `libhardware.a` ran old hook code; the clean rebuild showed
 the game reaching `mode=4` normally.)
+
+### Task 11 — scripted pixel frame-compare gate (`tools/validate_playable.sh`)
+
+The Plan-A integration gate runs BOTH `BUMPYP.EXE` and the **real original** `BUMPY.EXE`
+under one instrumented DOSBox-X build, captures the rendered VGA A000 4-plane framebuffer
+per per-tick frame (patch `03-framebuffer-capture.patch`), and compares them plane-for-plane
+(`tools/fb_compare.c`, with a bounded whole-frame phase shift to absorb page-flip phase).
+Scope is the Tier-1 **idle in-level** compare: each build is driven to level 1 by its own
+boot script (the original through F2/F5, the playable skipping them), then N per-tick frames
+are dumped with no further input — the per-tick pipeline (render/draw/anim/present/flip) runs
+fully, so it exercises the host present/flip glue against the original's direct-VGA output.
+
+**Status: scaffolded, original-side validated, NOT yet green.** The original capture produces
+32 frames that decode to a real level render. Two genuine harness bugs were found and fixed:
+(1) DOSBox-X does not strip inline `#` comments, so the template conf's `machine = vgaonly  # …`
+corrupted the machine type and stalled the playable boot at a BIOS wait (`f000:8db4`) — the gate
+now emits a comment-free conf (`mk_conf`); (2) dosbox ignored `timeout`'s SIGTERM and orphaned,
+holding the pipe — hardened to `timeout -k`.
+
+**Remaining (documented divergence from a green gate):** the playable per-tick FB-capture trigger
+CS:IP is not yet calibrated. The playable is a relinked image with a non-trivial code-segment
+layout — its gameplay code runs at runtime segment `ba51` (the boot/menu code is at `0824`), and
+`game_loop`'s per-tick loop-top is NOT at the linker-map code offset within that segment
+(`0824:1639` and `ba51:1639` both capture 0 frames). Pinning it requires an instruction-level
+CS:IP probe of the running playable `game_loop` (the analogue of the original's `rng=rand()` site
+`0824:0cda`). Until then the playable capture yields 0 frames and the gate FAILs at "playable
+capture produced no frames". This is a **validation-harness calibration** gap only: reconstruction
+correctness is already gated tick-for-tick by the int8 end-to-end gate and byte-exact by the
+composite/host-compose gates; the pixel frame-compare is additional present/flip-glue assurance.
