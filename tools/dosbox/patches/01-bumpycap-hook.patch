@@ -1,5 +1,5 @@
 diff --git i/src/hardware/vga_draw.cpp w/src/hardware/vga_draw.cpp
-index 5ec90e1..2ceb724 100644
+index 5ec90e1..ee12d0f 100644
 --- i/src/hardware/vga_draw.cpp
 +++ w/src/hardware/vga_draw.cpp
 @@ -21,11 +21,15 @@
@@ -18,7 +18,7 @@ index 5ec90e1..2ceb724 100644
  #include "time.h"
  #include "timer.h"
  #include "setup.h"
-@@ -5967,6 +5971,177 @@ Bitu DEBUG_EnableDebugger(void);
+@@ -5967,6 +5971,215 @@ Bitu DEBUG_EnableDebugger(void);
  static void VGA_VerticalTimer(Bitu /*val*/) {
  	double current_time = PIC_GetCurrentEventTime();
  
@@ -119,11 +119,49 @@ index 5ec90e1..2ceb724 100644
 +		uint8_t bumpycap_curlevel = phys_readb(dg + (PhysPt)off_curlevel);
 +		uint8_t bumpycap_gamemode = phys_readb(dg + (PhysPt)off_gamemode);
 +		if ((bumpycap_frame % 35u) == 0u || bumpycap_vmode != bumpycap_lastmode) {
-+			LOG_MSG("BUMPYCAP frame=%u vmode=0x%02x CS:IP=%04x:%04x DS=%04x level=%u mode=%u",
++			unsigned long bumpycap_nz = 0; unsigned binz;
++			for (binz = 0; binz < 0x10000u; binz++) { if (vga.mem.linear[binz] != 0) bumpycap_nz++; }
++			LOG_MSG("BUMPYCAP frame=%u vmode=0x%02x CS:IP=%04x:%04x DS=%04x level=%u mode=%u vganz=%lu",
 +				bumpycap_frame, bumpycap_vmode,
 +				(unsigned)SegValue(cs), (unsigned)reg_ip,
 +				(unsigned)SegValue(ds), (unsigned)bumpycap_curlevel,
-+				(unsigned)bumpycap_gamemode);
++				(unsigned)bumpycap_gamemode, bumpycap_nz);
++		}
++
++		/* DIAG screenshot: at frame>=BUMPYCAP_SHOT_FRAME dump the displayed VGA page
++		 * (4 planes x 8000) + 256x3 DAC palette to BUMPYCAP_SHOT_OUT, for PNG decode. */
++		{
++			static int shot_done = 0, shot_init = 0;
++			static unsigned shot_frame = 0xFFFFFFFFu;
++			static const char *shot_out = 0;
++			if (!shot_init) {
++				shot_init = 1;
++				const char *e = getenv("BUMPYCAP_SHOT_FRAME");
++				if (e) shot_frame = (unsigned)strtoul(e, 0, 0);
++				shot_out = getenv("BUMPYCAP_SHOT_OUT");
++			}
++			if (!shot_done && shot_out && bumpycap_frame >= shot_frame && vga.mem.linear != NULL) {
++				shot_done = 1;
++				FILE *sf = fopen(shot_out, "wb");
++				if (sf) {
++					unsigned st = ((unsigned)vga.crtc.start_address_high << 8) | (unsigned)vga.crtc.start_address_low;
++					unsigned poff = (st << 1) & 0x3FFFu;
++					const uint32_t pm = vga.mem.memmask ? vga.mem.memmask : 0xFFFFFu;
++					unsigned plane, i, c;
++					for (plane = 0; plane < 4u; plane++)
++						for (i = 0; i < 8000u; i++) {
++							uint8_t b = vga.mem.linear[((((uint32_t)(poff + i)) << 2) + plane) & pm];
++							fwrite(&b, 1, 1, sf);
++						}
++					for (c = 0; c < 256u; c++) {
++						uint8_t rgb[3];
++						rgb[0] = vga.dac.rgb[c].red; rgb[1] = vga.dac.rgb[c].green; rgb[2] = vga.dac.rgb[c].blue;
++						fwrite(rgb, 1, 3, sf);
++					}
++					fclose(sf);
++					LOG_MSG("BUMPYSHOT wrote %s at frame %u start=0x%04x", shot_out, bumpycap_frame, st);
++				}
++			}
 +		}
 +
 +		/* One-shot dump of the live joystick/key handler script for handler 0

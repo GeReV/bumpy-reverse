@@ -29,6 +29,13 @@ source. No DOSBox fork is vendored — only these patches.
      uses — so a single script drives the playable build exactly like a physical
      keyboard, with zero calibration. This is the harness used to reproduce + trace
      the playable build's interactive crashes headlessly.
+  5. **Screenshot dump** (`$BUMPYCAP_SHOT_OUT=<file> $BUMPYCAP_SHOT_FRAME=<n>`) — at the
+     first frame ≥ n, dump the displayed VGA page (4 planes × 8000 B) + the 256×3 DAC
+     palette to the file; `tools/dosbox/shot_to_png.py <file> <out.png>` decodes it
+     (mode-0x0D planar → indexed → RGB) to a PNG. Used to SEE what the playable build
+     actually renders (e.g. confirming a screen is real vs RGB noise). The per-35-frame
+     log line also carries `vganz=` (count of non-zero VGA bytes) as a cheap "is anything
+     drawn" signal.
 
   The runtime DGROUP segment is hard-coded `0x185f` (calibration in
   `docs/dosbox-int8-capture.md`). This patch is the bring-up + input-drive instrumentation;
