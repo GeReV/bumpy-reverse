@@ -1372,3 +1372,21 @@ fully-initialised C array, the move-step dispatch goes through move_step_handler
 wild-far-call (INT6) crash class.  NOTE: not yet re-verified in headless gameplay — the scripted-input
 calibration (DGROUP/keytbl offsets) drifts every recompile, leaving the automated drive stuck at the
 title wait; interactive keyboard play is the confirmation.  Default BUMPY.EXE unchanged (cac9ff23).
+
+### FIXED (render: blank screen — the title/menu/text backgrounds never composed)
+
+Running the playable build showed an entirely BLANK screen (VGA memory all-zero) even at the
+title — not a display issue: nothing was being drawn.  Root cause: the Task-9 title-present
+fix replaced screens.c's `restore_bg_view(view,seg)` with a host shim that was a pure NOP, on
+the (incorrect) assumption that `present_frame(1)` alone would show the title.  But
+`restore_bg_view` is the COMPOSE step — it copies the freshly `vec_decode`'d fullscreen image
+(`fullscreen_buf`, at descriptor+0x02/+0x04, `word0e==1`→page A000) into the displayed page.
+NOP'd out, `host_framebuffer` stayed zero, so `present_frame` faithfully copied a blank image
+to VGA.  This blanked EVERY screen built that way (title, menu, level-intro, highscore).
+FIX: `host_compose_bg_view` (host_render.c) drives the real 3-arg `restore_bg_view`
+(planes=`host_framebuffer`, source from the descriptor) so the background actually composes;
+screens.c's 2-arg shim now routes there instead of NOP.  Constants align exactly
+(BGI_OVL_PLANE_SIZE==HOST_PLANE_SIZE==0x10000, BGI_OVL_PAGE_SIZE==VGA_PLANE_BYTES==0x1F40), so
+the blit lands where present_frame reads.  VERIFIED: VGA non-zero bytes 0 → 57948 at the title.
+Dynamic glyph text (draw_string_glyphs_9804) is still a separate stub (next).  Default
+BUMPY.EXE byte-identical (cac9ff23; all host-only).

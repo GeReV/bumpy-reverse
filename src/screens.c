@@ -468,9 +468,15 @@ extern void restore_bg_view(u8 __far *view, u16 seg);    /* bgi_overlay.c 1000:8
  * DEFAULT BUMPY.EXE build is unaffected (the #ifndef branch above is byte-stable;
  * that build is byte-compared, never executed, so its latent ABI mismatch is inert).
  * Recorded in docs/reconstruction-fidelity.md ("playable host" section).  */
+/* host_compose_bg_view (host_render.c): compose the descriptor's source image into
+ * host_framebuffer via the real 3-arg restore_bg_view.  The original Task-9 shim was
+ * a NOP (it wrongly assumed present_frame alone showed the title) — that left every
+ * title/menu/text-screen BLANK.  Route the 2-arg engine call here instead. */
+extern void host_compose_bg_view(u8 __far *view);
 static void screens_host_restore_bg_view(u8 __far *view, u16 seg)
 {
-    (void)view; (void)seg;   /* NOP: host present is via present_frame(1) below */
+    (void)seg;   /* host: planes = host_framebuffer; source taken from the descriptor */
+    host_compose_bg_view(view);
 }
 #define restore_bg_view(view, seg) screens_host_restore_bg_view((view), (seg))
 #endif

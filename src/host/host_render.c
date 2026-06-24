@@ -244,6 +244,33 @@ void p2_restore_view_leaf(u8 __far *view)
     }
 }
 
+/* ── host_compose_bg_view — title/menu/text-screen background compose (HOST) ────
+ *   screens.c's per-screen builders (show_title_background, show_*_screen, the
+ *   level-intro/highscore screens) vec_decode a fullscreen image into fullscreen_buf
+ *   then call the engine's restore_bg_view(view, seg) to copy it into the displayed
+ *   page.  Unlike the gameplay view leaves above (code-embedded word0e>1 NOP views),
+ *   THESE descriptors are real: the source planar image is at view+0x02/+0x04 and
+ *   view->word0e == 1 selects page A000 (offset 0).  Drive the reconstructed 3-arg
+ *   restore_bg_view with planes = host_framebuffer and that source, so the background
+ *   actually composes into the RAM image present_frame copies to VGA.  Without this
+ *   the title/menu/text screens stay BLANK (host_framebuffer never gets the image —
+ *   the original Task-9 shim NOP'd this, assuming present_frame alone would show it).
+ *   RECONSTRUCTION FIDELITY: documented in docs/reconstruction-fidelity.md. */
+void host_compose_bg_view(u8 __far *view)
+{
+    u16 src_off;
+    u16 src_seg;
+    const u8 __huge *vga_src;
+
+    if (host_framebuffer == (u8 __huge *)0 || view == (u8 __far *)0) {
+        return;
+    }
+    src_off = *(u16 __far *)(view + 0x02);
+    src_seg = *(u16 __far *)(view + 0x04);
+    vga_src = (const u8 __huge *)MK_FP(src_seg, src_off);
+    restore_bg_view(host_framebuffer, vga_src, (const bgi_view_desc __far *)view);
+}
+
 /* ── Out-of-scope HUD / text render leaves (faithful-signature stubs) ───────────
  *   FUN_1000_80ac (B-side render leaf, no clean decomp) has no reconstructed
  *   work-buffer body; the engine's HUD/text path is out of scope for the keystone
