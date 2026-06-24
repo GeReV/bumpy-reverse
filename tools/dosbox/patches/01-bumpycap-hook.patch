@@ -1,5 +1,5 @@
 diff --git i/src/hardware/vga_draw.cpp w/src/hardware/vga_draw.cpp
-index 5ec90e1..0040418 100644
+index 5ec90e1..2ceb724 100644
 --- i/src/hardware/vga_draw.cpp
 +++ w/src/hardware/vga_draw.cpp
 @@ -21,11 +21,15 @@
@@ -18,7 +18,7 @@ index 5ec90e1..0040418 100644
  #include "time.h"
  #include "timer.h"
  #include "setup.h"
-@@ -5967,6 +5971,159 @@ Bitu DEBUG_EnableDebugger(void);
+@@ -5967,6 +5971,177 @@ Bitu DEBUG_EnableDebugger(void);
  static void VGA_VerticalTimer(Bitu /*val*/) {
  	double current_time = PIC_GetCurrentEventTime();
  
@@ -57,6 +57,7 @@ index 5ec90e1..0040418 100644
 +		static unsigned off_curlevel = 0x79b2u;
 +		static unsigned off_gamemode = 0x792cu;
 +		static int      keytbl_direct = 0;        /* 0 = orig pointer-deref; 1 = direct array */
++		static int      scan_inject = 0;          /* 1 = inject real scancodes via the 8042 (offset-free) */
 +		if (!bumpycap_init) {
 +			const char *dgs = getenv("BUMPYCAP_DGROUP");
 +			if (dgs != NULL) {
@@ -72,6 +73,7 @@ index 5ec90e1..0040418 100644
 +			  if ((e = getenv("BUMPYCAP_OFF_CURLEVEL")) != NULL) sscanf(e, "%x", &off_curlevel);
 +			  if ((e = getenv("BUMPYCAP_OFF_GAMEMODE")) != NULL) sscanf(e, "%x", &off_gamemode);
 +			  if ((e = getenv("BUMPYCAP_KEYTBL_DIRECT"))!= NULL) keytbl_direct = atoi(e);
++			  if ((e = getenv("BUMPYCAP_SCAN_INJECT"))  != NULL) scan_inject = atoi(e);
 +			  if (off_keytbl != 0x4d42u || off_curlevel != 0x79b2u || keytbl_direct)
 +				LOG_MSG("BUMPYCAP offsets: keytbl=0x%04x(direct=%d) curlevel=0x%04x gamemode=0x%04x",
 +					off_keytbl, keytbl_direct, off_curlevel, off_gamemode);
@@ -152,7 +154,23 @@ index 5ec90e1..0040418 100644
 +		 * write to the game's polled key table at DGROUP:[0x4d42]+scancode (value
 +		 * 1=down, 0=up) — uniform across screens (works whether or not the game's
 +		 * INT9 ISR is installed; there is no real keyboard input in the headless run). */
-+		if (bumpycap_n != 0u) {
++		if (bumpycap_n != 0u && scan_inject) {
++			/* OFFSET-FREE injection: deliver a REAL scancode through the 8042 keyboard
++			 * controller (make code on down, break code = scancode|0x80 on up) and let
++			 * the game's own INT9 ISR record it into g_key_state_table at whatever
++			 * runtime offset it actually uses.  No DGROUP/keytbl calibration needed —
++			 * drives the playable build exactly as a physical keypress would. */
++			extern void KEYBOARD_AddBuffer(uint16_t data);
++			for (unsigned i = 0; i < bumpycap_n; i++) {
++				if (bumpycap_sfr[i] == bumpycap_frame) {
++					uint8_t sc = bumpycap_ssc[i];
++					uint8_t code = bumpycap_sval[i] ? sc : (uint8_t)(sc | 0x80u);
++					KEYBOARD_AddBuffer(code);
++					LOG_MSG("BUMPYCAP f=%u SCAN inject sc=0x%02x %s -> code=0x%02x",
++						bumpycap_frame, sc, bumpycap_sval[i] ? "down" : "up", code);
++				}
++			}
++		} else if (bumpycap_n != 0u) {
 +			/* Resolve the key-table BASE: original = near pointer stored at dg+off_keytbl;
 +			 * playable (keytbl_direct) = the array lives AT dg+off_keytbl. */
 +			PhysPt kbase;

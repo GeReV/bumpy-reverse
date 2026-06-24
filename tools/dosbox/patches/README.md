@@ -20,6 +20,15 @@ source. No DOSBox fork is vendored — only these patches.
      at DGROUP `[0x4d42]+scancode` (1=down, 0=up). Direct table writes are uniform across
      startup screens — they work whether or not the game's INT9 ISR is installed, and the
      deterministic config means a given script reproduces the same run every time.
+  4. **Offset-free scancode injection** (`$BUMPYCAP_SCAN_INJECT=1`) — instead of the
+     direct key-table write (which needs the runtime DGROUP/keytbl offsets, and those
+     shift every time the playable `BUMPYP.EXE` is recompiled), deliver the script's
+     scancodes as REAL key events through the 8042 controller (`KEYBOARD_AddBuffer`:
+     make code on `value=1`, break code `sc|0x80` on `value=0`). The game's own INT9
+     ISR then records them into `g_key_state_table` at whatever offset it actually
+     uses — so a single script drives the playable build exactly like a physical
+     keyboard, with zero calibration. This is the harness used to reproduce + trace
+     the playable build's interactive crashes headlessly.
 
   The runtime DGROUP segment is hard-coded `0x185f` (calibration in
   `docs/dosbox-int8-capture.md`). This patch is the bring-up + input-drive instrumentation;
