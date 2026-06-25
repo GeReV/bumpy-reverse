@@ -179,16 +179,9 @@ void set_disk_swap_callback(u16 int24_handler, u16 callback)
  * BENIGN NO-OP: level.c start_level bypasses the resource table and builds
  * filenames directly (see level.c RECONSTRUCTION FIDELITY note #3).
  *
- * TODO: populate resource_table_ptr once resource management is reconstructed.
- * Until then this stub must not be treated as permanently complete — the engine
- * does set this pointer, and a future faithful pass will need to wire it up. */
-void set_resource_table(u16 off, u16 seg)
-{
-    (void)off;
-    (void)seg;
-    /* Engine: resource_table_ptr._0_2_ = seg; resource_table_ptr._2_2_ = off.
-     * Not used on the playable host's level-load path. */
-}
+ * set_resource_table is now reconstructed in host_resource.c (it selects the active
+ * resource-table base so open_resource maps the title/menu indices to the right
+ * files); the former NOP duplicate here is removed. */
 
 /* reset_opaque_session_globals — opaque ~46 DGROUP resets (see game_stubs.c
  * for the full documentation of the unnamed audio-mixer/level-score bytes).

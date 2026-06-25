@@ -83,12 +83,14 @@ int main(void)
                                     EGA/VGA menu, F2->palette_mode 1 / F3->2. */
     sound_device_select_screen();/* config_screens.c — 202c:0000: F5..F8 sound menu, sets
                                     sound_device_state. */
-    host_screens_buf_init();     /* host_resource.c — back fullscreen_buf (the engine
-                                    allocates it at boot; the reconstruction only reads
-                                    it).  MUST precede host_fb_init's 256 KB halloc,
-                                    which otherwise exhausts the heap and this halloc
-                                    returns NULL (→ resource reads land at 0000:0000). */
-    host_fb_init();              /* host_render.c — framebuffer + page table */
+    host_fb_init();              /* host_render.c — allocate the 256 KB framebuffer FIRST,
+                                    while the far heap is unfragmented (it needs one
+                                    contiguous block; conventional memory leaves only
+                                    ~8 KB of slack over the framebuffer + the program). */
+    host_screens_buf_init();     /* host_resource.c — point fullscreen_buf at the
+                                    framebuffer's unused per-plane slack (no extra halloc;
+                                    each plane uses only ~16 KB of its 64 KB).  MUST follow
+                                    host_fb_init so host_framebuffer is allocated. */
     host_view_descriptors_init();/* game.c — bind view-descriptor backing storage
                                     (the reconstruction's pointer-split layout needs
                                     this before init_view_anim_descriptors writes

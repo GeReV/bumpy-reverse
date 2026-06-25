@@ -123,9 +123,30 @@ void apply_level_palette(void)
  * buffer layout, then applies the level palette.
  * RECONSTRUCTION FIDELITY: the original 97f1 body is not cleanly decompiled;
  * the host reconstructs its observable effect (CRTC window + DAC init). */
+/* host_set_bgi_attribute_palette — program the VGA Attribute Controller palette to the
+ * BGI 16-colour mapping: pixel i -> DAC (i<8 ? i : 0x10+(i-8)).  The engine's BGI driver
+ * set this up (its mode-init code is not in the Ghidra corpus); without it the BIOS
+ * mode-0x0D default AC maps pixel 6->DAC 0x14 and pixels 8..15->DAC 0x38..0x3f, which the
+ * decoded image's DAC palette (written to DAC 0..7 / 0x10..0x17 by vga_dac_upload_from_buffer)
+ * never loads — so half the colours come out as the EGA default ramp.  Matching the AC to
+ * vga_dac_upload_from_buffer's DAC targets makes pixel i resolve to image palette colour i.
+ * RECONSTRUCTION FIDELITY: host BGI-init reconstruction (the original BGI handler is absent
+ * from the corpus); recorded in docs/reconstruction-fidelity.md ("playable host: BGI palette"). */
+static void host_set_bgi_attribute_palette(void)
+{
+    u8 i;
+    (void)inp(0x3DAu);                 /* reset the AC index/data flip-flop */
+    for (i = 0u; i < 16u; i++) {
+        outp(0x3C0u, i);               /* AC palette register index (bit5=0: programming) */
+        outp(0x3C0u, (u8)(i < 8u ? i : (0x10u + (i - 8u))));
+    }
+    outp(0x3C0u, 0x20u);               /* bit5=1: re-enable video output */
+}
+
 void init_display_97f1(void)
 {
     init_crtc_window(CRTC_PAGE0_ADDR, CRTC_PAGE1_ADDR, 0u, 0u);
+    host_set_bgi_attribute_palette();
     apply_level_palette();
 }
 
@@ -176,17 +197,16 @@ void clear_viewport(void)
     u8 __far *vga_page0;
     u8 __far *vga_page1;
 
-    /* Zero the host framebuffer (4-plane flat RAM image, 4 * HOST_PLANE_SIZE = 256 KB).
-     * Open Watcom's _fmemset size argument is 16-bit (unsigned int, max 0xFFFF), so a
-     * single call cannot span the full 64 KB plane (0x10000 bytes).  We split each
-     * plane into two 0x8000-byte halves.  4 planes × 2 halves × 0x8000 = 256 KB total.
-     * _hmemset is not available in this Open Watcom -ml DOS model build. */
+    /* Zero the host framebuffer's DISPLAY EXTENT only: each plane's [0..0x4000) covers
+     * page 0 ([0..0x1f40]) and page 1 ([0x2000..0x3f40]); the rest of the 64 KB plane is
+     * never displayed.  Bounding the clear here (rather than the full 0x10000) is correct
+     * AND keeps plane 0's slack [0x4000..0x10000) intact — that window backs fullscreen_buf
+     * (host_resource.c).  4 planes × 0x4000 cleared. */
     if (host_framebuffer != (u8 __huge *)0) {
         u8 p;
         for (p = 0u; p < 4u; p++) {
             u8 __far *base = (u8 __far *)(host_framebuffer + (u32)p * HOST_PLANE_SIZE);
-            _fmemset(base,            0, (u16)0x8000u);
-            _fmemset(base + 0x8000u,  0, (u16)0x8000u);
+            _fmemset(base, 0, (u16)0x4000u);   /* display extent: pages 0 + 1 */
         }
     }
 

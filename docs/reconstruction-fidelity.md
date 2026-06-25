@@ -1454,3 +1454,57 @@ above): input via BIOS INT 16h instead of the engine's `get_key_state` table (th
 not installed until `init_game_session_state`, which runs after this screen), and the shipped
 static adapter table instead of the live `detect_video_adapter` probe.  Default BUMPY.EXE
 byte-identical (cac9ff23).
+
+### FIXED (render: TITRE title/menu raster now decodes + composes + presents in colour)
+
+Three coupled host bugs left the playable build blank/garbage past the config screens; all
+three are now fixed and the TITRE.VEC title-menu raster renders (verified headless: clean
+blue-sky background, gold-banded "BUMPY'S" logo, "PLAY / HIGH-SCORE / LEVEL: EASY / PASSWORD"
+menu text).  Default BUMPY.EXE byte-identical (cac9ff23); all changes are host-only / behind
+`#ifdef BUMPY_PLAYABLE`.
+
+1. **Resource-table base switching (`host_resource.c`).**  The host `set_resource_table` was a
+   NOP and `open_resource` always indexed the 0x932 vec table, so `run_main_menu`'s
+   `open_resource(0x12)` (TITRE) fell off the end and returned −1.  The engine keeps ONE
+   contiguous DGROUP resource array and `set_resource_table(off,seg)` selects the base entry:
+   off 0x932 → MASKBUMP.VEC, off 0x928 → BUMSPJEU.BIN (one 10-byte entry earlier).  The host
+   now models the array from its earliest base (`hr_full_files[19]`, BUMSPJEU prepended) and
+   `set_resource_table` selects `hr_base_idx` (0x928→0, 0x932→1); `open_resource` indexes
+   `hr_base_idx + res_idx`.  The unused 89 KB BUMSPJEU sprite-bank read (`process_sprites` is a
+   host NOP) targets the literal seg 0xa0c8 (== VGA memory) — `read_chunked` DRAINS it to a
+   4 KB discard buffer instead of smashing memory.
+
+2. **Framebuffer allocation order + `fullscreen_buf` in framebuffer slack (`main.c`,
+   `host_resource.c`, `host_video.c`).**  Conventional memory leaves only ~8 KB over the
+   program + the 256 KB `host_framebuffer` halloc, so a SEPARATE 34 KB `fullscreen_buf` halloc
+   (the old `host_screens_buf_init`, allocated first) fragmented the heap and `host_fb_init`'s
+   256 KB request returned NULL → `present_frame` silently NOP'd → blank.  (Measured: largest
+   contiguous halloc was 248 KB < 256 KB.)  FIX: allocate the framebuffer FIRST (unfragmented
+   heap), then point `fullscreen_buf` at plane 0's permanently-unused slack
+   `[0x4000..0x10000)` inside the framebuffer — NO second allocation.  `clear_viewport` is
+   bounded to each plane's display extent `[0..0x4000)` (covers page 0 + page 1) so it never
+   wipes that window; compose/present only touch `[0..0x3f40]`.  This SUPERSEDES the
+   "allocated BEFORE host_fb_init" note in the resource-loader section above.
+
+3. **BGI palette: Attribute Controller + DAC upload (`host_video.c`, `screens.c`).**
+   `dispatch_by_palette_mode` is a faithful NOP for `palette_mode==2` (engine fact, T1 oracle:
+   the BGI overlay palette handler is not in the corpus), so the decoded image's palette was
+   never sent to the DAC and screens showed the BIOS mode-0x0D default ramp.  FIX: (a)
+   `host_set_bgi_attribute_palette` (one-time, in `init_display_97f1`) programs the AC palette
+   to the BGI 16-colour mapping — pixel i → DAC (i<8 ? i : 0x10+(i−8)) — matching
+   `vga_dac_upload_from_buffer`'s DAC targets (0..7, 0x10..0x17); the BIOS default AC otherwise
+   maps pixel 6→DAC 0x14 and 8..15→DAC 0x38..0x3f, which the image palette never loads.  (b)
+   `dispatch_by_palette_mode` (under `BUMPY_PLAYABLE`) drives the reconstructed
+   `vga_dac_upload_from_buffer` over the current screen image (`fullscreen_buf`, palette
+   @+0x33) — the host stand-in for the absent BGI handler.  RECONSTRUCTION FIDELITY: both are
+   host BGI-init reconstructions (the original BGI mode/palette handler is not decompilable);
+   the DAC write SEQUENCE itself stays the corpus-validated `vga_dac_upload_from_buffer`.
+
+REMAINING (not yet fixed): `run_main_menu` returns 1 almost immediately on its first poll
+(so the normal flow falls into a blank `show_highscore_screen` instead of holding the menu) —
+under investigation; `read_input_action` returns 0 with all keys up, so the cause is a spurious
+key/state or a sprite-blit side effect, not the interpreter.  The title PRESENTATION screen
+(`init_title_graphics`: MASKBUMP + `process_sprites` STUB + placeholder sprite far-ptrs) renders
+speckled because the sprite overlay is stubbed.  Gameplay/level rendering needs a SECOND 256 KB
+plane buffer (`level.c` `g_planes`) that cannot coexist with `host_framebuffer` in 640 KB — a
+separate memory problem.  The clean TITRE menu raster itself is confirmed rendering correctly.

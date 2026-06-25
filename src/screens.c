@@ -573,6 +573,17 @@ void dispatch_by_palette_mode(void)
     /* palette_mode==2 (the natural boot) -> no DAC here (engine fact, T1).  Other modes'
        handlers are BGI overlay code; the modelled palette upload is gated standalone via
        vga_dac_upload_from_buffer over a seeded buffer (see the carve-out note above). */
+#ifdef BUMPY_PLAYABLE
+    /* PLAYABLE HOST: the engine's runtime BGI palette handler (absent from the corpus, so
+       dispatch is a NOP above for the default/oracle builds) uploaded the decoded image's
+       DAC palette here.  Drive the reconstructed handler over the current screen image
+       (fullscreen_buf, palette at +0x33) so title/menu/text screens get their real colours
+       instead of the BIOS mode-0x0D default ramp.  Pairs with host_set_bgi_attribute_palette
+       (host_video.c) which maps the AC to this handler's DAC targets (0..7, 0x10..0x17). */
+    if (fullscreen_buf_seg != 0u) {
+        vga_dac_upload_from_buffer((u8 __far *)MK_FP(fullscreen_buf_seg, fullscreen_buf));
+    }
+#endif
     return;
 }
 
