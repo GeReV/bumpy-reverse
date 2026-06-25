@@ -10,6 +10,8 @@ __pycache__/
 *.pyc
 *.obj
 *.o
+*.lst
+/src/play/
 
 # Root dotfiles (sandbox-mounted shell/editor/agent config — not part of the repo)
 /.*
