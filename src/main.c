@@ -32,6 +32,7 @@
 #ifdef BUMPY_PLAYABLE
 #include "host/host.h"   /* host_fb_init, host_timer_teardown, restore_keyboard_isr */
 #include "screens.h"     /* palette_mode (DGROUP 0x541d) */
+#include "config_screens.h" /* gfx_driver_init, sound_device_select_screen (engine screens) */
 #endif
 
 /* -------------------------------------------------------------------------
@@ -78,10 +79,10 @@
  * ------------------------------------------------------------------------- */
 int main(void)
 {
-    host_gfx_select();           /* host_config_screens.c — faithful gfx_driver_init
-                                    (1ab9:02ce): text mode 0x02, header + EGA/VGA menu,
-                                    F2->palette_mode 1 / F3->2.  (No audio-select screen:
-                                    the real sound_select_device draws none.) */
+    gfx_driver_init();           /* config_screens.c — 1ab9:02ce: text mode 0x02, header +
+                                    EGA/VGA menu, F2->palette_mode 1 / F3->2. */
+    sound_device_select_screen();/* config_screens.c — 202c:0000: F5..F8 sound menu, sets
+                                    sound_device_state. */
     host_screens_buf_init();     /* host_resource.c — back fullscreen_buf (the engine
                                     allocates it at boot; the reconstruction only reads
                                     it).  MUST precede host_fb_init's 256 KB halloc,

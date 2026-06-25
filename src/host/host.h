@@ -25,7 +25,6 @@
 extern u8 __huge *host_framebuffer;  /* 4 * HOST_PLANE_SIZE */
 void host_fb_init(void);             /* allocate + register the page table into it */
 void host_screens_buf_init(void);    /* host_resource.c — back fullscreen_buf for the resource loader */
-void host_gfx_select(void);          /* host_config_screens.c — faithful gfx_driver_init (EGA/VGA select) */
 /* Timer */
 extern volatile unsigned host_tick;  /* ISR-incremented frame counter */
 void host_timer_teardown(void);      /* restore old INT8 vector + BIOS PIT divisor */

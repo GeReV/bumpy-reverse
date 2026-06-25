@@ -1187,7 +1187,7 @@ clearly separate from the documentary `src/` mirror:
 These deviations exist ONLY in the `BUMPYP.EXE` playable build (`wmake play`); the default
 `BUMPY.EXE` is byte-identical (md5 `cac9ff236a832284fec6fafff2d8602b`, 233230 B).
 
-- **graphics-adapter select screen** (`host_config_screens.c`, `host_gfx_select`) — a
+- **graphics-adapter select screen** (`config_screens.c`, `gfx_driver_init`) — a
   faithful 1:1 reconstruction of `gfx_driver_init` (1ab9:02ce): BIOS text mode 0x02, header
   "BUMPY (C) LORICIEL 1992" at (row 1, col 1), then the adapter menu printed at col 33 from
   row 10 for each present entry of the shipped 6-byte adapter table `{0,1,1,0,0,0}` (EGA +
@@ -1425,9 +1425,12 @@ composed resources (SCORE.VEC, BUMPRESE.VEC) are STRUCTURED .VEC command streams
 they still compose blank — they need the .VEC vector/op12 interpreter (the BGI-overlay command
 machinery), the larger remaining render piece.  Default BUMPY.EXE byte-identical (cac9ff23).
 
-### VERIFIED (playable host: boot graphics-adapter select screen — host_config_screens.c)
+### VERIFIED (boot graphics/sound select screens — config_screens.c)
 
-`host_gfx_select` is a faithful 1:1 reconstruction of `gfx_driver_init` (1ab9:02ce), the
+These two screens are reconstructed ENGINE functions (not host platform glue), so they live
+in `src/config_screens.c`, not `src/host/` — built only into the playable image.
+
+`gfx_driver_init` is a faithful 1:1 reconstruction of `gfx_driver_init` (1ab9:02ce), the
 BGI-overlay routine the original runs at boot to choose the display adapter / palette mode.
 The original does not cleanly decompile (inline `swi(0x10)`/`swi(0x21)`); the reconstruction
 mirrors its disassembly exactly: `int 10h AX=0002h` (text mode 0x02) → cursor (1,1) + DOS

@@ -66,7 +66,7 @@ PLAY_OBJS = &
     $(PLAYDIR)/main.obj $(PLAYDIR)/game.obj $(PLAYDIR)/game_stubs.obj &
     $(PLAYDIR)/host_video.obj $(PLAYDIR)/host_render.obj $(PLAYDIR)/host_timer.obj &
     $(PLAYDIR)/host_input.obj $(PLAYDIR)/host_view.obj $(PLAYDIR)/host_boot.obj &
-    $(PLAYDIR)/host_resource.obj $(PLAYDIR)/host_config_screens.obj &
+    $(PLAYDIR)/host_resource.obj $(PLAYDIR)/config_screens.obj &
     $(PLAYDIR)/level.obj $(PLAYDIR)/input.obj $(PLAYDIR)/player.obj $(PLAYDIR)/player2.obj &
     $(PLAYDIR)/items.obj $(PLAYDIR)/anim.obj $(PLAYDIR)/spawn.obj $(PLAYDIR)/sound.obj &
     $(PLAYDIR)/screens.obj &
@@ -103,8 +103,6 @@ $(PLAYDIR)/host_boot.obj: host/host_boot.c
 	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/host_boot.obj host/host_boot.c
 $(PLAYDIR)/host_resource.obj: host/host_resource.c
 	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/host_resource.obj host/host_resource.c
-$(PLAYDIR)/host_config_screens.obj: host/host_config_screens.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/host_config_screens.obj host/host_config_screens.c
 
 # Shared TUs — compile WITH -dBUMPY_PLAYABLE into play/ (default BUMPY objs unaffected).
 $(PLAYDIR)/main.obj: main.c
@@ -131,6 +129,8 @@ $(PLAYDIR)/sound.obj: sound.c
 	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/sound.obj sound.c
 $(PLAYDIR)/screens.obj: screens.c
 	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/screens.obj screens.c
+$(PLAYDIR)/config_screens.obj: config_screens.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/config_screens.obj config_screens.c
 $(PLAYDIR)/vec.obj: vec.c
 	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/vec.obj vec.c
 $(PLAYDIR)/op12.obj: op12.c

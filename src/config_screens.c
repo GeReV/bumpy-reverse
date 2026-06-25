@@ -1,10 +1,18 @@
 /* ════════════════════════════════════════════════════════════════════════════
- * host_config_screens.c — playable host: the boot graphics-adapter select screen.
+ * config_screens.c — the boot graphics + sound device select screens.
  *
- * Faithful reconstruction of gfx_driver_init (1ab9:02ce) — the BGI-overlay routine
- * the original BUMPY.EXE runs at boot to pick the display adapter / palette mode.
- * The original is BGI-overlay code that does not cleanly decompile (inline INT 10h /
- * INT 21h); this is a 1:1 reconstruction of its disassembly:
+ * These are reconstructions of two REAL engine functions (not host platform glue):
+ *   - gfx_driver_init           (1ab9:02ce)  graphics-adapter / palette select
+ *   - sound_device_select_screen (202c:0000) sound-device select
+ * (The sound screen was Ghidra-mislabeled "detect_video_adapter"; it is NOT a video
+ * probe — it draws the F5..F8 sound menu and sets sound_device_state.)  Both are 1:1
+ * reconstructions of inline-INT-10h/21h disassembly that does not cleanly decompile.
+ * They live in src/ proper (the faithful decompilation), not src/host/ — they are
+ * engine menu logic, only built into the playable image (BUMPY_PLAYABLE); the default
+ * BUMPY.EXE boot does not call them.  The host platform leaves (timer/keyboard ISRs,
+ * framebuffer, DAC, file I/O) stay under src/host/.
+ *
+ * gfx_driver_init (1ab9:02ce) disassembly:
  *
  *   1ab9:02d8  int 10h AX=0002h          set 80x25 text mode 0x02
  *   1ab9:02dd  si=529c; cursor (1,1);    print header "BUMPY (C) LORICIEL 1992$"
@@ -38,13 +46,22 @@
  * ════════════════════════════════════════════════════════════════════════════ */
 #ifdef BUMPY_PLAYABLE
 
-#include "../bumpy.h"
-#include "../screens.h"   /* palette_mode (DGROUP 0x541d) */
+#include "bumpy.h"
+#include "screens.h"      /* palette_mode (DGROUP 0x541d) */
+#include "config_screens.h"
 #include <dos.h>          /* int86, int86x, segread, union REGS, struct SREGS */
 
-/* Scancodes the gate accepts (BIOS INT 16h returns the scancode in AH). */
-#define HC_F2 0x3Cu       /* -> palette_mode = 1 (EGA) */
-#define HC_F3 0x3Du       /* -> palette_mode = 2 (VGA) */
+/* Scancodes the gates accept (BIOS INT 16h returns the scancode in AH). */
+#define HC_F2 0x3Cu       /* gfx:   -> palette_mode = 1 (EGA) */
+#define HC_F3 0x3Du       /* gfx:   -> palette_mode = 2 (VGA) */
+#define HC_F5 0x3Fu       /* sound: -> sound_device_state = 0x8000 (no sound) */
+#define HC_F6 0x40u       /* sound: -> sound_device_state = 0      (PC base) */
+#define HC_F7 0x41u       /* sound: -> sound_device_state = 1      (AdLib)   */
+#define HC_F8 0x42u       /* sound: -> sound_device_state = 4      (MT-32)   */
+
+/* DGROUP 0x689c — set by the sound-select screen, consumed by sound_select_device
+ * (1000:6de3): 0x8000 == force-muted, else a device id fed to snddrv_init's mask. */
+extern s16 sound_device_state;
 
 /* The header + 6 adapter menu lines, verbatim from DGROUP 0x529c / 0x52b4 (each a
  * 14-char field, '$'-terminated for DOS INT 21h AH=09h, matching the 15-byte stride). */
@@ -103,7 +120,7 @@ static u8 hc_read_scancode(void)
 
 /* ── gfx_driver_init (1ab9:02ce) — graphics-adapter / palette select ──────────────
  * Sets palette_mode: F2 -> 1 (EGA), F3 -> 2 (VGA).  See file header for fidelity. */
-void host_gfx_select(void)
+void gfx_driver_init(void)
 {
     u8 i;
     u8 row;
@@ -129,6 +146,53 @@ void host_gfx_select(void)
         u8 sc = hc_read_scancode();
         if (sc == HC_F2) { palette_mode = 1; return; }   /* 1ab9:032a  EGA */
         if (sc == HC_F3) { palette_mode = 2; return; }   /* 1ab9:0338  VGA */
+    }
+}
+
+/* The sound screen's header + 4 menu lines, verbatim from DGROUP 0x6840 / 0x6858
+ * (16-char fields, '$'-terminated; 17-byte stride). */
+static const char hc_snd_header[]   = "BUMPY (C) LORICIEL 1992$";
+static const char hc_snd_lines[4][18] = {
+    "< F5 >: NO SOUND$",
+    "< F6 >: PC BASE $",
+    "< F7 >: ADLIB   $",
+    "< F8 >: MT32    $",
+};
+/* Present table @ DGROUP 0x689e: all four devices offered. */
+static const u8 hc_snd_present[4] = { 1u, 1u, 1u, 1u };
+
+/* ── sound_device_select_screen (202c:0000) — sound-device select ─────────────────
+ * Twin of gfx_driver_init; sets sound_device_state (consumed by sound_select_device).
+ * F5 -> 0x8000 (no sound), F6 -> 0 (PC base), F7 -> 1 (AdLib), F8 -> 4 (MT-32).
+ * Same two host divergences as host_gfx_select (BIOS INT 16h input; static present
+ * table instead of the live probe). */
+void sound_device_select_screen(void)
+{
+    u8 i;
+    u8 row;
+
+    hc_set_mode(0x02u);                    /* 202c:000a  int 10h AX=0002h */
+
+    hc_set_cursor(1u, 1u);                 /* 202c:0014  dx=0101h (row 1, col 1) */
+    hc_dos_print(hc_snd_header);           /* 202c:001b  int 21h AH=09h @ 6840 */
+
+    /* 202c:0021  print present devices at col 33, rows from 10 (dx=0a21h). */
+    row = 0x0Au;
+    for (i = 0u; i < 4u; i = i + 1u) {
+        if (hc_snd_present[i] == 1u) {
+            hc_set_cursor(row, 0x21u);
+            hc_dos_print(hc_snd_lines[i]);
+            row = row + 1u;                /* 202c:0040  inc dh */
+        }
+    }
+
+    /* 202c:0048  poll F5..F8 until one is pressed (host: BIOS INT 16h). */
+    for (;;) {
+        u8 sc = hc_read_scancode();
+        if (sc == HC_F5) { sound_device_state = (s16)0x8000; return; }  /* no sound */
+        if (sc == HC_F6) { sound_device_state = 0;           return; }  /* PC base  */
+        if (sc == HC_F7) { sound_device_state = 1;           return; }  /* AdLib    */
+        if (sc == HC_F8) { sound_device_state = 4;           return; }  /* MT-32    */
     }
 }
 
