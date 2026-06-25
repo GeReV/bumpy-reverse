@@ -1413,3 +1413,21 @@ MONDE*.VEC level backgrounds — header 99 / palette @51 / planar @99).  The tit
 composed resources (SCORE.VEC, BUMPRESE.VEC) are STRUCTURED .VEC command streams (not rasters), so
 they still compose blank — they need the .VEC vector/op12 interpreter (the BGI-overlay command
 machinery), the larger remaining render piece.  Default BUMPY.EXE byte-identical (cac9ff23).
+
+### VERIFIED (playable host: boot graphics/sound select screens — host_config_screens.c)
+
+The original boots into two interactive TEXT-mode config screens (gfx_driver_init's
+"< F1 >: CGA … < F6 >: VGA256" → palette_mode 1=EGA/2=VGA, and the sound-device
+"< F5 >: NO SOUND … < F8 >: MT32" front-end).  The playable build previously SKIPPED both
+(main.c hardcoded palette_mode=2; audio auto-selects).  host_config_screens.c reconstructs
+them as host text-mode screens (set mode 0x03, write the prompts to B800, read the F-key via
+BIOS INT 16h, set palette_mode); main.c now calls host_gfx_select()/host_audio_select()
+before host_fb_init.  VERIFIED: the B800 text buffer shows the rendered menu ("BUMPY (C)
+LORICIEL 1992 / < F1 >: CGA … / Press a function key…") and the build parks at the INT 16h
+read — the first on-screen, interactive proof the recompilation runs.  RECONSTRUCTION FIDELITY
+divergence: the prompt text + F-key→mode mapping are 1:1 from the binary's strings, but the
+original's non-decompilable BIOS hardware-probe (greying out absent adapters) is replaced by a
+host text-screen that accepts the key; non-EGA/VGA graphics choices map to the validated VGA
+path (palette_mode=2), and the sound screen is cosmetic (host audio Tier-2/silent).  NOTE: the
+headless scancode harness drives the game's own port-0x60 ISR, not BIOS INT 16h, so it cannot
+advance these screens — real key input does.  Default BUMPY.EXE byte-identical (cac9ff23).

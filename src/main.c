@@ -78,7 +78,10 @@
  * ------------------------------------------------------------------------- */
 int main(void)
 {
-    palette_mode = 2;            /* validated EGA/VGA path (DGROUP 0x541d) */
+    host_gfx_select();           /* host_config_screens.c — boot EGA/VGA select screen
+                                    (text mode); sets palette_mode (1=EGA, 2=VGA) from
+                                    the F-key, replacing the former hardcoded =2. */
+    host_audio_select();         /* host_config_screens.c — boot sound-device select */
     host_screens_buf_init();     /* host_resource.c — back fullscreen_buf (the engine
                                     allocates it at boot; the reconstruction only reads
                                     it).  MUST precede host_fb_init's 256 KB halloc,
