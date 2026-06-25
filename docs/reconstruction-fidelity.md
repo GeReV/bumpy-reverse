@@ -1390,3 +1390,26 @@ screens.c's 2-arg shim now routes there instead of NOP.  Constants align exactly
 the blit lands where present_frame reads.  VERIFIED: VGA non-zero bytes 0 → 57948 at the title.
 Dynamic glyph text (draw_string_glyphs_9804) is still a separate stub (next).  Default
 BUMPY.EXE byte-identical (cac9ff23; all host-only).
+
+### Playable host: resource loader + .VEC raster decode (host_resource.c)
+
+The default build stubs the whole resource pipeline (open_resource / read_chunked / c_close /
+set_resource_table / vec_decode are faithful-signature NOPs), so the playable build composed an
+UNINITIALISED fullscreen_buf → RGB noise on every screen.  host_resource.c (#ifdef BUMPY_PLAYABLE)
+un-stubs it: open_resource maps the engine's vec_resource_table index (docs/data-files.md load
+order) to a filename and opens it via the real DOS I/O (dosio.c); read_chunked reads it; vec_decode
+drives the already-reconstructed vec_decode_planar and lays the result where the screen builders
+expect (palette @+0x33, plane-major raster @+99).  host_screens_buf_init backs fullscreen_buf with a
+halloc'd buffer (the engine allocates it at boot; the reconstruction only read it) — allocated
+BEFORE host_fb_init's 256 KB halloc (else the heap is exhausted and the read lands at 0000:0000),
+and SEGMENT-ALIGNED (offset 0) because DOS INT 21h/3Fh wraps/truncates a read whose buffer
+offset+length crosses 64 KB.  RECONSTRUCTION FIDELITY divergence: the engine walks a DGROUP vec_res
+descriptor table (name far-ptr + QUELDISK disk-id) with a floppy disk-swap retry; the host
+shortcuts to a static filename table + direct dosio open (data is mounted, no copy-protection).
+
+STATUS: file I/O + read + buffer all VERIFIED working (the game opens SCORE/MASKBUMP/BUMPRESE.VEC and
+the read lands in the aligned buffer).  vec_decode renders FULLSCREEN-RASTER .VEC (TITRE.VEC, the
+MONDE*.VEC level backgrounds — header 99 / palette @51 / planar @99).  The title-flow's first
+composed resources (SCORE.VEC, BUMPRESE.VEC) are STRUCTURED .VEC command streams (not rasters), so
+they still compose blank — they need the .VEC vector/op12 interpreter (the BGI-overlay command
+machinery), the larger remaining render piece.  Default BUMPY.EXE byte-identical (cac9ff23).

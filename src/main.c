@@ -79,6 +79,11 @@
 int main(void)
 {
     palette_mode = 2;            /* validated EGA/VGA path (DGROUP 0x541d) */
+    host_screens_buf_init();     /* host_resource.c — back fullscreen_buf (the engine
+                                    allocates it at boot; the reconstruction only reads
+                                    it).  MUST precede host_fb_init's 256 KB halloc,
+                                    which otherwise exhausts the heap and this halloc
+                                    returns NULL (→ resource reads land at 0000:0000). */
     host_fb_init();              /* host_render.c — framebuffer + page table */
     host_view_descriptors_init();/* game.c — bind view-descriptor backing storage
                                     (the reconstruction's pointer-split layout needs

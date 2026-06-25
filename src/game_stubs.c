@@ -244,10 +244,12 @@ void set_palette_mode(u8 mode, u8 flag)
 }
 
 /* set_resource_table 1000:... — point the resource table at (off,seg). */
+#ifndef BUMPY_PLAYABLE
 void set_resource_table(u16 off, u16 seg)
 {
     (void)off; (void)seg;
 }
+#endif /* !BUMPY_PLAYABLE (playable: src/host/host_resource.c) */
 
 /* clear_viewport 1000:03ea — clear the on-screen viewport. */
 void clear_viewport(void)

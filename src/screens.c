@@ -503,12 +503,18 @@ void play_intro_animation_loop(void);                     /* 1000:30dd (intro an
 void wait_50_frames(void);                                /* per-frame idle leaf     */
 void vga_dac_upload_from_buffer(u8 __far *img_buf);       /* mode-2 VGA-DAC handler   */
 
+#ifndef BUMPY_PLAYABLE
+/* Default build: faithful-signature NOP stubs (this build is byte-compared, never run).
+ * The playable build provides real bodies in src/host/host_resource.c (resource loader
+ * + .VEC decode), so the title/menu/text backgrounds actually load instead of composing
+ * uninitialised garbage.  See host_resource.c + docs/reconstruction-fidelity.md. */
 int  open_resource(u16 res_idx, u16 mode) { (void)res_idx; (void)mode; return 0; }
 u32  read_chunked(int handle, u16 buf_off, u16 buf_seg, u16 len_off, u16 len_seg)
 { (void)handle; (void)buf_off; (void)buf_seg; (void)len_off; (void)len_seg; return 0; }
 void c_close(int handle) { (void)handle; }
 void vec_decode(u16 buf_off, u16 buf_seg, u32 size, u16 arg, u16 flag)
 { (void)buf_off; (void)buf_seg; (void)size; (void)arg; (void)flag; }
+#endif /* !BUMPY_PLAYABLE */
 void process_sprites(u16 buf_off, u16 buf_seg) { (void)buf_off; (void)buf_seg; }
 void fun_7b93_present_blank(u16 buf_off, u16 buf_seg, u16 flag)
 { (void)buf_off; (void)buf_seg; (void)flag; }
