@@ -1090,7 +1090,7 @@ documented CORE render divergence:**
   The pixels the playable build composes through the leaves are identical to the
   already-trusted composite gate.
 
-**Task 7 — view/setup leaves + background save-under (`src/host/host_view.c`):**
+**Task 7 — view/setup leaves + background save-under (`src/view_setup.c`):**
 
 - **Flat-RAM save-under (setup_fullscreen_view).** The original engine's
   `setup_fullscreen_view` (1000:483c) copies VGA page-0 (`a000:0000`) into
@@ -1124,7 +1124,7 @@ documented CORE render divergence:**
 - **redraw_level_background_tiles carve-out.** `setup_fullscreen_view` calls
   `redraw_level_background_tiles` (1000:2a0a) 1:1 before the save-under copy.
   That function is not yet reconstructed; a NOP stub is defined locally in
-  `host_view.c` under `BUMPY_PLAYABLE` (not in `game_stubs.c` to preserve
+  `view_setup.c` under `BUMPY_PLAYABLE` (not in `game_stubs.c` to preserve
   BUMPY.EXE byte-equality).
 
 **Task 8 — boot init + per-round level (re)load (`src/host/host_boot.c`):**
@@ -1223,7 +1223,7 @@ These deviations exist ONLY in the `BUMPYP.EXE` playable build (`wmake play`); t
   signature `restore_bg_view(view, seg)` and treats it as a *stubbed* BGI-overlay render leaf
   (the title present is produced by the descriptor build + `present_frame(1)` that follow).
   But `bgi_overlay.c` reconstructs the SAME symbol with the EXPANDED host 3-arg form
-  `restore_bg_view(planes, vga_src, view)` (used by entity.c/player.c/host_view.c).  Under
+  `restore_bg_view(planes, vga_src, view)` (used by entity.c/player.c/view_setup.c).  Under
   `__watcall` (-ml) that body takes its first two far-ptr args in registers and its THIRD on
   the STACK, cleaning it with `retf 0x0004`; screens.c's 2-arg call pushes nothing, so the
   shared `restore_bg_view_` `retf 4` pops 4 bytes the caller never pushed → 4-byte stack
@@ -1277,10 +1277,10 @@ Root-cause trace (debug3):
   caller** → the tables were all-NULL → the `while (active != 0xFF)` scan dereferenced NULL slots
   and walked off the array forever (no terminator ever seen).
 
-Fix (`#ifdef BUMPY_PLAYABLE`, host_view.c `init_sprite_structs`): wire the slot tables to the
+Fix (`#ifdef BUMPY_PLAYABLE`, view_setup.c `init_sprite_structs`): wire the slot tables to the
 anim.c records + 0xFF terminators (the same wiring the harnesses do), at `game_loop`'s one-time
 `init_sprite_structs` setup, before `start_level`/`spawn_and_draw_level_entities` deref the slots.
-The default `BUMPY.EXE` build is unaffected (host_view.c is not compiled there; md5 stays
+The default `BUMPY.EXE` build is unaffected (view_setup.c is not compiled there; md5 stays
 `cac9ff236a832284fec6fafff2d8602b`).  This is a host-side WIRING of engine-owned data that the
 slice deferred to the harness — recorded as a Playable-host divergence.
 
@@ -1361,13 +1361,13 @@ host-seeded far shadow (player2.c decl) and — like the anim-channel slot table
 WIRING to the caller. The default `BUMPY.EXE` + its `tools/p2_ctest.c` seed it; the playable
 build had no caller, so it stayed NULL.
 
-Fix (`#ifdef`-free, host-only `host_view.c init_sprite_structs`, alongside the anim-slot wiring):
+Fix (`#ifdef`-free, host-only `view_setup.c init_sprite_structs`, alongside the anim-slot wiring):
 seed a 16-slot far-ptr table `[1]=p2_cell_move_up [2]=down [3]=left [4]=right` (verbatim the
 indices `seed_state_handler_tbl` in p2_ctest uses) and point `p2_state_handler_tbl` at it. The
 INT6 storm is eliminated (5.7M hits → 0). NOTE: full headless mode-4 gameplay re-verification is
 pending — recompiling shifts the BUMPYCAP injection calibration (DGROUP/keytbl offsets) so the
 scripted menu-drive needs re-derivation; interactive keyboard play (which needs no calibration)
-is the confirmation. Default `BUMPY.EXE` unchanged (host_view.c is play-only; md5 cac9ff23).
+is the confirmation. Default `BUMPY.EXE` unchanged (view_setup.c is play-only; md5 cac9ff23).
 
 UPDATE (hardening + audit): the first fix seeded only p2_state_handler_tbl[1..4] (the indices
 tools/p2_ctest.c's captured scenario exercises).  Interactive play still crashed — P2 is
