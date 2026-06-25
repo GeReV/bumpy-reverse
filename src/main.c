@@ -78,10 +78,10 @@
  * ------------------------------------------------------------------------- */
 int main(void)
 {
-    host_gfx_select();           /* host_config_screens.c — boot EGA/VGA select screen
-                                    (text mode); sets palette_mode (1=EGA, 2=VGA) from
-                                    the F-key, replacing the former hardcoded =2. */
-    host_audio_select();         /* host_config_screens.c — boot sound-device select */
+    host_gfx_select();           /* host_config_screens.c — faithful gfx_driver_init
+                                    (1ab9:02ce): text mode 0x02, header + EGA/VGA menu,
+                                    F2->palette_mode 1 / F3->2.  (No audio-select screen:
+                                    the real sound_select_device draws none.) */
     host_screens_buf_init();     /* host_resource.c — back fullscreen_buf (the engine
                                     allocates it at boot; the reconstruction only reads
                                     it).  MUST precede host_fb_init's 256 KB halloc,

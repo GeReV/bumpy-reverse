@@ -1187,11 +1187,22 @@ clearly separate from the documentary `src/` mirror:
 These deviations exist ONLY in the `BUMPYP.EXE` playable build (`wmake play`); the default
 `BUMPY.EXE` is byte-identical (md5 `cac9ff236a832284fec6fafff2d8602b`, 233230 B).
 
-- **palette-select screen skip** — `BUMPYP.EXE`'s `main` (src/main.c) hardcodes
-  `palette_mode = 2` and skips `gfx_driver_init`'s interactive F2/F5 graphics/palette-select
-  front-end, going straight to the validated EGA/VGA path + mode 0x0D.  The F2/F5 UI is a
-  hardware-probe/config screen with no gameplay effect once the VGA path is chosen.  The
-  DOSBox boot input script therefore omits F2/F5 (only FIRE pulses).
+- **graphics-adapter select screen** (`host_config_screens.c`, `host_gfx_select`) — a
+  faithful 1:1 reconstruction of `gfx_driver_init` (1ab9:02ce): BIOS text mode 0x02, header
+  "BUMPY (C) LORICIEL 1992" at (row 1, col 1), then the adapter menu printed at col 33 from
+  row 10 for each present entry of the shipped 6-byte adapter table `{0,1,1,0,0,0}` (EGA +
+  VGA), then poll F2 → `palette_mode = 1` / F3 → `palette_mode = 2`.  All strings + the table
+  are verbatim from the binary (DGROUP 0x529c / 0x52b4 / 0x548b).  TWO documented host
+  divergences: (1) input is read via BIOS INT 16h, not the engine's `get_key_state` over
+  `g_key_state_table` — that table's INT9 ISR is not installed until `init_game_session_state`,
+  which runs *after* this screen; the on-screen result (mode/strings/layout/F2-EGA/F3-VGA) is
+  identical.  (2) the host uses the shipped static adapter table rather than running the live
+  hardware probe (`detect_video_adapter`, 202c:0000) that would overwrite it; EGA+VGA-present
+  is correct for the validated VGA path.  `DAT_203b_530e = 0x40` (a BGI flag with no host
+  effect) is not reproduced.  Verified headless: BUMPYP.EXE sets mode 0x02 and parks at the
+  BIOS INT 16h wait (CS:IP f000:cf4x) for the F2/F3 keypress.
+  NOTE: the original's `sound_select_device` (1000:6de3) draws **no screen** (it is a silent
+  device-mask init); the playable build correctly has no audio-select screen.
 - **view-descriptor storage binding** — `host_view_descriptors_init` (game.c) binds the 15
   per-tick view-descriptor far pointers to one **static DGROUP buffer** (`s_host_view_desc_blk`,
   0x40 B × 15).  In the original these structs are DGROUP-resident; the reconstruction split
@@ -1414,20 +1425,29 @@ composed resources (SCORE.VEC, BUMPRESE.VEC) are STRUCTURED .VEC command streams
 they still compose blank — they need the .VEC vector/op12 interpreter (the BGI-overlay command
 machinery), the larger remaining render piece.  Default BUMPY.EXE byte-identical (cac9ff23).
 
-### VERIFIED (playable host: boot graphics/sound select screens — host_config_screens.c)
+### VERIFIED (playable host: boot graphics-adapter select screen — host_config_screens.c)
 
-The original boots into two interactive TEXT-mode config screens (gfx_driver_init's
-"< F1 >: CGA … < F6 >: VGA256" → palette_mode 1=EGA/2=VGA, and the sound-device
-"< F5 >: NO SOUND … < F8 >: MT32" front-end).  The playable build previously SKIPPED both
-(main.c hardcoded palette_mode=2; audio auto-selects).  host_config_screens.c reconstructs
-them as host text-mode screens (set mode 0x03, write the prompts to B800, read the F-key via
-BIOS INT 16h, set palette_mode); main.c now calls host_gfx_select()/host_audio_select()
-before host_fb_init.  VERIFIED: the B800 text buffer shows the rendered menu ("BUMPY (C)
-LORICIEL 1992 / < F1 >: CGA … / Press a function key…") and the build parks at the INT 16h
-read — the first on-screen, interactive proof the recompilation runs.  RECONSTRUCTION FIDELITY
-divergence: the prompt text + F-key→mode mapping are 1:1 from the binary's strings, but the
-original's non-decompilable BIOS hardware-probe (greying out absent adapters) is replaced by a
-host text-screen that accepts the key; non-EGA/VGA graphics choices map to the validated VGA
-path (palette_mode=2), and the sound screen is cosmetic (host audio Tier-2/silent).  NOTE: the
-headless scancode harness drives the game's own port-0x60 ISR, not BIOS INT 16h, so it cannot
-advance these screens — real key input does.  Default BUMPY.EXE byte-identical (cac9ff23).
+`host_gfx_select` is a faithful 1:1 reconstruction of `gfx_driver_init` (1ab9:02ce), the
+BGI-overlay routine the original runs at boot to choose the display adapter / palette mode.
+The original does not cleanly decompile (inline `swi(0x10)`/`swi(0x21)`); the reconstruction
+mirrors its disassembly exactly: `int 10h AX=0002h` (text mode 0x02) → cursor (1,1) + DOS
+print "BUMPY (C) LORICIEL 1992$" → loop the 6-entry adapter table at DGROUP 0x548b
+(`{0,1,1,0,0,0}`), printing each present adapter's 15-byte menu line (base 0x52b4) at col 33
+from row 10 → poll F2 (0x3c) → `palette_mode`=1 / F3 (0x3d) → `palette_mode`=2.  Because only
+table entries 1 and 2 are set, the screen shows exactly two lines, "< F2 >: EGA" and
+"< F3 >: VGA".  All strings + the table are verbatim from the binary.
+
+An EARLIER version was a placeholder that invented the screen (text mode 0x03, a fixed 6-line
+"< F1 >: CGA … < F6 >: VGA256" menu, and a fabricated "< F5 >: NO SOUND … < F8 >: MT32" sound
+screen).  That was wrong on mode, layout, which adapters appear, and accepted keys, and the
+sound screen does not exist in the original at all — `sound_select_device` (1000:6de3) draws
+NO screen (silent device-mask init).  The placeholder is replaced by this reconstruction and
+the invented audio screen is removed.
+
+VERIFIED headless: BUMPYP.EXE flips to BIOS video mode 0x02 (frame 61), then parks at the
+BIOS INT 16h keyboard wait (CS:IP f000:cf4x) for 1200+ stable frames — the DOS prints ran and
+it is waiting for F2/F3.  Two documented host divergences (see the Playable-host section
+above): input via BIOS INT 16h instead of the engine's `get_key_state` table (the INT9 ISR is
+not installed until `init_game_session_state`, which runs after this screen), and the shipped
+static adapter table instead of the live `detect_video_adapter` probe.  Default BUMPY.EXE
+byte-identical (cac9ff23).
