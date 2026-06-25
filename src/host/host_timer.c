@@ -180,61 +180,9 @@ void host_timer_teardown(void)
     pit_program(PIT_DIVISOR_BIOS);
 }
 
-/* ── rotate_timing_flags_and_wait ──────────────────────────────────────────────
- * 1:1 port of the engine's rotate_timing_flags_and_wait (1000:1349):
- *   - Read timing_flag_accumulator bit 0 (the carry-out of the rotate).
- *   - Rotate the byte right by 1 (ROR 1) with that bit wrapping into bit 7.
- *   - Wait 2 host_ticks if the carry-out was 1, else wait 1 host_tick.
- *
- * Engine global timing_flag_accumulator is at DGROUP 0x854f.  The host honours
- * the same variable through the shared globals (declared in game.h as the
- * engine's DGROUP-mapped timing byte). */
-void rotate_timing_flags_and_wait(void)
-{
-    unsigned char frames_to_wait;
-    unsigned char carry_bit;
-    unsigned char acc;
-
-    frames_to_wait = 1u;
-    acc = timing_flag_accumulator;
-
-    if ((acc & 0x01u) != 0u) {
-        carry_bit = 0x80u;    /* LSB was 1 — wraps to MSB */
-        frames_to_wait = 2u;
-    } else {
-        carry_bit = 0x00u;
-    }
-
-    /* ROR 1: logical right-shift then OR in the carry. */
-    timing_flag_accumulator = (unsigned char)((acc >> 1u) | carry_bit);
-
-    /* Wait for frames_to_wait host_ticks. */
-    run_n_frames((unsigned char)frames_to_wait);
-}
-
-/* ── run_n_frames ──────────────────────────────────────────────────────────────
- * Wait n host_tick advances (n frame-pacing ticks from the INT8 ISR).
- * Each iteration: snapshot the current tick value, spin until host_tick
- * advances (ISR fires), then count down.
- *
- * RECONSTRUCTION FIDELITY: the engine's run_n_frames (1000:05e7) dispatches
- * through the palette-mode overlay to a frame-tick wait that spins on
- * tick_counter_a (DGROUP 0x54f6, cleared by wait_tick_counter_a 1000:7efe).
- * The host uses host_tick (our own volatile counter) instead; the observable
- * effect is identical — each call waits exactly one ISR period per iteration.
- * Deviation noted. */
-void run_n_frames(unsigned char n)
-{
-    unsigned snap;
-
-    while (n != 0u) {
-        snap = host_tick;
-        /* Spin until the ISR increments host_tick past our snapshot. */
-        while (host_tick == snap) {
-            /* tight spin — ISR fires within 1/500 s = 2 ms */
-        }
-        n--;
-    }
-}
+/* rotate_timing_flags_and_wait (1000:1349) and run_n_frames (1000:05e7) are engine
+ * frame-pacing LOGIC (not the hardware ISR) — relocated to src/game.c.  They spin on
+ * the host_tick primitive this file's INT8 ISR drives; the ISR install/teardown stays
+ * here as the genuine timer-hardware platform leaf. */
 
 #endif /* BUMPY_PLAYABLE */

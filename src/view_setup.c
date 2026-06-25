@@ -1,14 +1,14 @@
 #ifdef BUMPY_PLAYABLE
 #include <string.h>
 #include <malloc.h>           /* _fmalloc */
-#include "host.h"             /* host_framebuffer, VGA constants */
-#include "../bumpy.h"
-#include "../bgi_overlay.h"   /* bgi_view_desc, render_player_view, restore_bg_view,
+#include "host/host.h"        /* host_framebuffer, VGA constants */
+#include "bumpy.h"
+#include "bgi_overlay.h"      /* bgi_view_desc, render_player_view, restore_bg_view,
                                   BGI_PAGE_A000_OFF, BGI_PLANE_SIZE, BGI_PAGE_SIZE */
-#include "../screens.h"       /* render_descriptor_ptr, fullscreen_buf/seg,
+#include "screens.h"          /* render_descriptor_ptr, fullscreen_buf/seg,
                                   palette_mode, draw_number, upload_vga_dac_palette,
                                   play_iris_wipe_transition */
-#include "../anim.h"          /* p1_sprite */
+#include "anim.h"             /* p1_sprite */
 
 /* P2 move-state handler table + its four cell-move handlers (player2.c).  Declared
  * locally rather than via player2.h: that header and game.h carry an inconsistent
@@ -19,10 +19,10 @@ extern void p2_cell_move_up(void);
 extern void p2_cell_move_down(void);
 extern void p2_cell_move_left(void);
 extern void p2_cell_move_right(void);
-#include "../level.h"         /* level_get_entity_dg, DG_P1_OBJ, DG_P2_OBJ,
+#include "level.h"            /* level_get_entity_dg, DG_P1_OBJ, DG_P2_OBJ,
                                   OBJ_FTBL_OFF, OBJ_FTBL_SEG */
-#include "../input.h"         /* get_key_state */
-#include "../game.h"          /* present_frame, set_display_page, draw_number */
+#include "input.h"            /* get_key_state */
+#include "game.h"             /* present_frame, set_display_page, draw_number */
 /* NOTE: player2.h and game.h declare p2_step_scripted_move with inconsistent
  * return types (void vs u8); we must NOT include player2.h when game.h is present.
  * Use an explicit extern for p2_sprite only. */
@@ -31,12 +31,13 @@ extern void p2_cell_move_right(void);
 extern u8 __far *p2_sprite;   /* player2.c DGROUP 0x9b9e/0x9ba0 */
 
 /* ============================================================================
- * host_view.c — view/setup leaves + background save-under  (Plan A, Task 7)
+ * view_setup.c — view/setup leaves + background save-under  (Plan A, Task 7)
  * ============================================================================
  *
- * Implements the five view/setup/screen leaves that game_stubs.c stubs as
- * carve-outs in the default build.  Under -dBUMPY_PLAYABLE these real bodies
- * replace the NOPs:
+ * These are reconstructed ENGINE functions (view/screen setup), not host platform
+ * glue — so they live in src/ proper, not src/host/.  They implement the five
+ * view/setup/screen leaves that game_stubs.c stubs as carve-outs in the default
+ * build; under -dBUMPY_PLAYABLE these real bodies replace the NOPs:
  *
  *   init_sprite_structs       — 1:1 structural port of 1000:33c5
  *   init_fullscreen_view_desc — 1:1 structural port of 1000:5181

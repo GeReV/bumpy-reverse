@@ -983,4 +983,24 @@ u8 __far *level_get_entity_dg(void)
 {
     return g_entity_dg;
 }
+
+/* ── load_current_level_data (1000:32b0) — per-round level (re)load ──────────────
+ * Engine logic (relocated from src/host/host_boot.c — not host platform glue).
+ *
+ * Engine body: copies the current level's 0x96-byte header from the in-memory level
+ * archive (cur_level_ptr) into the tilemap buffer.  HOST STAND-IN: the playable
+ * build never populates that in-memory archive (start_level decodes from files
+ * directly), so we reload by calling start_level(current_level, current_level),
+ * which re-runs the full INT 21h file-load pipeline for the current level.
+ *
+ * DEVIATION (DONE_WITH_CONCERNS): start_level does MORE than the engine's 32b0 (it
+ * also reloads the sprite bank + re-renders the level to VGA), and game_loop already
+ * calls start_level at the top of each round, so it runs twice per round.  Harmless
+ * (start_level is idempotent — same static buffers, no recursion) but wasteful.
+ * TODO (future faithful pass): implement the real 1000:32b0 lightweight 0x96-byte
+ * header copy and drop this start_level call.  See docs/reconstruction-fidelity.md. */
+void load_current_level_data(void)
+{
+    start_level(current_level, current_level);
+}
 #endif /* BUMPY_PLAYABLE */

@@ -65,7 +65,7 @@ PLAYDIR = play
 PLAY_OBJS = &
     $(PLAYDIR)/main.obj $(PLAYDIR)/game.obj $(PLAYDIR)/game_stubs.obj &
     $(PLAYDIR)/host_video.obj $(PLAYDIR)/host_render.obj $(PLAYDIR)/host_timer.obj &
-    $(PLAYDIR)/host_input.obj $(PLAYDIR)/host_view.obj $(PLAYDIR)/host_boot.obj &
+    $(PLAYDIR)/host_input.obj $(PLAYDIR)/view_setup.obj $(PLAYDIR)/host_boot.obj &
     $(PLAYDIR)/host_resource.obj $(PLAYDIR)/config_screens.obj &
     $(PLAYDIR)/level.obj $(PLAYDIR)/input.obj $(PLAYDIR)/player.obj $(PLAYDIR)/player2.obj &
     $(PLAYDIR)/items.obj $(PLAYDIR)/anim.obj $(PLAYDIR)/spawn.obj $(PLAYDIR)/sound.obj &
@@ -97,8 +97,8 @@ $(PLAYDIR)/host_timer.obj: host/host_timer.c
 	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/host_timer.obj host/host_timer.c
 $(PLAYDIR)/host_input.obj: host/host_input.c
 	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/host_input.obj host/host_input.c
-$(PLAYDIR)/host_view.obj: host/host_view.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/host_view.obj host/host_view.c
+$(PLAYDIR)/view_setup.obj: view_setup.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/view_setup.obj view_setup.c
 $(PLAYDIR)/host_boot.obj: host/host_boot.c
 	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/host_boot.obj host/host_boot.c
 $(PLAYDIR)/host_resource.obj: host/host_resource.c

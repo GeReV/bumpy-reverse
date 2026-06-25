@@ -200,45 +200,7 @@ void reset_opaque_session_globals(void)
      * game_stubs.c remain no-ops here.  See docs/reconstruction-fidelity.md. */
 }
 
-/* load_current_level_data 1000:32b0 — per-round level (re)load.
- *
- * Engine body: copies the current level's 0x96-byte header from the in-memory
- * level archive (cur_level_ptr / level_src_ptr far pointers) into the tilemap
- * buffer at DGROUP 0xa0e4, covering 0x30 + 0x30 + 0x30 + 6 = 0x96 bytes.
- *
- * HOST IMPLEMENTATION: the in-memory level archive is never populated in the
- * playable host (start_level decodes from files directly into g_dec_buf /
- * g_bum_buf / g_pav_buf).  We reload by calling start_level(current_level,
- * current_level), which re-runs the full INT 21h file-load pipeline for the
- * current level.  The level buffers are refreshed for the round reset.
- *
- * DEVIATION (DONE_WITH_CONCERNS): start_level does more than the engine's
- * 32b0 — it also reloads the sprite bank (BUMSPJEU.BIN) and re-renders the
- * level to VGA.  For Tier 1 round resets this is harmless (a duplicate load
- * of the same data + a redundant render), but it is not byte-identical to the
- * engine's lightweight tilemap copy.  Runtime proof (round-reset loads the
- * correct level) is deferred to Task 9/11.
- * See docs/reconstruction-fidelity.md row "host_boot.c". */
-void load_current_level_data(void)
-{
-    /* HOST STAND-IN for engine's lightweight 0x32b0 header-copy (1000:32b0).
-     * The engine copies the current level's 0x96-byte header from the in-memory
-     * level archive (cur_level_ptr far pointer) — it does NOT re-read files.
-     * Here we call start_level(current_level, current_level) as a substitute
-     * because the host never populates the in-memory archive.
-     *
-     * DOUBLE-LOAD NOTE: game_loop (game.c ~line 345) ALSO calls start_level
-     * directly at the top of each round.  As a result start_level runs TWICE
-     * per round: once here (via reset_game_state → load_current_level_data) and
-     * once in game_loop itself.  This is harmless — start_level is idempotent
-     * (overwrites the same static buffers with the same data, and has no path
-     * back to reset_game_state, so there is no recursion) — but it is wasteful.
-     *
-     * TODO (future faithful pass): implement the real 1000:32b0 lightweight copy
-     * (copy 0x96 bytes from the in-memory level archive into the tilemap buffer)
-     * and remove this start_level call.  Cross-ref: game_loop (game.c ~345) and
-     * engine addr 1000:32b0. */
-    start_level(current_level, current_level);
-}
+/* load_current_level_data (1000:32b0) is engine logic (per-round level reload), not
+ * host platform glue — relocated to src/level.c (next to start_level, which it calls). */
 
 #endif /* BUMPY_PLAYABLE */

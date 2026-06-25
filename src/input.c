@@ -262,3 +262,31 @@ void poll_input(void)
         input_state = input_code;
     }
 }
+
+#ifdef BUMPY_PLAYABLE
+/* ── wait_keypress (1000:1de1 area) ─────────────────────────────────────────────
+ * Engine logic (relocated from src/host/host_input.c — not host platform glue):
+ * clear input_state, then spin calling poll_input() until input_state becomes
+ * nonzero.  The game gates on the next resolved action key (menus, pause, title
+ * sequence debounce) through this.  Faithful to the engine body's structure; the
+ * tight spin is correct because IRQ1 is delivered asynchronously, so the INT9 ISR
+ * sets the table entry and poll_input() eventually returns a nonzero action.
+ * Built only into the playable image (game_stubs.c stubs it for the default). */
+void wait_keypress(void)
+{
+    input_state = 0u;
+    while (input_state == 0u) {
+        poll_input();
+    }
+}
+
+/* ── fun_75a2_poll_action (1000:75a2) ───────────────────────────────────────────
+ * fun_75a2_poll_action IS read_input_action — exposed under the Ghidra-address
+ * carve-out name that screens.c / game_stubs.c reference.  Routes to the faithful
+ * interpreter; for all existing call sites arg is effectively 0 (handler 0 = the
+ * keyboard script). */
+char fun_75a2_poll_action(u8 arg)
+{
+    return (char)read_input_action((u16)arg);
+}
+#endif /* BUMPY_PLAYABLE */

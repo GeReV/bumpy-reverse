@@ -46,6 +46,10 @@
 #include "video.h"    /* video_set_mode_0d                                      */
 
 #include <stdlib.h>   /* rand() — the engine calls the CRT rand (1000 rand thunk)*/
+#ifdef BUMPY_PLAYABLE
+#include "host/host.h"  /* host_tick — the relocated INT8-timing leaves spin on it */
+#include "screens.h"    /* timing_flag_accumulator (DGROUP 0x854f) */
+#endif
 
 /* init_view_anim_descriptors writes its view-descriptor far-ptr SEG halves as the
    DS register (the runtime DGROUP segment).  The static-image link-time DS literal is
@@ -599,6 +603,50 @@ void host_view_descriptors_init(void)
     p2_anim_clear_view_8cc = blk + 0x0cu * HV_DESC_LEN;   /* game.c    0x8cc */
     p2_anim_erase_view_8d8 = blk + 0x0du * HV_DESC_LEN;   /* game.c    0x8d8 */
     p2_anim_erase_view_8dc = blk + 0x0eu * HV_DESC_LEN;   /* game.c    0x8dc */
+}
+
+/* ── rotate_timing_flags_and_wait (1000:1349) ───────────────────────────────────
+ * Engine per-tick frame pacing (relocated from src/host/host_timer.c — engine
+ * logic, not the hardware ISR).  Read timing_flag_accumulator bit 0, ROR the byte
+ * by 1, and wait 2 host ticks if the carried-out bit was 1 else 1 tick. */
+void rotate_timing_flags_and_wait(void)
+{
+    unsigned char frames_to_wait;
+    unsigned char carry_bit;
+    unsigned char acc;
+
+    frames_to_wait = 1u;
+    acc = timing_flag_accumulator;
+
+    if ((acc & 0x01u) != 0u) {
+        carry_bit = 0x80u;    /* LSB was 1 — wraps to MSB */
+        frames_to_wait = 2u;
+    } else {
+        carry_bit = 0x00u;
+    }
+
+    /* ROR 1: logical right-shift then OR in the carry. */
+    timing_flag_accumulator = (unsigned char)((acc >> 1u) | carry_bit);
+
+    run_n_frames((unsigned char)frames_to_wait);
+}
+
+/* ── run_n_frames (1000:05e7) ───────────────────────────────────────────────────
+ * Wait n frame ticks (relocated from src/host/host_timer.c — engine logic that
+ * spins on the host_tick PRIMITIVE the INT8 ISR drives; the ISR itself stays in
+ * host_timer.c).  The engine spins on tick_counter_a (DGROUP 0x54f6) instead; the
+ * observable effect — one ISR period per iteration — is identical. */
+void run_n_frames(unsigned char n)
+{
+    unsigned snap;
+
+    while (n != 0u) {
+        snap = host_tick;
+        while (host_tick == snap) {
+            /* tight spin — ISR fires within 1/500 s = 2 ms */
+        }
+        n--;
+    }
 }
 #endif /* BUMPY_PLAYABLE */
 

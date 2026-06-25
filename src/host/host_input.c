@@ -128,43 +128,8 @@ void restore_keyboard_isr(void)
     }
 }
 
-/* ── wait_keypress ─────────────────────────────────────────────────────────────
- * CARVE-OUT (int8/keyboard-timing leaf) — 1000:1de1 area.
- *
- * Clear input_state, then spin calling the real poll_input() (input.c) until
- * input_state becomes nonzero.  The game uses this to gate on the next resolved
- * action key (menus, pause, title sequence debounce).
- *
- * RECONSTRUCTION FIDELITY: the engine's wait_keypress body (1000:1de1) clears
- * input_state then loops through the same poll_input / input_state test.  This
- * host implementation is faithful to that structure; the tight spin is correct
- * because DOSBox and real hardware deliver IRQ1 asynchronously, so the ISR will
- * set the table entry and poll_input() will eventually return a nonzero action. */
-void wait_keypress(void)
-{
-    input_state = 0u;
-    while (input_state == 0u) {
-        poll_input();
-    }
-}
-
-/* ── fun_75a2_poll_action ──────────────────────────────────────────────────────
- * Input-poll primitive — 1000:75a2 (read_input_action entry, menu debounce path).
- *
- * Returns the resolved action byte for handler 0 (the keyboard handler script).
- * Calls the faithful read_input_action(0) implementation in input.c.
- *
- * RECONSTRUCTION FIDELITY: fun_75a2_poll_action IS read_input_action.  It is
- * exposed under this carve-out name because the game_stubs.c / screens.c calls
- * reference it as `fun_75a2_poll_action` (the Ghidra-address-derived symbol for
- * 1000:75a2).  Under BUMPY_PLAYABLE the stub is replaced by this real dispatch
- * which routes directly to the faithful interpreter.  The `arg` parameter matches
- * the signature (handler index); for all existing call sites arg is effectively 0
- * (handler 0 = the keyboard script).  Cast to u16 to match read_input_action's
- * prototype. */
-char fun_75a2_poll_action(u8 arg)
-{
-    return (char)read_input_action((u16)arg);
-}
+/* wait_keypress (1000:1de1) and fun_75a2_poll_action (1000:75a2) are engine input
+ * logic, not host platform glue — relocated to src/input.c (next to poll_input /
+ * read_input_action, which they call). */
 
 #endif /* BUMPY_PLAYABLE */
