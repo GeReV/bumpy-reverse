@@ -57,7 +57,12 @@
  *  RECONSTRUCTION FIDELITY: the engine value is the runtime DS, not a constant; this
  *  symbol stands in for that register.  See docs/reconstruction-fidelity.md. */
 #ifndef ANIM_DGROUP_RUNTIME_SEG
+#ifdef BUMPY_PLAYABLE
+extern u16 host_dgroup_seg(void);   /* host_render.c — loaded image's real DGROUP seg */
+#define ANIM_DGROUP_RUNTIME_SEG host_dgroup_seg()
+#else
 #define ANIM_DGROUP_RUNTIME_SEG 0x203b
+#endif
 #endif
 
 /* ── the channel records (one fixed 12-byte record per slot) ─────────────────── */

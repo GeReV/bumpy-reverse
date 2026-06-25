@@ -58,7 +58,12 @@
    value so it can compare the genuine engine-written bytes; the source default keeps
    the decomp's static 0x203b.  Same convention as anim.c's ANIM_DGROUP_RUNTIME_SEG. */
 #ifndef GAME_DGROUP_RUNTIME_SEG
+#ifdef BUMPY_PLAYABLE
+extern u16 host_dgroup_seg(void);   /* host_render.c — loaded image's real DGROUP seg */
+#define GAME_DGROUP_RUNTIME_SEG host_dgroup_seg()
+#else
 #define GAME_DGROUP_RUNTIME_SEG 0x203b
+#endif
 #endif
 
 /* ── Session / round / tick control flags (OWNED here) ──────────────────────── */

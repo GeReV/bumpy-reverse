@@ -25,6 +25,11 @@
 extern u8 __huge *host_framebuffer;  /* 4 * HOST_PLANE_SIZE */
 void host_fb_init(void);             /* allocate + register the page table into it */
 void host_screens_buf_init(void);    /* host_resource.c — back fullscreen_buf for the resource loader */
+/* Runtime DGROUP segment.  The engine's screens/anim/spawn/game leaves write the
+ * static DGROUP segment (Ghidra renders DS as 0x203b) into descriptor far-ptr seg
+ * fields; in the recompiled image the loaded DGROUP segment differs, so the playable
+ * build resolves the *_DGROUP_RUNTIME_SEG macros to this instead of the static 0x203b. */
+u16 host_dgroup_seg(void);
 /* Timer */
 extern volatile unsigned host_tick;  /* ISR-incremented frame counter */
 void host_timer_teardown(void);      /* restore old INT8 vector + BIOS PIT divisor */

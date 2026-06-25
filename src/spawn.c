@@ -109,7 +109,12 @@ extern void anim_blit_sprite_leaf(u16 obj_off, u16 obj_seg); /* blit_sprite 1000
    0x203b)).  0x203b in the real build; the ctest harness may override to the runtime seg —
    same guarded convention as anim.c. */
 #ifndef ANIM_DGROUP_RUNTIME_SEG
+#ifdef BUMPY_PLAYABLE
+extern u16 host_dgroup_seg(void);   /* host_render.c — loaded image's real DGROUP seg */
+#define ANIM_DGROUP_RUNTIME_SEG host_dgroup_seg()
+#else
 #define ANIM_DGROUP_RUNTIME_SEG 0x203b
+#endif
 #endif
 
 void spawn_and_draw_level_entities(void)

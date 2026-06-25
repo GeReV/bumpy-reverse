@@ -119,6 +119,17 @@ void host_fb_init(void)
     host_cur_sprite_data_seg = VGA_SEG_PAGE0;
 }
 
+/* host_dgroup_seg — the loaded image's actual DGROUP segment.  Any C global lives in
+ * DGROUP (large model near-data), so the segment half of a far pointer to one IS the
+ * runtime DGROUP.  The engine leaves stamp this into descriptor seg fields where Ghidra
+ * showed the static 0x203b; the recompiled image loads DGROUP elsewhere, so the playable
+ * *_DGROUP_RUNTIME_SEG macros resolve here instead. */
+u16 host_dgroup_seg(void)
+{
+    static u16 hr_dgroup_marker;   /* a DGROUP (near-data) global */
+    return (u16)((u32)((void __far *)&hr_dgroup_marker) >> 16);
+}
+
 /* set_sprite_table_ptr (1cec:2dd2) + dispatch_palette_mode_with_src_ptr (1cec:2d6d):
  * select the draw page by index into sprite_table_base, splitting the chosen far
  * ptr into cur_sprite_data (off, seg).  index 0 → page1, index 1 → page0. */

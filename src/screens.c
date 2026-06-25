@@ -185,7 +185,12 @@ void draw_string_glyphs_9804(u16 x, u16 y)       { (void)x; (void)y; return; }
    Ghidra static DGROUP segment 0x203b; the host harness overrides to the captured
    runtime value (mirrors anim.c's ANIM_DGROUP_RUNTIME_SEG). */
 #ifndef SCREENS_DGROUP_RUNTIME_SEG
+#ifdef BUMPY_PLAYABLE
+extern u16 host_dgroup_seg(void);   /* host_render.c — loaded image's real DGROUP seg */
+#define SCREENS_DGROUP_RUNTIME_SEG host_dgroup_seg()
+#else
 #define SCREENS_DGROUP_RUNTIME_SEG 0x203b
+#endif
 #endif
 
 /* ════════════════════════════════════════════════════════════════════════════
