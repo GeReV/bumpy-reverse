@@ -1236,7 +1236,28 @@ These deviations exist ONLY in the `BUMPYP.EXE` playable build (`wmake play`); t
   default `BUMPY.EXE` build is unaffected (the `#ifndef BUMPY_PLAYABLE` extern branch is
   byte-stable; that build is byte-compared, never executed, so its latent ABI mismatch is inert).
 
-### RESOLVED (Task-9 boot blocker — title-present crash) → boot now stable in mode 0x0D
+- **playable host: BGI overlay primitives** (`src/host/host_bgi.c`, `BUMPY_PLAYABLE` only) —
+  the engine reaches its graphics primitives through main-segment thunks (`1000:7b4a`…) that
+  dispatch into the Borland **BGI graphics-driver overlay at segment `1ab9`**, which selects a
+  per-`palette_mode` handler through runtime vector tables (`pm*2 + 0x4dda/0x5435/0x5441/…`).
+  The overlay is a third-party library, **absent from the Ghidra decompilation corpus**, so its
+  internals cannot be reconstructed 1:1.  Per the agreed decision (see
+  `docs/faithfulness-gap-audit.md` §1 and the priority-#1 plan), these primitives are
+  **reimplemented host-side in `host_bgi.c` for functional equivalence** on the VGA
+  (`palette_mode==2`) path — the only path the playable build exercises — while the game still
+  *invokes* them through its existing thunks (the default `BUMPY.EXE` keeps the faithful-signature
+  NOP stubs in `screens.c`, so it stays byte-identical).  This un-stubs, one primitive per task,
+  the present/flip/viewport leaves the title/menu transitions need (the iris wipe, blank-present
+  and page-flip were dead NOPs).
+  - **page-flip** (`fun_7bca_flip` = `bgi_page_flip_thunk` `1000:7bca` → `bgi_page_flip_dispatch`
+    `1ab9:02b1` → VGA vector handler): `host_bgi_page_flip(page)` routes to `present_frame`
+    (host_video.c) — the standard EGA/VGA double-buffer (framebuffer copy + vblank sync + CRTC
+    flip), the same observable tear-free page flip.  KNOWN INTERACTION (to unify in a later task):
+    `show_title_background`/`show_title_and_init` and two highscore sites call `fun_7bca_flip(0)`
+    immediately followed by `present_frame(1)`, so those sites now present twice (two vblank waits;
+    same content, visually harmless).  The redundancy is a symptom of the host's `present_frame`
+    already merging the BGI putimage+flip; it is resolved once the putimage/present primitives land
+    and the present model is unified (priority-#1 plan, Tasks 2–5).
 
 The Task-9 OPEN blocker (`retf` at `0824:5E38` popping a corrupted frame in the title/present
 path) was root-caused to the **`restore_bg_view` signature schism** above and FIXED (the host
