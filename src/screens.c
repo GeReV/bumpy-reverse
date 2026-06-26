@@ -76,6 +76,9 @@
                         this is the real OUT. */
 #endif
 #include "screens.h"
+#ifdef BUMPY_PLAYABLE
+#include "host/host_bgi.h"   /* host_bgi_page_flip — BGI page-flip reimplementation */
+#endif
 
 /* ── screen-state scalars ───────────────────────────────────────────────────────── */
 u16 palette_mode;                  /* DGROUP 0x541d — display/palette mode + DAC dispatch idx */
@@ -523,7 +526,15 @@ void vec_decode(u16 buf_off, u16 buf_seg, u32 size, u16 arg, u16 flag)
 void process_sprites(u16 buf_off, u16 buf_seg) { (void)buf_off; (void)buf_seg; }
 void fun_7b93_present_blank(u16 buf_off, u16 buf_seg, u16 flag)
 { (void)buf_off; (void)buf_seg; (void)flag; }
+#ifdef BUMPY_PLAYABLE
+/* Playable build: route to host BGI page-flip primitive (host_bgi.c).
+ * bgi_page_flip_thunk (1000:7bca) discards 'page' before calling the BGI
+ * dispatch; host_bgi_page_flip forwards it to present_frame for the double-
+ * buffer present.  RECONSTRUCTION FIDELITY: see host/host_bgi.h. */
+void fun_7bca_flip(u8 page) { host_bgi_page_flip(page); }
+#else
 void fun_7bca_flip(u8 page) { (void)page; }
+#endif
 void fun_7b4a_view_blit(u8 __far *view, u16 seg) { (void)view; (void)seg; }
 void fun_9410_set_sprite_table(u16 arg) { (void)arg; }
 void play_intro_animation_loop(void) { }
