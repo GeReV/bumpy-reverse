@@ -8,8 +8,8 @@
  * corpus; its internal structure cannot be reconstructed 1:1.  This host module
  * provides *functional equivalents* for VGA (palette_mode==2) only — the mode
  * the playable build runs in.  Each host primitive replaces the corresponding
- * BGI dispatch thunk (fun_7bca_flip etc.) under #ifdef BUMPY_PLAYABLE; the
- * default BUMPY.EXE build keeps the faithful-signature NOP stubs in screens.c.
+ * BGI dispatch thunk under #ifdef BUMPY_PLAYABLE; the default BUMPY.EXE build
+ * keeps the faithful-signature NOP stubs in screens.c.
  * Deviation recorded in docs/reconstruction-fidelity.md ("playable host: BGI
  * overlay primitives"). */
 #ifndef HOST_BGI_H
@@ -17,20 +17,22 @@
 #ifdef BUMPY_PLAYABLE
 #include "bumpy.h"
 
-/* host_bgi_page_flip — functional equivalent of the BGI page-flip dispatch.
+/* host_bgi_stage_image_palette — functional equivalent of BGI VGA stage handler
+ * (1ab9:0620): copies 48 bytes (16-colour 6-bit palette) from [buf_seg:buf_off]
+ * +0x33 into the per-page side-store host_bgi_page_palette[page & 1].
  *
- * In the original engine, bgi_page_flip_thunk (1000:7bca) calls
- * bgi_page_flip_dispatch (1ab9:02b1), which dispatches through the BGI vector
- * table to the per-mode VGA page-flip handler.  The 'page' argument passed to
- * the thunk is NOT forwarded to the dispatch fn (the thunk discards it); the
- * original BGI handler determines the target page internally.  The engine always
- * calls fun_7bca_flip(0).
+ * Called from fun_7b93_present_blank (screens.c) under #ifdef BUMPY_PLAYABLE.
+ * RECONSTRUCTION FIDELITY: the engine slots the palette into *0x5311+page*99+
+ * 0x33; the host uses a two-entry side-store instead (see host_bgi.c). */
+void host_bgi_stage_image_palette(u16 buf_off, u16 buf_seg, u16 page);
+
+/* host_bgi_upload_palette_to_dac — functional equivalent of BGI VGA DAC-upload
+ * handler (1ab9:0677): reads host_bgi_page_palette[page & 1] and emits the
+ * canonical VGA-DAC write sequence (OUT 0x3c8=0, 8×RGB; OUT 0x3c8=0x10, 8×RGB).
  *
- * The host routes this to present_frame (host_video.c), which copies the
- * host_framebuffer RAM image to the off-screen VGA page, waits for vblank, and
- * performs the CRTC start-address flip — producing a tear-free double-buffer
- * present equivalent to the original BGI page-flip effect. */
-void host_bgi_page_flip(u8 page);
+ * Called from fun_7bca_flip (screens.c) under #ifdef BUMPY_PLAYABLE.
+ * The (port,value) sequence is the hard contract the DAC gate validates. */
+void host_bgi_upload_palette_to_dac(u16 page);
 
 #endif /* BUMPY_PLAYABLE */
 #endif /* HOST_BGI_H */

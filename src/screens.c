@@ -77,7 +77,7 @@
 #endif
 #include "screens.h"
 #ifdef BUMPY_PLAYABLE
-#include "host/host_bgi.h"   /* host_bgi_page_flip — BGI page-flip reimplementation */
+#include "host/host_bgi.h"   /* host_bgi_stage_image_palette / host_bgi_upload_palette_to_dac */
 #endif
 
 /* ── screen-state scalars ───────────────────────────────────────────────────────── */
@@ -524,14 +524,23 @@ void vec_decode(u16 buf_off, u16 buf_seg, u32 size, u16 arg, u16 flag)
 { (void)buf_off; (void)buf_seg; (void)size; (void)arg; (void)flag; }
 #endif /* !BUMPY_PLAYABLE */
 void process_sprites(u16 buf_off, u16 buf_seg) { (void)buf_off; (void)buf_seg; }
+#ifdef BUMPY_PLAYABLE
+/* Playable build: route to host palette-stage primitive (host_bgi.c).
+ * fun_7b93 thunk (1000:7b93) dispatches into BGI overlay 1ab9:0620, which
+ * copies 48 bytes from [buf_seg:buf_off]+0x33 into the per-page palette slot.
+ * 'flag' is the page index.  RECONSTRUCTION FIDELITY: see host/host_bgi.h. */
+void fun_7b93_present_blank(u16 buf_off, u16 buf_seg, u16 flag)
+{ host_bgi_stage_image_palette(buf_off, buf_seg, flag); }
+#else
 void fun_7b93_present_blank(u16 buf_off, u16 buf_seg, u16 flag)
 { (void)buf_off; (void)buf_seg; (void)flag; }
+#endif
 #ifdef BUMPY_PLAYABLE
-/* Playable build: route to host BGI page-flip primitive (host_bgi.c).
- * bgi_page_flip_thunk (1000:7bca) discards 'page' before calling the BGI
- * dispatch; host_bgi_page_flip forwards it to present_frame for the double-
- * buffer present.  RECONSTRUCTION FIDELITY: see host/host_bgi.h. */
-void fun_7bca_flip(u8 page) { host_bgi_page_flip(page); }
+/* Playable build: route to host DAC-upload primitive (host_bgi.c).
+ * fun_7bca thunk (1000:7bca) dispatches into BGI overlay 1ab9:0677, which
+ * writes host_bgi_page_palette[page & 1] to VGA DAC ports 0x3c8/0x3c9.
+ * RECONSTRUCTION FIDELITY: see host/host_bgi.h. */
+void fun_7bca_flip(u8 page) { host_bgi_upload_palette_to_dac(page); }
 #else
 void fun_7bca_flip(u8 page) { (void)page; }
 #endif
@@ -588,18 +597,10 @@ void dispatch_by_palette_mode(void)
     dac_palette_mode_active = palette_mode;
     /* palette_mode==2 (the natural boot) -> no DAC here (engine fact, T1).  Other modes'
        handlers are BGI overlay code; the modelled palette upload is gated standalone via
-       vga_dac_upload_from_buffer over a seeded buffer (see the carve-out note above). */
-#ifdef BUMPY_PLAYABLE
-    /* PLAYABLE HOST: the engine's runtime BGI palette handler (absent from the corpus, so
-       dispatch is a NOP above for the default/oracle builds) uploaded the decoded image's
-       DAC palette here.  Drive the reconstructed handler over the current screen image
-       (fullscreen_buf, palette at +0x33) so title/menu/text screens get their real colours
-       instead of the BIOS mode-0x0D default ramp.  Pairs with host_set_bgi_attribute_palette
-       (host_video.c) which maps the AC to this handler's DAC targets (0..7, 0x10..0x17). */
-    if (fullscreen_buf_seg != 0u) {
-        vga_dac_upload_from_buffer((u8 __far *)MK_FP(fullscreen_buf_seg, fullscreen_buf));
-    }
-#endif
+       vga_dac_upload_from_buffer over a seeded buffer (see the carve-out note above).
+       The real DAC upload for the playable path now flows through fun_7bca_flip →
+       host_bgi_upload_palette_to_dac (host_bgi.c), which the engine calls explicitly
+       after staging via fun_7b93_present_blank.  No workaround needed here. */
     return;
 }
 
