@@ -103,3 +103,22 @@ source. No DOSBox fork is vendored — only these patches.
   in-level arm, one record per armed hit, then flush/close + `DoKillSwitch()` after N frames.
   Entirely gated behind `BUMPYCAP_FB_OUT` (output path) + `BUMPYCAP_FB_FRAMES` (N, default 150)
   — a run without those env vars is unaffected.
+
+- **`04-bumpycap-memdump.patch`** — two one-shot raw dumps in the same `VGA_VerticalTimer`
+  hook, fired at `BUMPYCAP_SHOT_FRAME`. `BUMPYCAP_RAWVGA_OUT` dumps `vga.mem.linear[0..0x10000]`
+  (65536 B) so the original's `A200` menu/double-buffer page can be decoded offline without the
+  SHOT path's present-page assumption. `BUMPYCAP_MEMDUMP_OUT` (+`_OFF`/`_LEN`) dumps
+  `phys[dg + off .. +len]` for extracting DGROUP buffers (e.g. the menu option-2 difficulty
+  strips, see `tools/dosbox/extract_menu_strips.sh`). Both gated behind their env vars.
+
+- **`05-bumpycap-shot-attr-palette.patch`** — appends the 16 VGA Attribute Controller palette
+  registers (`vga.attr.palette[0..15]`) to the `BUMPYCAP_SHOT_OUT` dump, after the 256×3 DAC.
+  A mode-0x0D pixel value is NOT a direct DAC index: the VGA resolves it as
+  `DAC[ AC[pixel] ]`. The Bumpy engine loads the DAC only at slots `0..7` / `0x10..0x17` and
+  steers pixels `8..15` to `0x10..0x17` via the AC, so a decoder that reads `DAC[pixel]`
+  directly mis-colours every pixel `8..15` (the TITRE title logo came out rainbow-banded
+  instead of gold). Dumping the real AC lets `shot_to_png.py` resolve pixels exactly as the
+  hardware scans them — correct for the playable (VGA) **and** the original (EGA, which programs
+  an image-specific AC). The shot record grows by 16 bytes (`32000 + 768 + 16 = 32784`); the
+  decoder detects the section by file size and falls back to the engine's standard BGI AC map
+  for older dumps.

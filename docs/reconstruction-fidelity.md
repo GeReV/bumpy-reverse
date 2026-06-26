@@ -1377,6 +1377,42 @@ clip-aware `restore_bg_view` consumes (plane-major, 12 B/row × 16 rows × 4 pla
 `BUMPY.EXE` build is unaffected (host_resource.c is `BUMPY_PLAYABLE`-only; md5
 `cac9ff236a832284fec6fafff2d8602b`).  Verified: the playable menu renders "LEVEL : EASY".
 
+### RESOLVED (title-logo "rainbow") — a screenshot-decoder artifact, NOT a game bug
+
+The playable's title/menu logo (`TITRE.VEC`) appeared rainbow-banded in PNG screenshots, which
+looked like a wrong palette.  It is **not** a rendering bug — the playable composes the screen and
+uploads the DAC correctly; the offline screenshot decoder (`tools/dosbox/shot_to_png.py`) was
+mis-decoding it.
+
+**Root cause.** A mode-0x0D pixel value is not a direct DAC index: the VGA resolves it as
+`DAC[ AC[pixel] ]`, where `AC` is the 16 Attribute Controller palette registers.  The engine's BGI
+init (reconstructed as `host_set_bgi_attribute_palette`, `host_video.c`, called once from
+`init_display_97f1` after the BIOS mode-set) programs `AC[v] = v` for `v<8` and `AC[v] = 0x10+(v-8)`
+for `v≥8`, and `vga_dac_upload_from_buffer` loads the image's 16-colour palette into DAC slots
+`0..7` / `0x10..0x17` (leaving `8..15` at the BIOS-default EGA ramp).  So pixels with value `8..15`
+resolve to DAC `0x10..0x17` (the image colours).  `shot_to_png.py` decoded `DAC[pixel]` directly,
+reading the leftover EGA-default ramp (which contains reds) for every pixel `8..15` → the gold
+`BUMPY'S` logo banded into blue/red/green.  Confirmed: re-decoding the *same* shot with the AC stage
+applied yields the gold logo, pixel-matching the pure-Python ground truth (`vec_to_png.py`, validated
+99.95% vs a real DOSBox capture); `TITRE.VEC`'s own embedded palette IS that blue→gold gradient, and
+the playable's dumped DAC holds it split across `0..7`/`0x10..0x17` exactly as expected.
+
+**Fix (tooling only).** `tools/dosbox/patches/05-bumpycap-shot-attr-palette.patch` appends the real
+`vga.attr.palette[0..15]` to the `BUMPYCAP_SHOT` dump, and `shot_to_png.py` now resolves
+`DAC[ AC[pixel] ]` using the dumped AC (falling back to the engine's standard BGI map for older
+dumps).  This is faithful for **both** the playable (VGA: AC dumped as `{0..7,0x10..0x17}`, logo
+renders gold) **and** the original in EGA mode, which programs an *image-specific* AC
+(e.g. `{0,0,0,0,0,0,0,2,0xa,4,6,6,0xc,0xe,0xf,0xf}`) that maps the gradient-sky indices to black —
+so the original EGA menu correctly decodes as a black background + red/white logo (its intended EGA
+look), where the old hard-coded BGI map would have rainbowed it.  No game code changed; `BUMPY.EXE`
+and `BUMPYP.EXE` are untouched.
+
+**Remaining (documented, out of scope).** Booted in EGA mode (`F2`), the *playable* still uploads
+`TITRE.VEC`'s VGA palette (its `dispatch_by_palette_mode` shim always reads `+0x33`) and uses the
+fixed BGI AC, so it shows the VGA gold look rather than the original's EGA black/red.  The playable's
+default and validated path is VGA (`F3` → `palette_mode=2`), where it matches; the EGA-mode palette
+divergence is a non-default corner case left as-is.
+
 ### Task 11 — scripted pixel frame-compare gate (`tools/validate_playable.sh`)
 
 The Plan-A integration gate runs BOTH `BUMPYP.EXE` and the **real original** `BUMPY.EXE`

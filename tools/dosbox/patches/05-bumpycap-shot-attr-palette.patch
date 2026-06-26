@@ -1,0 +1,20 @@
+--- a/src/hardware/vga_draw.cpp
++++ b/src/hardware/vga_draw.cpp
+@@ -6107,6 +6107,17 @@ static void VGA_VerticalTimer(Bitu /*val*/) {
+ 						rgb[0] = vga.dac.rgb[c].red; rgb[1] = vga.dac.rgb[c].green; rgb[2] = vga.dac.rgb[c].blue;
+ 						fwrite(rgb, 1, 3, sf);
+ 					}
++					/* Attribute Controller palette: the 16 pixel-value -> DAC-index
++					 * registers (the VGA stage between the 4-bit pixel and the DAC).
++					 * Appended after the 256x3 DAC so a decoder can resolve a pixel
++					 * exactly as the hardware does — DAC[ac[pixel]] — instead of
++					 * assuming the engine's BGI AC map (which is only right in VGA
++					 * mode; EGA-mode screens program an image-specific AC).  16 bytes;
++					 * old dumps without it are detected by file size. */
++					for (c = 0; c < 16u; c++) {
++						uint8_t a = (uint8_t)vga.attr.palette[c];
++						fwrite(&a, 1, 1, sf);
++					}
+ 					fclose(sf);
+ 					LOG_MSG("BUMPYSHOT wrote %s at frame %u start=0x%04x", shot_out, bumpycap_frame, st);
+ 				}
