@@ -53,6 +53,22 @@ several presentation primitives are no-ops.
 
 ## §1 — BGI graphics-driver overlay (seg `1ab9`) — PRIMARY GAP
 
+> ⚠️ **CORRECTION (2026-06-27): the role labels below for `7b93`/`7bca` are MISNOMERS.**
+> Capture-driven RE of the actual VGA (`palette_mode==2`) handlers (disassembled from the
+> binary; recorded as Ghidra disassembly comments at the handler addresses) proved:
+> - `1ab9:01e1` (`bgi_stage_palette_dispatch`, thunk `7b93`, VGA handler `1ab9:0620`) is a
+>   **16-colour palette stage** — `rep movsw` of the 48-byte palette from `buf+0x33` into the
+>   current draw-object's per-**page** slot (`*0x5311 + page*99 + 0x33`). NOT a pixel putimage.
+> - `1ab9:02b1` (`bgi_upload_palette_to_dac_dispatch`, thunk `7bca`, VGA handler `1ab9:0677`)
+>   is a **DAC palette upload** (ports `0x3c8`/`0x3c9`, slots 0–7 & 0x10–0x17). NOT a page flip.
+> - `1ab9:0351` (`bgi_present_dispatch`, `present_frame` `7bdd`, VGA handler `1ab9:0379` →
+>   `1ab9:06c1`) is **the one true CRTC page flip** (`XOR` Start-Address bit 5 = 0x2000 swap).
+> - `1ab9:0179` (`bgi_init_viewport`, thunk `7b4a`) has a **null** VGA blit slot
+>   (`0x4dda[2]==0`): it sets the clip/viewport extent only — no pixel blit on VGA.
+>
+> Reconstruction is tracked in `docs/superpowers/plans/2026-06-27-host-bgi-present-transitions.md`
+> (rewritten). This table's per-row "Role"/"Action" text is rewritten by that plan's Task 4.
+
 The engine's graphics primitives are a Borland-BGI-style driver overlay. Main-segment
 **thunks** (`1000:7b4a`…) call **dispatch** functions here, which indirect-call a
 **runtime vector table** indexed by `palette_mode` (DGROUP `0x4dda`/`0x5435`/`0x5441`/
