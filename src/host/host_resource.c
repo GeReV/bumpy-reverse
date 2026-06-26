@@ -70,6 +70,11 @@ extern u16 fullscreen_buf_seg;   /* DGROUP 0x7928 — image buffer segment */
 extern u8 __huge *host_framebuffer;   /* host_render.c — 4 × 64 KB plane image */
 #define HR_FSBUF_BYTES 0x8800UL   /* 34816 ≥ max(VEC_FILE_MAX 33792, 99+32000 32099) */
 
+/* run_main_menu's option-2 difficulty-label strips (screens.c) — the host populates
+ * these far-ptr tables (see host_load_menu_strips below). */
+extern u16 menu_opt2_img_off[3];
+extern u16 menu_opt2_img_seg[3];
+
 /* The framebuffer is 4 × 0x10000 (256 KB) but only ~16 KB of each 64 KB plane is used:
  * page 0 at [0..0x1f40] and page 1 at [0x2000..0x3f40], so [0x4000..0x10000) (48 KB) of
  * plane 0 is permanently unused.  fullscreen_buf lives there — a paragraph- (and here
@@ -93,6 +98,43 @@ extern u8 __huge *host_framebuffer;   /* host_render.c — 4 × 64 KB plane imag
 #define HR_SPRITE_BUF_SEG_MARK 0xa0c8u   /* the literal buf_seg the sprite read passes */
 static u8 __far hr_discard[0x1000];      /* 4 KB: drains the unused sprite-bank read */
 
+/* ── host_load_menu_strips ──────────────────────────────────────────────────────
+ * Populate run_main_menu's option-2 difficulty-label strips (EASY / MEDIUM / HARD).
+ *
+ * RECONSTRUCTION FIDELITY (documented divergence): in the engine these three 6×2-tile
+ * (96×16, 16-colour planar, 768 B) labels are RUNTIME-DECODED sprite frames that live in
+ * DGROUP (run_main_menu reads them via the static far-ptr table at DGROUP +0x75e/+0x760,
+ * indexed by menu_option2_setting; restore_bg_view blits the selected one beside the
+ * "LEVEL :" text).  The reconstruction's sprite path does not reproduce that particular
+ * DGROUP decode, so the host instead LOADS the three already-decoded strips from
+ * MENUDIFF.BIN — a sidecar (3×768 B, setting order EASY/MEDIUM/HARD) the user generates
+ * from their OWN original via tools/dosbox/extract_menu_strips.sh (game data, kept under
+ * the git-ignored local/ tree; never committed).  The strip bytes are exactly the planar
+ * format restore_bg_view's clip-blit consumes (plane-major, 12 B/row × 16 rows × 4 planes).
+ * If the sidecar is absent the buffer stays zero → blank strip (the menu still renders).
+ * Recorded in docs/reconstruction-fidelity.md ("playable host" section). */
+#define HR_MENU_STRIP_BYTES 768u
+static u8 __far hr_menu_strips[3u * HR_MENU_STRIP_BYTES];
+
+void host_load_menu_strips(void)
+{
+    int h;
+    u16 i;
+    u16 seg = (u16)((u32)((void __far *)hr_menu_strips) >> 16);
+    u16 off = (u16)((u32)((void __far *)hr_menu_strips) & 0xffffu);
+
+    _fmemset((u8 __far *)hr_menu_strips, 0, sizeof(hr_menu_strips));   /* graceful blank */
+    h = dosio_open_read("MENUDIFF.BIN");
+    if (h >= 0) {
+        (void)dosio_read(h, (u8 __far *)hr_menu_strips, (u16)sizeof(hr_menu_strips));
+        (void)dosio_close(h);
+    }
+    for (i = 0; i < 3u; i++) {
+        menu_opt2_img_off[i] = (u16)(off + i * HR_MENU_STRIP_BYTES);
+        menu_opt2_img_seg[i] = seg;
+    }
+}
+
 void host_screens_buf_init(void)
 {
     /* Point fullscreen_buf at plane 0's unused slack inside the (already allocated)
@@ -113,6 +155,9 @@ void host_screens_buf_init(void)
             fullscreen_buf_seg = (u16)((u32)((void __far *)p) >> 16);
         }
     }
+    /* Load the option-2 difficulty-label strips (EASY/MEDIUM/HARD) the main menu
+     * cycles — runs once at startup, before game_loop reaches run_main_menu. */
+    host_load_menu_strips();
 }
 
 /* Select the active resource-table base from the engine's DGROUP table offset, so

@@ -1353,13 +1353,29 @@ never executed, so its behavioral content is immaterial there. The gameplay eras
 path and the composite ctests reach `restore_bg_view` only with `word0e>1` (NOP guard) views, so
 they are untouched (`validate_composite.sh` green).
 
-**REMAINING (separate, smaller):** the option-2 strip (the cycling "LEVEL:" value at tile
-(0xb,0x12)) still shows placeholder garbage — its source far ptrs `menu_opt2_img_off/seg[]`
-(DGROUP `+0x75e/+0x760`, indexed by `menu_option2_setting`) point at the original's STATIC DGROUP
-art at offsets `0x824e/0x8582/0x8b88`, which the reconstruction does not reproduce
-(`process_sprites`/`prepare_sprite_frames` decode the p1/p2/hud sprite OBJECTS, not these strips,
-so they are not runtime-populated). Embedding the raw blobs would be committing copyright game
-data; a legal runtime path (load from the user-supplied original) is TBD.
+**Option-2 difficulty strips (EASY / MEDIUM / HARD) — loaded from the original at runtime.**
+The cycling "LEVEL :" value beside the menu is a 6×2-tile (96×16, 16-colour planar, 768 B) strip;
+`run_main_menu` blits one of three via `restore_bg_view`, the source far ptrs coming from the
+static DGROUP table at `+0x75e` (off) / `+0x760` (seg), indexed by `menu_option2_setting`
+(setting 0→`0x8b88`=EASY, 1→`0x824e`=MEDIUM, 2→`0x8582`=HARD).  Those DGROUP offsets are **BSS**
+(zero in the EXE image): in the engine the three strips are RUNTIME-DECODED sprite frames that the
+sprite pipeline writes into DGROUP by the time `run_main_menu` runs.  The reconstruction's sprite
+path does not reproduce that particular DGROUP decode (`process_sprites`/`prepare_sprite_frames`
+decode the p1/p2/hud sprite OBJECTS into a different scratch region, not these strips), so in the
+playable build `menu_opt2_img_off/seg[]` would point at meaningless offsets → garbage.
+
+The strips are copyright game data, so they are NOT embedded in `src/`.  Instead the host LOADS
+them from `MENUDIFF.BIN` — a sidecar (3×768 B, setting order EASY/MEDIUM/HARD) the user generates
+from their OWN original via `tools/dosbox/extract_menu_strips.sh` (which boots the original under
+the instrumented dosbox-x to `run_main_menu`, reads the live `+0x75e` pointer table, and dumps the
+three populated strips via the BUMPYCAP memory-dump hook, `tools/dosbox/patches/04-bumpycap-memdump.patch`).
+The sidecar lives under the git-ignored `local/` tree and is never committed.  At startup
+`host_load_menu_strips` (src/host/host_resource.c, `BUMPY_PLAYABLE` only) reads it into a far buffer
+and points `menu_opt2_img_off/seg[]` at the three blobs; if the sidecar is absent the buffer stays
+zero → blank strip (the menu still renders).  The captured bytes are exactly the planar layout the
+clip-aware `restore_bg_view` consumes (plane-major, 12 B/row × 16 rows × 4 planes).  The default
+`BUMPY.EXE` build is unaffected (host_resource.c is `BUMPY_PLAYABLE`-only; md5
+`cac9ff236a832284fec6fafff2d8602b`).  Verified: the playable menu renders "LEVEL : EASY".
 
 ### Task 11 — scripted pixel frame-compare gate (`tools/validate_playable.sh`)
 
