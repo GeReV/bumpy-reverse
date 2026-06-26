@@ -87,13 +87,30 @@ static void render_player_view_full_copy(u8 __huge *dest_buf,
    model only the dispatch wrapper; the actual erase copy (fullscreen_buf →
    VGA page) is modelled as a plain plane-by-plane memcpy of the bg source.
 
-   For the fullscreen_buf restore path (sub-handler 0, setup_fullscreen_view):
-     - source = vga_src (the fullscreen_buf capture, planar sequential)
-     - dest   = VGA page indexed by view->word0e (0 → a200, 1 → a000)
-     Copies PAGE_SIZE bytes per plane into planes[word0e_page_off].
+   CLIPPED-RECT blit (the engine's actual behavior, NOT a blind full-page copy):
+   the view descriptor carries the blit rectangle —
+     view+0x0a (u16) = source/copy WIDTH  in tiles  (×2 bytes/tile)
+     view+0x0c (u16) = source/copy HEIGHT in tiles  (×8 px/tile)
+     view+0x14 (u16) = dest origin X in tiles
+     view+0x16 (u16) = dest origin Y in tiles
+   The source (vga_src) is a planar-sequential image PACKED at its own width:
+   plane p starts at vga_src + p*(W_bytes*H_px); rows are W_bytes apart.  The
+   dest is the VGA page (row stride 40, plane stride 0x10000) at the tile origin.
 
-   EFFECTIVE IN HARNESS: NOP for all layer-A/B calls because the code-embedded
-   view descriptors have word0e > 1.
+   This is a strict generalization of the old full-page copy: the full-screen
+   background descriptor (W=0x14, H=0x19, origin 0,0) reduces to the identical
+   200×40 bytes/plane contiguous copy, byte-for-byte.  But a SUB-RECT descriptor
+   — run_main_menu's 6×2 option strip at tile (0xb,0x12), or
+   show_object_preview_wait_input's 20×1 strip — now blits ONLY its rectangle
+   instead of smearing a full page of the (small) source over the whole screen.
+   The copy extent is driven by +0x0a/+0x0c (the source dims), matching every
+   word0e≤1 call site (run_main_menu / show_object_preview_wait_input); the
+   +0x1e/+0x20 "extent" fields belong to the mode-10 path, not this one.
+
+   EFFECTIVE IN HARNESS: still NOP for all layer-A/B calls (code-embedded view
+   descriptors have word0e > 1); the gameplay erase/anim-channel pipeline and the
+   composite ctests never reach the copy.  RECONSTRUCTION FIDELITY: recorded in
+   docs/reconstruction-fidelity.md ("playable host" section).
    ----------------------------------------------------------------------- */
 void restore_bg_view(u8 __huge *planes,
                      const u8 __huge *vga_src,
@@ -120,10 +137,56 @@ void restore_bg_view(u8 __huge *planes,
         dest_page_off = BGI_OVL_PAGE_A000_OFF;
     }
 
-    /* Source = vga_src (fullscreen_buf: planar sequential, 4 × PAGE_SIZE).
-       Copy each plane's PAGE_SIZE bytes from vga_src into the dest VGA page.
-       Mirrors the fullscreen_buf → page copy driven by setup_fullscreen_view +
-       restore_bg_view (sub-handler 0 of 1ab9:0aa0 for the erase path). */
+#ifdef BUMPY_PLAYABLE
+    /* CLIPPED-RECT blit — the executed (playable) path.  Reads the blit rectangle
+       from the descriptor and copies ONLY that rectangle (see the function header).
+       This is the faithful behavior; the #else full-page copy below is retained for
+       the default BUMPY.EXE so that build's bgi_overlay.obj stays byte-identical
+       (it is byte-compared, never executed — its restore_bg_view is unreachable at
+       runtime, so the behavioral content is immaterial there). */
+    {
+        const u8 __far *vb = (const u8 __far *)view;
+        u16 w_tiles, h_tiles, dx_tiles, dy_tiles;
+        u16 row_bytes, rows, row;
+        u32 dst_origin_off, src_plane_stride;
+
+        /* LE u16 reads — portable across the DOS far-pointer build and the
+           flat-pointer host ctest build. */
+        w_tiles  = (u16)((u16)vb[0x0a] | ((u16)vb[0x0b] << 8));
+        h_tiles  = (u16)((u16)vb[0x0c] | ((u16)vb[0x0d] << 8));
+        dx_tiles = (u16)((u16)vb[0x14] | ((u16)vb[0x15] << 8));
+        dy_tiles = (u16)((u16)vb[0x16] | ((u16)vb[0x17] << 8));
+
+        row_bytes = (u16)(w_tiles * 2u);   /* 16-px tiles → 2 bytes/plane-row */
+        rows      = (u16)(h_tiles * 8u);   /* 8-px-tall tiles                 */
+        if (row_bytes == 0u || rows == 0u) {
+            return;
+        }
+
+        /* Source: planar-sequential, packed at its own width.
+           Dest: VGA page, row stride 40, at the tile origin. */
+        src_plane_stride = (u32)row_bytes * (u32)rows;
+        dst_origin_off   = dest_page_off
+                         + (u32)((u32)dy_tiles * 8u) * BGI_OVL_ROW_BYTES
+                         + (u32)dx_tiles * 2u;
+
+        for (plane = 0; plane < 4u; plane++) {
+            const u8 __huge *src = vga_src + (u32)plane * src_plane_stride;
+            u8 __huge *dst = planes
+                           + (u32)plane * BGI_OVL_PLANE_SIZE
+                           + dst_origin_off;
+            for (row = 0; row < rows; row++) {
+                memcpy((void __huge *)(dst + (u32)row * BGI_OVL_ROW_BYTES),
+                       (const void __huge *)(src + (u32)row * row_bytes),
+                       (size_t)row_bytes);
+            }
+        }
+    }
+#else
+    /* Default build (byte-compared, never executed): the original behavioral model
+       — a flat plane-by-plane PAGE_SIZE copy.  Kept verbatim so bgi_overlay.obj is
+       byte-stable in BUMPY.EXE.  See the #ifdef branch above for the executed,
+       clip-aware playable path. */
     for (plane = 0; plane < 4u; plane++) {
         const u8 __huge *src = vga_src + (u32)plane * BGI_OVL_PAGE_SIZE;
         u8 __huge *dst = planes
@@ -133,6 +196,7 @@ void restore_bg_view(u8 __huge *planes,
                (const void __huge *)src,
                (size_t)BGI_OVL_PAGE_SIZE);
     }
+#endif
 }
 
 /* -----------------------------------------------------------------------

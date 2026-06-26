@@ -1315,6 +1315,52 @@ force `rm hardware/vga_draw.o hardware/libhardware.a src/dosbox-x` before `make`
 allocator hang" purely because a stale `libhardware.a` ran old hook code; the clean rebuild showed
 the game reaching `mode=4` normally.)
 
+### RESOLVED (menu/title speckle) — `restore_bg_view` is a CLIPPED-RECT blit, not a full-page copy
+
+**Supersedes the "host NOP leaf" wording above and the earlier "menu auto-exit / stack
+corruption" hypothesis — both were wrong.** The host title-path shim
+(`screens_host_restore_bg_view`) is no longer a NOP: it routes the engine's 2-arg
+`restore_bg_view(view, seg)` to `host_compose_bg_view(view)` (host_render.c), which reads the
+descriptor's source far ptr (`view+0x02/+0x04`) and calls the real 3-arg `restore_bg_view`
+(bgi_overlay.c) to compose the title/menu/text background into `host_framebuffer`. Verified
+(external BIOS-scratch probes, BUMPYCAP `DGROUP=0x0040`): boot is monotonic-forward into
+`run_main_menu`, which **reaches and waits correctly** — there is no auto-exit and no stack
+corruption (the prior diagnosis was an artifact of in-process DIAG writes perturbing an
+uninitialized-memory-sensitive layout).
+
+**Root cause of the speckle:** the 3-arg `restore_bg_view` modelled the erase as a blind
+plane-by-plane PAGE_SIZE (8000 B) copy, ignoring the descriptor's blit rectangle. The original
+(`1000:80bc`, decomp-confirmed in `run_main_menu` @ `1000:35a5`) is a **clipped-rect blit**: the
+descriptor carries `width`(`+0x0a`)×`height`(`+0x0c`) tiles at dest origin (`+0x14`,`+0x16`).
+`run_main_menu`'s loop redraws ONLY a 6×2-tile option strip at tile (0xb,0x12) each iteration; the
+full-page copy instead smeared a full page sourced from that small (and, for the option strip,
+uninitialised) descriptor over the entire screen every frame → full-screen speckle.
+
+**Fix** (`bgi_overlay.c`, `#ifdef BUMPY_PLAYABLE`): `restore_bg_view` now copies only the
+descriptor's `+0x0a`×`+0x0c` tile rectangle (src packed at its own width; dest VGA-page row
+stride 40 at the tile origin). This is a strict generalization — the full-screen background
+descriptor (20×25 @ 0,0) reduces byte-for-byte to the old 200×40-per-plane copy, and
+`show_object_preview_wait_input`'s 20×1 strip now blits its row instead of over-reading. The
+copy extent keys on `+0x0a/+0x0c` (the source dims, set by every `word0e≤1` call site), NOT the
+`+0x1e/+0x20` "extent" fields (those belong to the mode-10 `render_player_view` path). Result:
+`PLAY / HIGH-SCORE / LEVEL: / PASSWORD` render cleanly; full-screen nonzero bytes drop 28957→18371
+(the original menu measures 18991).
+
+**Default `BUMPY.EXE` unaffected:** the clip-aware body is `#ifdef BUMPY_PLAYABLE`; the default
+build keeps the verbatim full-page `#else` copy, so `bgi_overlay.obj` is byte-stable (md5
+`cac9ff236a832284fec6fafff2d8602b`). The default build's `restore_bg_view` is byte-compared but
+never executed, so its behavioral content is immaterial there. The gameplay erase/anim-channel
+path and the composite ctests reach `restore_bg_view` only with `word0e>1` (NOP guard) views, so
+they are untouched (`validate_composite.sh` green).
+
+**REMAINING (separate, smaller):** the option-2 strip (the cycling "LEVEL:" value at tile
+(0xb,0x12)) still shows placeholder garbage — its source far ptrs `menu_opt2_img_off/seg[]`
+(DGROUP `+0x75e/+0x760`, indexed by `menu_option2_setting`) point at the original's STATIC DGROUP
+art at offsets `0x824e/0x8582/0x8b88`, which the reconstruction does not reproduce
+(`process_sprites`/`prepare_sprite_frames` decode the p1/p2/hud sprite OBJECTS, not these strips,
+so they are not runtime-populated). Embedding the raw blobs would be committing copyright game
+data; a legal runtime path (load from the user-supplied original) is TBD.
+
 ### Task 11 — scripted pixel frame-compare gate (`tools/validate_playable.sh`)
 
 The Plan-A integration gate runs BOTH `BUMPYP.EXE` and the **real original** `BUMPY.EXE`
