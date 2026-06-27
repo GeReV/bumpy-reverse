@@ -121,7 +121,7 @@ decompiles, **except** the innermost self-modifying planar blit cores (the `bgi_
 | `1ab9:02ce` | gfx_driver_init | adapter/palette select screen | **reconstructed** (config_screens.c) | yes | — |
 
 **Also required (the wiring):** the main-segment dispatch thunks
-`1000:7b4a/7b76/7b86/7b93/7ba7/7bbd/7bca/7bea`; **Tasks 1–3 host-modeled four of these on the
+`1000:7b4a/7b76/7b86/7b93/7ba7/7bbd/7bca/7bdd/7bea`; **Tasks 1–3 host-modeled four of these on the
 VGA (`palette_mode==2`) path**: `7b4a` → `host_bgi_set_viewport`, `7b93` →
 `host_bgi_stage_image_palette`, `7bca` → `host_bgi_upload_palette_to_dac`, `7bdd` →
 `present_frame`; their default-build NOP stubs remain. The remaining thunks (`7b76`/`7b86`/
