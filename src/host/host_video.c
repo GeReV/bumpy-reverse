@@ -26,12 +26,13 @@
  * RECONSTRUCTION FIDELITY — CRTC DOUBLE-BUFFER MODEL
  * The original engine's double-buffer mechanism was left *unresolved* by the
  * project (the Unicorn VGA model cannot track CRTC start-address flips).  The
- * host picks the correct standard EGA/VGA two-page layout:
- *   page 0 → CRTC start address 0x0000 (A000:0000)
- *   page 1 → CRTC start address 0x1000 (A000:2000 = A200:0000, 0x2000 bytes
- *             / 2 words per VGA cycle = 0x1000 word-address units)
- * The on-screen pixels match the original (the frame-compare gate proves it);
- * the deviation is in *mechanism*, not result.  Recorded in
+ * host picks the standard EGA/VGA two-page layout (byte-addressed CRTC start in
+ * mode 0x0D — see CRTC_PAGE1_ADDR note):
+ *   page 0 → CRTC start address 0x0000 (A000:0000, byte offset 0x0000)
+ *   page 1 → CRTC start address 0x2000 (A200:0000, byte offset 0x2000)
+ * These start values match the ORIGINAL engine's (runtime-captured); the deviation
+ * is in *mechanism* (host off-screen-copy + flip vs the engine's overlay flip), not
+ * in the displayed result.  Recorded in
  * docs/reconstruction-fidelity.md ("playable host" section).
  *
  * RUNTIME-VERIFICATION DEFERRAL
@@ -44,14 +45,27 @@
  * ============================================================================ */
 
 /* ── Page start address constants ─────────────────────────────────────────────
- * CRTC Start Address (regs 0x0C/0x0D) counts in VGA word-address units.
- * In mode 0x0D (320×200×16 planar) each memory cycle advances 2 bytes of plane
- * memory, so byte offset N maps to CRTC address N/2.
- *   page 0: A000:0000 → byte offset 0x0000 → CRTC addr 0x0000
- *   page 1: A200:0000 → byte offset 0x2000 → CRTC addr 0x1000
+ * CRTC Start Address (regs 0x0C/0x0D) is BYTE-addressed in mode 0x0D as the BIOS
+ * configures it: the start value EQUALS the page's plane byte offset.
+ *   page 0: A000:0000 → byte offset 0x0000 → CRTC start 0x0000
+ *   page 1: A200:0000 → byte offset 0x2000 → CRTC start 0x2000
+ *
+ * RECONSTRUCTION FIDELITY — CORRECTED 2026-06-27 (was 0x1000):
+ * The earlier value assumed WORD-addressed start units (byte/2 → 0x1000 for page 1).
+ * That was wrong: mode 0x0D's CRTC start is byte-addressed here, so 0x1000 made the
+ * CRTC display from byte 0x1000 — half a page early — while page-1 content lives at
+ * byte 0x2000.  Symptom (seen in interactive play): the title/menu were shifted by
+ * ~half the screen, and because the double-buffer alternates page 0 (start 0x0000,
+ * correct in either interpretation) with page 1 (offset), the image JITTERED between
+ * an aligned and a half-offset frame.  The correct value is the one the ORIGINAL
+ * engine uses, confirmed by runtime capture (original CRTC start = 0x2000 for its
+ * page 1) and by the original's page-flip primitive, which XORs CRTC reg 0x0C (start
+ * HIGH byte) with 0x20 → toggles bit 13 = ±0x2000 (start 0x0000 ↔ 0x2000).  The prior
+ * frame-compare gate missed this because it compared page CONTENT (byte 0x2000)
+ * without checking the CRTC-selected DISPLAY window.
  */
 #define CRTC_PAGE0_ADDR  0x0000u
-#define CRTC_PAGE1_ADDR  0x1000u
+#define CRTC_PAGE1_ADDR  0x2000u
 
 /* ── init_display_97a4 (1000:97a4) ─────────────────────────────────────────────
  * Set VGA video mode 0x0D (320×200×16, 4-plane EGA/VGA) via BIOS int 10h.
@@ -192,7 +206,7 @@ void apply_level_palette(void)
 /* ── init_display_97f1 (1000:97f1) ─────────────────────────────────────────────
  * Post-mode-set video fixup: establishes the CRTC two-page window and uploads
  * the initial DAC palette (so the screen is not black on first entry).
- * Calls init_crtc_window with page0=0x0000, page1=0x1000 to set up the double-
+ * Calls init_crtc_window with page0=0x0000, page1=0x2000 to set up the double-
  * buffer layout, then applies the level palette.
  * RECONSTRUCTION FIDELITY: the original 97f1 body is not cleanly decompiled;
  * the host reconstructs its observable effect (CRTC window + DAC init). */
@@ -227,11 +241,11 @@ void init_display_97f1(void)
  * Programs the CRTC Start Address to select the given display page (0 or 1).
  * The VGA then displays that page at the next vertical retrace.
  * page 0 → CRTC addr 0x0000 (VGA byte offset 0x0000, A000:0000)
- * page 1 → CRTC addr 0x1000 (VGA byte offset 0x2000, A200:0000)
+ * page 1 → CRTC addr 0x2000 (VGA byte offset 0x2000, A200:0000)
  *
  * PURE-LOGIC UNIT CHECK (no DOS runtime needed):
  *   page=0  → start = 0x0000, HI=0x00, LO=0x00
- *   page=1  → start = 0x1000, HI=0x10, LO=0x00
+ *   page=1  → start = 0x2000, HI=0x20, LO=0x00
  *   page=2  → wraps to page 0 (bit 0 == 0), start = 0x0000
  * This is verified by inspection; no executable unit test is possible without DOS. */
 void set_display_page(u8 page)
@@ -321,7 +335,7 @@ static u8 s_display_page = 0u;
  *
  * VGA page layout (mode 0x0D, 320×200×16):
  *   page 0 → VGA byte offset 0x0000 → segment A000:0000 → CRTC addr 0x0000
- *   page 1 → VGA byte offset 0x2000 → segment A200:0000 → CRTC addr 0x1000
+ *   page 1 → VGA byte offset 0x2000 → segment A200:0000 → CRTC addr 0x2000
  * VGA_PLANE_BYTES = 0x1F40 (320×200÷8 = 8000 bytes) per plane per page.
  *
  * host_framebuffer layout: plane p at [p * HOST_PLANE_SIZE], page 0 content

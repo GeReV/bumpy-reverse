@@ -1055,6 +1055,24 @@ documented CORE render divergence:**
   VGA.  This is a behavior-faithful **memory model** of the hardware port writes +
   double-buffer, NOT a 1:1 transcription of the register sequence.
 
+- **CRTC page-1 start address — CORRECTED 2026-06-27 (`host_video.c` `CRTC_PAGE1_ADDR`
+  0x1000 → 0x2000).** The host originally programmed the page-1 CRTC Start Address as
+  `0x1000` on the assumption that mode 0x0D's start register is *word*-addressed
+  (byte ÷ 2). It is **byte**-addressed here, so `0x1000` made the CRTC scan out from
+  byte 0x1000 — half a page early — while page-1 content lives at byte 0x2000. In
+  interactive play the title/menu were shifted by ~half the screen (precisely a
+  0x1000-byte = 102.4-scanline offset → "half the screen and a few more pixels"), and
+  the double-buffer alternating page 0 (start 0x0000, correct either way) with the
+  offset page 1 made the image **jitter**. The correct value is the one the ORIGINAL
+  engine uses: runtime capture shows its page-1 CRTC start = 0x2000, and its overlay
+  page-flip XORs CRTC reg 0x0C (start HIGH byte) with 0x20 → toggles bit 13 = ±0x2000.
+  Post-fix runtime capture confirms the playable now alternates start 0x0000 ↔ 0x2000
+  with both displayed pages pixel-identical (no offset, no jitter). **Verification
+  lesson:** the earlier "byte-identical to the original" frame check compared page
+  *content* (byte 0x2000) for both builds and matched — it never compared the
+  CRTC-*selected display window*, so a wrong start address slipped through. Display
+  verification must decode from the live CRTC start, not a fixed offset.
+
 - **Page table as real host globals.** The engine's `sprite_table_base` (DGROUP
   `0x5415`, two far ptrs page1/page0) and `cur_sprite_data` (DGROUP `0x56e2/0x56e4`,
   the current draw page) are reconstructed as real C globals in `host_render.c`
