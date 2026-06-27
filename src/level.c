@@ -648,7 +648,7 @@ extern void read_chunked(int handle, u16 buf_off, u16 buf_seg,
 extern void c_close(int handle);                  /* 1000:7319                     */
 extern void load_palette_byteswapped(void);       /* 1000:063b                     */
 extern void play_iris_wipe_transition(void);      /* 1000:3467                     */
-extern void load_palette(void);                   /* 1000:08d1                     */
+extern void load_palette(u16 src_off, u16 src_seg); /* 1000:08d1                     */
 extern void blit_sprite(u16 desc_off, u16 desc_seg); /* 1000:942a                  */
 extern void draw_text_at(u16 str_off, u16 str_seg, u16 x, u16 y); /* 1000:07f0     */
 extern void draw_number(u16 val_lo, u16 val_hi, u8 width, u16 x, u16 y); /* 1000:0816 */

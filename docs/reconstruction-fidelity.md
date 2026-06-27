@@ -400,9 +400,9 @@ deviation (a)).
   by BGI driver init; under the natural boot `palette_mode==2` the standalone-vsync records
   carry **0 captured DAC** — an engine fact surfaced by the T1 oracle). So
   `wait_vretrace_thunk`'s records carry **0 OUT events** and are gated as a **no-emission
-  consistency check** (NOT a DAC validation; ⚠️ the old name was `upload_vga_dac_palette`
-  — misnomer corrected 2026-06-27 by Task 2; the thunk is a vsync WAIT, not a DAC upload); the `PORT_CHECKED` metric counts these
-  0-emission checks too. The **REAL** DAC gate is the reconstructed `vga_dac_upload_from_buffer`
+  consistency check** (NOT a DAC validation; the old name `upload_vga_dac_palette` was a
+  misnomer — the thunk is a vsync WAIT, corrected to `wait_vretrace_thunk` in Task 2);
+  the `PORT_CHECKED` metric counts these 0-emission checks too. The **REAL** DAC gate is the reconstructed `vga_dac_upload_from_buffer`
   (raw disasm of the static writer, function entry image off `0xb204` / DAC `out` block at `0xb214`, palette `@+0x33`, verified
   byte-for-byte) run STANDALONE over a SEEDED palette and asserted vs the canonical VGA-DAC
   hardware protocol sequence (an external standard, perturbation-proven). Plainly: the engine's
@@ -1451,10 +1451,11 @@ look), where the old hard-coded BGI map would have rainbowed it.  No game code c
 and `BUMPYP.EXE` are untouched.
 
 **Remaining (documented, out of scope).** Booted in EGA mode (`F2`), the *playable* still uploads
-`TITRE.VEC`'s VGA palette (its `dispatch_by_palette_mode` shim always reads `+0x33`) and uses the
-fixed BGI AC, so it shows the VGA gold look rather than the original's EGA black/red.  The playable's
-default and validated path is VGA (`F3` → `palette_mode=2`), where it matches; the EGA-mode palette
-divergence is a non-default corner case left as-is.
+`TITRE.VEC`'s VGA palette (its `dispatch_by_palette_mode` host shim — the playable-only vsync/dispatch
+shim, distinct from the renamed engine dispatcher `wait_vretrace_dispatch` at 2036:0000 — always reads
+`+0x33`) and uses the fixed BGI AC, so it shows the VGA gold look rather than the original's EGA
+black/red.  The playable's default and validated path is VGA (`F3` → `palette_mode=2`), where it
+matches; the EGA-mode palette divergence is a non-default corner case left as-is.
 
 ### Task 11 — scripted pixel frame-compare gate (`tools/validate_playable.sh`)
 

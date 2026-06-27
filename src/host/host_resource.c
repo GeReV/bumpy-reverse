@@ -19,7 +19,7 @@
  *     backgrounds it RLE-decodes to a 16-colour planar image + palette.  The host
  *     drives the already-reconstructed vec_decode_planar (vec.c) and lays the result
  *     out where the screen builders expect it: palette at buf+0x33 (51, read by
- *     upload_vga_dac_palette) and the 4×8000 plane-major raster at buf+99 (the source
+ *     vga_dac_upload_from_buffer) and the 4×8000 plane-major raster at buf+99 (the source
  *     the title/menu restore_bg_view descriptor points at, via host_compose_bg_view).
  *   - read_chunked mirrors the engine's xfer_chunked (≤64000-byte chunks to EOF).
  *

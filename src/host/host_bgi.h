@@ -39,8 +39,8 @@ void host_bgi_upload_palette_to_dac(u16 page);
  * for the subsequent blit dispatch.  Written here (a=2, b=1) by
  * host_bgi_set_viewport; the VGA blit slot is null so they are never read by a
  * live handler.  Exposed for reference / future overlay reconstruction. */
-extern u16 bgi_write_mode_flag_a;   /* DGROUP 0x541f */
-extern u16 bgi_write_mode_flag_b;   /* DGROUP 0x5420 */
+extern u8 bgi_write_mode_flag_a;   /* DGROUP 0x541f */
+extern u8 bgi_write_mode_flag_b;   /* DGROUP 0x5420 */
 
 /* host_bgi_set_viewport — functional equivalent of BGI overlay bgi_init_viewport
  * (1ab9:0179), called via thunk 1000:7b4a (Ghidra: bgi_set_viewport_thunk).

@@ -13,7 +13,7 @@
  *  the engine's render descriptors hang off, the render_descriptor_ptr view-struct
  *  far ptr, the fullscreen_buf decoded-image far ptr (off/seg split), the highscore
  *  name-entry buffer, and the formatted-number output buffer.  The ~20 screen
- *  FUNCTION bodies (draw_number 0x816 .. upload_vga_dac_palette 0x9864 — see
+ *  FUNCTION bodies (draw_number 0x816 .. wait_vretrace_thunk 0x9864 — see
  *  tools/screens_oracle.py FN_NAMES) remain stubbed in game_stubs.c this task; their
  *  1:1 bodies port across Phase-7 T3–T5, validated by the host replay harness
  *  tools/screens_ctest.c against the Phase-7 T1 capture

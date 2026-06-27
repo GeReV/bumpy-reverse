@@ -3,7 +3,7 @@
  *
  *  SKELETON (Phase-7 Task 2): this TU defines ONLY the front-end module's GLOBALS —
  *  NO function bodies.  The ~20 screen/HUD functions (draw_number 1000:0816 ..
- *  upload_vga_dac_palette 1000:9864, full map in tools/screens_oracle.py FN_NAMES)
+ *  wait_vretrace_thunk 1000:9864, full map in tools/screens_oracle.py FN_NAMES)
  *  remain stubbed in game_stubs.c this task; their 1:1 bodies port across Phase-7
  *  T3–T5:
  *    T3 text/number  (draw_number / draw_text_at / draw_number_sprites + the HUD

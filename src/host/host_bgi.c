@@ -57,8 +57,8 @@ static u8 host_bgi_page_palette[2][48];
  *
  * Declared here because these globals are only needed under #ifdef BUMPY_PLAYABLE:
  * the default BUMPY.EXE NOP stub for fun_7b4a never reaches them. */
-u16 bgi_write_mode_flag_a;   /* DGROUP 0x541f */
-u16 bgi_write_mode_flag_b;   /* DGROUP 0x5420 */
+u8 bgi_write_mode_flag_a;   /* DGROUP 0x541f */
+u8 bgi_write_mode_flag_b;   /* DGROUP 0x5420 */
 
 /* ── host_bgi_stage_image_palette ───────────────────────────────────────────
  * Functional equivalent of the BGI VGA palette-stage handler (1ab9:0620).
