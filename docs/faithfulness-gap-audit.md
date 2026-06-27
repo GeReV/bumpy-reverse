@@ -92,7 +92,7 @@ decompiles, **except** the innermost self-modifying planar blit cores (the `bgi_
 
 | Addr | Ghidra name | Role | `src/` status | Decompiles? | Action |
 |------|-------------|------|---------------|-------------|--------|
-| `1ab9:0179` | bgi_init_viewport | set viewport 0x14×0x19, dispatch `[pm*2+0x4dda]` | missing (thunk `1000:7b4a` = NOP) | yes | reconstruct 1:1 |
+| `1ab9:0179` | bgi_init_viewport | set viewport 0x14×0x19, dispatch `[pm*2+0x4dda]` | **host-modeled** (thunk `1000:7b4a` → `host_bgi_set_viewport`, `#ifdef BUMPY_PLAYABLE`; default NOP kept) — VGA slot null → no pixel blit; iris = timed hold + blank-DAC (Task 3) | yes | — |
 | `1ab9:01e1` | bgi_putimage_dispatch | putimage via `[pm*2+0x5435]` | missing (thunk `7b93` = NOP) | yes | reconstruct 1:1 |
 | `1ab9:01ff` | bgi_cleardevice_dispatch | cleardevice via vector | missing | yes | reconstruct 1:1 |
 | `1ab9:0232` | bgi_device_reset_dispatch | device reset via vector | missing (thunk `7bbd`=NOP) | yes | reconstruct 1:1 |
@@ -191,8 +191,7 @@ the BGI gfx-init thunks; needed for §1 vector-table population. → reconstruct
 
 ## §4 — `screens.c` presentation no-ops (used on the title/menu/highscore path)
 
-`process_sprites` (`93d8`), `fun_7bca_flip`/`fun_7b93_present_blank`/`fun_7b4a_view_blit`
-(the §1 thunks), `fun_9410_set_sprite_table` (`9410`), `play_intro_animation_loop`
+`process_sprites` (`93d8`), `fun_7bca_flip`/`fun_7b93_present_blank` (§1 thunks — host-modeled, Tasks 1-2), `fun_7b4a_view_blit` (**host-modeled**, Task 3 — `bgi_set_viewport_thunk`/`host_bgi_set_viewport`), `fun_9410_set_sprite_table` (`9410`), `play_intro_animation_loop`
 (`30dd` — real body in corpus), `wait_50_frames` (`3e74` — real body),
 `draw_string_glyphs_9804` / `text_clip_leaf_9837`, `draw_icon_row` (`6130`),
 `play_anim_sequence` (`3c4f`), `p1_move_step_up/down/left/right` (`3ab2/3b0f/3b6c/3bc9`),

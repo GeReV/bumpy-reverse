@@ -1,20 +1,28 @@
 # BUMPYCAP input script — drive the PLAYABLE BUMPYP.EXE from boot to level-1 gameplay.
 # Format: <frame-dec> <scancode-hex> <value>   (1=key down, 0=key up; '#'=comment)
-# Applied by tools/dosbox/patches/01-bumpycap-hook.patch.  For BUMPYP.EXE the hook is
-# driven with BUMPYCAP_KEYTBL_DIRECT=1 + BUMPYCAP_OFF_KEYTBL=0x9dbe (g_key_state_table
-# is a DIRECT DGROUP array in the reconstruction at RUNTIME DGROUP offset 0x9dbe, not the
-# original's near pointer), so it writes the polled key state at DGROUP:0x9dbe + scancode.
-# (NB: BUMPYP.MAP can be STALE relative to the relinked EXE — the runtime BSS offsets
-#  0x9dbe keytbl / 0x05c2 current_level / 0x9eca game_mode were verified live, by locating
-#  the installed g_joystick_handler_table[0] -> s_kbd_handler_script far ptr in DGROUP.)
-# Full run env (DGROUP runtime seg 0x3fdd):
-#   BUMPYCAP_DGROUP=0x3fdd BUMPYCAP_KEYTBL_DIRECT=1 BUMPYCAP_OFF_KEYTBL=0x9dbe \
-#   BUMPYCAP_OFF_CURLEVEL=0x05c2 BUMPYCAP_OFF_GAMEMODE=0x9eca
+# Applied by tools/dosbox/patches/01-bumpycap-hook.patch.
 #
-# ── NO F2/F5 ──  BUMPYP.EXE hardcodes palette_mode=2 and SKIPS gfx_driver_init's
-# interactive F2/F5 palette-select screen (documented deviation, src/main.c).  So the
-# only input the boot path needs is FIRE = Enter (0x1c), which the seeded keyboard
-# handler script (host_boot.c s_kbd_handler_script) maps to input_state bit 0x10.
+# Injection mode: BUMPYCAP_SCAN_INJECT=1 (no KEYTBL_DIRECT — scan codes go through
+# KEYBOARD_AddBuffer -> 8042 -> INT9 -> BIOS buffer, visible to BOTH INT 16h and the
+# game's own INT9 ISR after it is installed).
+#
+# Full run env (DGROUP runtime seg 0x49d9; offsets from fresh BUMPYP.MAP 2026-06):
+#   BUMPYCAP_DGROUP=0x49d9 BUMPYCAP_SCAN_INJECT=1 \
+#   BUMPYCAP_OFF_CURLEVEL=0x07c0 BUMPYCAP_OFF_GAMEMODE=0xa202
+#
+# ── F3 + F5 REQUIRED ──  gfx_driver_init() (config_screens.c) and
+# sound_device_select_screen() are now REAL reconstructed functions that block on
+# BIOS INT 16h AH=00h waiting for F2/F3 (graphics mode) and F5..F8 (sound device).
+# They run BEFORE init_game_session_state installs the game's INT9 ISR, so the only
+# way to feed them keys is via KEYBOARD_AddBuffer (scan-inject = BIOS-visible).
+# Inject F3 (VGA, scancode 0x3d) and F5 (no-sound, scancode 0x3f) very early so they
+# are in the BIOS keyboard buffer when main() starts at ~frame 62.
+#   F3 -> gfx_driver_init:  palette_mode = 2 (VGA)
+#   F5 -> sound_device_select_screen: sound_device_state = 0x8000 (no sound)
+#
+# After those two screens the game installs its INT9 ISR; subsequent FIRE pulses drive
+# the menu (run_main_menu) and level intro (show_level_intro_screen) via the game's
+# own key-state table, same as before.
 #
 # Gate A: run_main_menu — cursor starts at option 0 (Start); FIRE selects it (returns 0).
 # Gate B: level_intro_screen / show_level_intro_screen — wait_keypress consumes a FIRE.
@@ -25,6 +33,15 @@
 # menu iteration cannot miss the key-down window, and a clear gap before the next pulse
 # so the debounce sees the release.  Repeat several FIRE pulses to walk title->menu->intro.
 #
+# Inject F3 (VGA) and F5 (no sound) AFTER the game starts (frame 62+):
+# gfx_driver_init() is blocking on BIOS INT16h from ~frame 62.
+# Inject F3 at frame 70 (in the INT16h idle loop) → sets palette_mode=2 → exits.
+# Then sound_device_select_screen() starts and blocks on INT16h.
+# Inject F5 at frame 120 (after gfx_driver_init finishes and sound screen starts).
+70  3d 1
+71  3d 0
+120 3f 1
+121 3f 0
 # Pulse 1 — select Start in run_main_menu (cursor at 0 => FIRE returns 0)
 200 1c 1
 260 1c 0

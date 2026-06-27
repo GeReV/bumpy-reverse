@@ -48,6 +48,18 @@
  * host_bgi_upload_palette_to_dac (mirrors 1ab9:0677 DAC write loop). */
 static u8 host_bgi_page_palette[2][48];
 
+/* bgi_write_mode_flag_a / bgi_write_mode_flag_b — DGROUP 0x541f / 0x5420.
+ * Engine globals set by bgi_init_viewport (1ab9:0179), restore_bg_view (1ab9:0d77),
+ * and render_player_view (1ab9:1028) to select source/dest addressing mode for the
+ * subsequent blit handler.  In the VGA playable path only bgi_init_viewport writes
+ * them (a=2, b=1); the overlay blit handlers that READ them are not reconstructed
+ * (VGA slot = null handler; see host_bgi_set_viewport).
+ *
+ * Declared here because these globals are only needed under #ifdef BUMPY_PLAYABLE:
+ * the default BUMPY.EXE NOP stub for fun_7b4a never reaches them. */
+u16 bgi_write_mode_flag_a;   /* DGROUP 0x541f */
+u16 bgi_write_mode_flag_b;   /* DGROUP 0x5420 */
+
 /* ── host_bgi_stage_image_palette ───────────────────────────────────────────
  * Functional equivalent of the BGI VGA palette-stage handler (1ab9:0620).
  *
@@ -98,6 +110,50 @@ void host_bgi_upload_palette_to_dac(u16 page)
         outp(0x3c9, pal[2]);
         pal += 3;
     }
+}
+
+/* ── host_bgi_set_viewport ───────────────────────────────────────────────────
+ * Functional equivalent of BGI overlay bgi_init_viewport (1ab9:0179), called
+ * via main-segment thunk 1000:7b4a (Ghidra: bgi_set_viewport_thunk, formerly
+ * blit_view_step).
+ *
+ * Engine disassembly (1ab9:0179):
+ *   *(u16*)(view + 0x18) = 0x14;         -- clip extent width  = 20 (constant)
+ *   *(u16*)(view + 0x1a) = 0x19;         -- clip extent height = 25 (constant)
+ *   bgi_write_mode_flag_a = 2;           -- DGROUP 0x541f
+ *   bgi_write_mode_flag_b = 1;           -- DGROUP 0x5420
+ *   (*(code*)table[palette_mode*2+0x4dda])(); -- VGA slot (mode 2) = 0x0000 -> NULL -> no blit
+ *
+ * VGA iris degeneration — CRITICAL (see findings §2, docs/faithfulness-gap-audit.md §1):
+ *   On VGA (palette_mode==2) the dispatch table 0x4dda[2] is NULL -> NO pixel blit.
+ *   The iris loop (play_iris_wipe_transition, screens.c:657) passes a per-step rect
+ *   in fields +0x14/+0x16/+0x1e/+0x20, but bgi_init_viewport IGNORES them: it always
+ *   writes the CONSTANTS 0x14/0x19 to +0x18/+0x1a.  The compose path reads clip from
+ *   +0x0a/+0x0c (different fields), so no geometric shrink occurs on VGA.
+ *   The visible VGA iris = the vsync-timed hold (4x wait_vretrace_thunk/step, 10 steps)
+ *   + the final blank-palette upload (fun_7b93 -> fun_7bca -> DAC zeroed).
+ *   This is a TIMED-HOLD -> BLANK-TO-BLACK, not a shrinking rectangle.
+ *   The geometric iris is an EGA/CGA effect (non-null blit handler for modes 0/1);
+ *   on VGA (mode 2) it degenerates.
+ *
+ * RECONSTRUCTION FIDELITY:
+ *   This host function mirrors bgi_init_viewport for the VGA path: sets view[+0x18]/
+ *   [+0x1a] + the two mode flags exactly as the original, then returns (null dispatch).
+ *   The per-step iris rect (+0x14/+0x16/+0x1e/+0x20) is UNCONSUMED on VGA — neither
+ *   here nor in the compose path; the visible iris is the timed hold + Task-1/2 palette
+ *   pipeline, not a geometric redraw.  Deviation recorded in docs/reconstruction-
+ *   fidelity.md ("playable host: BGI overlay primitives") and docs/faithfulness-gap-
+ *   audit.md §1.
+ *
+ * Called from fun_7b4a_view_blit (screens.c) under #ifdef BUMPY_PLAYABLE. */
+void host_bgi_set_viewport(u8 __far *view, u16 seg)
+{
+    (void)seg;
+    *(u16 __far *)(view + 0x18) = 0x14u;   /* clip extent width  = 20 (constant) */
+    *(u16 __far *)(view + 0x1a) = 0x19u;   /* clip extent height = 25 (constant) */
+    bgi_write_mode_flag_a = 2u;             /* DGROUP 0x541f */
+    bgi_write_mode_flag_b = 1u;             /* DGROUP 0x5420 */
+    /* VGA dispatch: table[palette_mode*2 + 0x4dda] for mode 2 = 0x0000 -> NULL -> no blit */
 }
 
 #endif /* BUMPY_PLAYABLE */

@@ -549,7 +549,19 @@ void fun_7bca_flip(u8 page) { host_bgi_upload_palette_to_dac(page); }
 #else
 void fun_7bca_flip(u8 page) { (void)page; }
 #endif
+#ifdef BUMPY_PLAYABLE
+/* Playable build: route to host clip/viewport primitive (host_bgi.c).
+ * fun_7b4a thunk (1000:7b4a, Ghidra: bgi_set_viewport_thunk, formerly blit_view_step)
+ * dispatches into BGI overlay 1ab9:0179 (bgi_init_viewport): writes CONSTANT clip
+ * extents view[+0x18]=0x14, view[+0x1a]=0x19; sets bgi_write_mode_flag_a=2/b=1;
+ * VGA dispatch slot 0x4dda[2]=0x0000 -> NULL -> no pixel blit.
+ * Called from the iris loop (play_iris_wipe_transition) and all screen builders;
+ * on VGA the visible iris = timed hold + blank-palette upload, NOT a geometric shrink.
+ * RECONSTRUCTION FIDELITY: see host/host_bgi.h (host_bgi_set_viewport). */
+void fun_7b4a_view_blit(u8 __far *view, u16 seg) { host_bgi_set_viewport(view, seg); }
+#else
 void fun_7b4a_view_blit(u8 __far *view, u16 seg) { (void)view; (void)seg; }
+#endif
 void fun_9410_set_sprite_table(u16 arg) { (void)arg; }
 void play_intro_animation_loop(void) { }
 void wait_50_frames(void) { }

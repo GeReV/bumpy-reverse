@@ -34,5 +34,35 @@ void host_bgi_stage_image_palette(u16 buf_off, u16 buf_seg, u16 page);
  * The (port,value) sequence is the hard contract the DAC gate validates. */
 void host_bgi_upload_palette_to_dac(u16 page);
 
+/* bgi_write_mode_flag_a / bgi_write_mode_flag_b — DGROUP 0x541f / 0x5420.
+ * Engine globals set by bgi_init_viewport (1ab9:0179) to select addressing mode
+ * for the subsequent blit dispatch.  Written here (a=2, b=1) by
+ * host_bgi_set_viewport; the VGA blit slot is null so they are never read by a
+ * live handler.  Exposed for reference / future overlay reconstruction. */
+extern u16 bgi_write_mode_flag_a;   /* DGROUP 0x541f */
+extern u16 bgi_write_mode_flag_b;   /* DGROUP 0x5420 */
+
+/* host_bgi_set_viewport — functional equivalent of BGI overlay bgi_init_viewport
+ * (1ab9:0179), called via thunk 1000:7b4a (Ghidra: bgi_set_viewport_thunk).
+ *
+ * Sets clip-extent constants view[+0x18]=0x14, view[+0x1a]=0x19 and the two mode
+ * flags (bgi_write_mode_flag_a=2, bgi_write_mode_flag_b=1), then returns with NO
+ * pixel blit (VGA dispatch slot 0x4dda[2]=0x0000 is null).
+ *
+ * VGA iris: the iris loop passes a per-step rect in +0x14/+0x16/+0x1e/+0x20 but
+ * bgi_init_viewport IGNORES it (writes CONSTANTS to +0x18/+0x1a).  The visible
+ * VGA iris = the vsync-timed hold (4x wait_vretrace_thunk/step, 10 steps) + the
+ * final blank-palette upload (Task-1/2 palette path) → TIMED-HOLD -> BLANK-TO-BLACK,
+ * not a geometric shrink (the geometric iris is an EGA/CGA effect; on VGA it
+ * degenerates).  Do NOT invent a geometric wipe here.
+ *
+ * RECONSTRUCTION FIDELITY: host clip-state reconstruction; VGA blit handler null;
+ * per-step iris rect unconsumed on VGA; iris visible via timed hold + palette path.
+ * Deviation recorded in docs/reconstruction-fidelity.md + faithfulness-gap-audit.md §1.
+ *
+ * Called from fun_7b4a_view_blit (screens.c) under #ifdef BUMPY_PLAYABLE.
+ * `seg` is the DGROUP segment (already encoded in the far ptr `view`; unused here). */
+void host_bgi_set_viewport(u8 __far *view, u16 seg);
+
 #endif /* BUMPY_PLAYABLE */
 #endif /* HOST_BGI_H */

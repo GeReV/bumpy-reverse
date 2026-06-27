@@ -1258,6 +1258,22 @@ These deviations exist ONLY in the `BUMPYP.EXE` playable build (`wmake play`); t
     same content, visually harmless).  The redundancy is a symptom of the host's `present_frame`
     already merging the BGI putimage+flip; it is resolved once the putimage/present primitives land
     and the present model is unified (priority-#1 plan, Tasks 2–5).
+  - **clip/viewport** (`fun_7b4a_view_blit` = `bgi_set_viewport_thunk` `1000:7b4a` →
+    `bgi_init_viewport` `1ab9:0179`): `host_bgi_set_viewport(view, seg)` (host_bgi.c) mirrors the
+    original 1:1 for the VGA path: writes CONSTANT clip extents `view[+0x18]=0x14`,
+    `view[+0x1a]=0x19`; sets `bgi_write_mode_flag_a=2` (DGROUP 0x541f), `bgi_write_mode_flag_b=1`
+    (0x5420); then returns with NO pixel blit (VGA dispatch slot `0x4dda[2]=0x0000` is null).
+    **VGA iris degeneration (critical, documented in findings §2 and `faithfulness-gap-audit.md §1`):**
+    `bgi_init_viewport` ignores the iris loop's per-step rect (`+0x14/+0x16/+0x1e/+0x20`) — it
+    always writes the CONSTANTS 0x14/0x19 to `+0x18/+0x1a`; the compose path reads clip from
+    `+0x0a/+0x0c` (different fields), so no geometric clip shrink occurs on VGA.  The visible VGA
+    iris = the vsync-timed hold (4x `wait_vretrace_thunk`/step, 10 steps, Task-2 pacing) + the
+    final blank-palette upload (`fun_7b93` zeroed-tiles → `fun_7bca` DAC zeroed → screen black).
+    This is a **TIMED-HOLD → BLANK-TO-BLACK**, not a shrinking rectangle (the geometric iris is an
+    EGA/CGA effect for non-null blit handler modes 0/1; on VGA mode 2 it degenerates).  The host
+    faithfully reconstructs this degeneration — no geometric wipe is invented.  The two
+    `bgi_write_mode_flag` globals (DGROUP 0x541f/0x5420) are declared in `host_bgi.c` (playable
+    only; not needed in the default build whose NOP stub never reaches them).
 
 The Task-9 OPEN blocker (`retf` at `0824:5E38` popping a corrupted frame in the title/present
 path) was root-caused to the **`restore_bg_view` signature schism** above and FIXED (the host
