@@ -389,7 +389,7 @@ deviation (a)).
 |---|---|---|
 | **Text/number + HUD** (T3): `draw_text_at` (07f0), `draw_number` (0816), `draw_number_sprites` (603d), `draw_hud_composite` (51d8) | Transcription | `draw_number` formats a native u32 in decimal by repeated ÷10/×10 modeling the engine's `crt_uldiv_32`/`crt_lmul_32` runtime calls, emits `"OVER FLOW"` when `width>=8`, then tail-calls `draw_text_at`. `draw_hud_composite` builds the 7-fill HUD via per-fill descriptors. **Descriptor-level gated** (`draw_hud_composite`'s 7 fills are checked per-fill against the oracle's hooked-leaf capture — perturbation-proven) + **number-format gated** (the formatted-buffer bytes for `draw_number`). The formatter scratch lives in the module-static `formatted_number_buf` (storage-class deviation — see (d)). |
 | **Title + menu + transition** (T4): `init_title_graphics` (2ef8), `show_title_background` (2fac), `show_title_and_init` (3ed4), `run_main_menu` (35a5), `show_menu_select_screen` (0f7a), `play_iris_wipe_transition` (3467) | Transcription | `run_main_menu` is the **4-option cursor state machine** (cursor up/down guards, option-2 cycles `menu_option2_setting` 0→1→2→0 instead of returning) — **semantic-state gated** via captured-input replay (perturbation-proven). `show_title_background`/`init_title_graphics`/`show_title_and_init` build the title + run the iris transition; `play_iris_wipe_transition`'s rectangle-wipe DESCRIPTOR stepping is reconstructed 1:1 and descriptor-gated (its render/DAC leaves are stubbed — see (e)). `show_menu_select_screen` is **position-only descriptor gated** — see (b). |
-| **DAC palette** (T4): `upload_vga_dac_palette` (9864) + the reconstructed `vga_dac_upload_from_buffer` | Transcription (dispatch) + **Behavior-faithful (static writer)** | `upload_vga_dac_palette` is a 1:1 thunk to `dispatch_by_palette_mode_2036` (2036:0000), which indirect-calls the handler the BGI driver registered at the runtime-populated overlay table `[palette_mode*2 + 0x6976]` (all-zero in the static image; handlers are dynamically-loaded BGI overlay code, NOT in the corpus). The reconstructed `vga_dac_upload_from_buffer` is the mode-2 VGA-DAC writer, reconstructed from the raw disassembly of the static DAC writer (function entry image off `0xb204`; the DAC `out` block begins at `0xb214`): it reads the 16-colour 6-bit palette from the decoded-image buffer at `+0x33` and emits the canonical VGA-DAC sequence (`out 0x3c8,0`; 8×RGB→0x3c9; `out 0x3c8,0x10`; 8×RGB). **This static writer IS the DAC port-write gate** (driven standalone over a seeded palette, perturbation-proven). The DAC carve-out is deviation (a). |
+| **Vsync wait + DAC writer** (T4): `wait_vretrace_thunk` (9864) / `wait_vretrace_dispatch` (2036:0000) + the reconstructed `vga_dac_upload_from_buffer` | **Behavior-faithful (vsync wait dispatch)** + **Behavior-faithful (static DAC writer)** | ⚠️ *Misnomer corrected 2026-06-27 (Task 2):* `upload_vga_dac_palette` / `dispatch_by_palette_mode_2036` were WRONG NAMES — this is a **vsync WAIT**, not a DAC upload. `wait_vretrace_thunk` (`1000:9864`) CALLFs `wait_vretrace_dispatch` (`2036:0000`), which indirect-calls the overlay table `[palette_mode*2 + 0x6976]`; for VGA (`pm==2`) the handler (`2036:0015`) polls Input Status #1 (`0x3da` bit 3) to wait for vertical retrace. The iris wipe calls it 4×/step as the wipe PACING. The genuine DAC upload is `7bca` (`host_bgi_upload_palette_to_dac`). The reconstructed `vga_dac_upload_from_buffer` is the mode-2 VGA-DAC writer, reconstructed from the raw disassembly of the static DAC writer (function entry image off `0xb204`; the DAC `out` block begins at `0xb214`): it reads the 16-colour 6-bit palette from the decoded-image buffer at `+0x33` and emits the canonical VGA-DAC sequence (`out 0x3c8,0`; 8×RGB→0x3c9; `out 0x3c8,0x10`; 8×RGB). **This static writer IS the DAC port-write gate** (driven standalone over a seeded palette, perturbation-proven). The DAC carve-out is deviation (a). |
 | **Highscore + level-intro** (T5): `show_highscore_screen` (5681), `render_highscore_table` (57e1), `highscore_enter_name` (59d3), `enter_highscore_name` (5c87), `draw_name_entry_cursor` (5fdb), `level_intro_screen` (3852), `show_level_intro_screen` (0d9d) | Transcription | The highscore display/name-entry flow + the level-intro screen. `enter_highscore_name` is the per-letter name-entry state machine (the `4=prev`/`8=next` cursor paths ported from RAW ASM — the Ghidra decompiler under-rendered them; see (f)); `draw_name_entry_cursor` is the shared cursor-draw helper. **Semantic-state gated** (the name row + the table-match AX return) + **descriptor gated** (the table/intro draws). `show_level_intro_screen` is **position-only descriptor gated** — see (b). The name buffer lives in the module-static `enter_name_buf` (storage-class deviation — see (d)). |
 
 **Phase-7 deviations (all accurate; stated plainly; in-code RECONSTRUCTION FIDELITY notes present):**
@@ -397,19 +397,23 @@ deviation (a)).
 - **(a) DAC carve-out — the runtime DAC path is NOT engine-port-trace-validated.** The
   engine's RUNTIME DAC writes come from runtime-loaded **BGI-overlay code** that does NOT
   execute under Unicorn (the `[palette_mode*2 + 0x6976]` handler table is runtime-populated
-  by BGI driver init; under the natural boot `palette_mode==2` the standalone-upload records
+  by BGI driver init; under the natural boot `palette_mode==2` the standalone-vsync records
   carry **0 captured DAC** — an engine fact surfaced by the T1 oracle). So
-  `upload_vga_dac_palette`'s records carry **0 OUT events** and are gated as a **no-emission
-  consistency check** (NOT a DAC validation); the `PORT_CHECKED` metric counts these
+  `wait_vretrace_thunk`'s records carry **0 OUT events** and are gated as a **no-emission
+  consistency check** (NOT a DAC validation; ⚠️ the old name was `upload_vga_dac_palette`
+  — misnomer corrected 2026-06-27 by Task 2; the thunk is a vsync WAIT, not a DAC upload); the `PORT_CHECKED` metric counts these
   0-emission checks too. The **REAL** DAC gate is the reconstructed `vga_dac_upload_from_buffer`
   (raw disasm of the static writer, function entry image off `0xb204` / DAC `out` block at `0xb214`, palette `@+0x33`, verified
   byte-for-byte) run STANDALONE over a SEEDED palette and asserted vs the canonical VGA-DAC
   hardware protocol sequence (an external standard, perturbation-proven). Plainly: the engine's
   runtime DAC path is **not** port-trace-validated against the engine; the **static writer IS**
   gated 1:1 + protocol-correct. (The 50-write DAC sequence the T1 oracle captured comes from the
-  iris-wipe's per-step view-blit — the stubbed BGI overlay `FUN_7b4a` — over its own faded
-  palette state, NOT reconstructable 1:1; the iris-wipe's descriptor RECT SWEEP is the
-  faithfully-reconstructed, validated part.) This is the self-modifying-blitter / L5-ISR class
+  iris-wipe's per-step DAC upload — BGI overlay `1ab9:0677` dispatched via thunk `fun_7bca`
+  (`bgi_upload_palette_to_dac_dispatch`) — over its faded palette state, NOT reconstructable 1:1
+  from the static image (`1ab9:0677` is runtime-loaded BGI overlay code). ⚠️ *Misnomer corrected
+  2026-06-27*: the old text attributed these writes to "`FUN_7b4a`" — that is `bgi_init_viewport`
+  (clip/viewport, null VGA blit slot) which emits NO DAC writes. The iris-wipe's descriptor RECT
+  SWEEP is the faithfully-reconstructed, validated part.) This is the self-modifying-blitter / L5-ISR class
   carve-out (faithful to what the binary does, validated by inspection vs the asm + protocol,
   not by an engine-runtime port differential).
 - **(b) Partial glyph gates (position-only).** `show_menu_select_screen` (0f7a) and
@@ -452,8 +456,10 @@ As of Phase-7 Task 6, the complete front-end subsystem is **reconstructed**:
   formatters + in-game HUD (`draw_text_at` 07f0, `draw_number` 0816, `draw_number_sprites` 603d,
   `draw_hud_composite` 51d8), the title/menu/transition flow (`init_title_graphics` 2ef8,
   `show_title_background` 2fac, `show_title_and_init` 3ed4, `run_main_menu` 35a5,
-  `show_menu_select_screen` 0f7a, `play_iris_wipe_transition` 3467), the VGA-DAC upload
-  (`upload_vga_dac_palette` 9864 + the reconstructed `vga_dac_upload_from_buffer`), and the
+  `show_menu_select_screen` 0f7a, `play_iris_wipe_transition` 3467), the vsync wait
+  (`wait_vretrace_thunk` 9864 / `wait_vretrace_dispatch` 2036:0000 — ⚠️ misnomer corrected
+  2026-06-27; was `upload_vga_dac_palette`/`dispatch_by_palette_mode`) + the reconstructed
+  VGA-DAC writer (`vga_dac_upload_from_buffer`), and the
   highscore + level-intro screens (`show_highscore_screen` 5681, `render_highscore_table` 57e1,
   `highscore_enter_name` 59d3, `enter_highscore_name` 5c87, `draw_name_entry_cursor` 5fdb,
   `level_intro_screen` 3852, `show_level_intro_screen` 0d9d).

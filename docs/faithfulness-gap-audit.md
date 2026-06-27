@@ -80,7 +80,7 @@ several presentation primitives are no-ops.
 > driven by `apply_level_palette` (`1000:0604`).
 >
 > Reconstruction is tracked in `docs/superpowers/plans/2026-06-27-host-bgi-present-transitions.md`
-> (rewritten). This table's per-row "Role"/"Action" text is rewritten by that plan's Task 4.
+> (rewritten). **Task 4 (2026-06-27) has now updated the per-row "Role"/"Action" text below.**
 
 The engine's graphics primitives are a Borland-BGI-style driver overlay. Main-segment
 **thunks** (`1000:7b4a`…) call **dispatch** functions here, which indirect-call a
@@ -93,11 +93,11 @@ decompiles, **except** the innermost self-modifying planar blit cores (the `bgi_
 | Addr | Ghidra name | Role | `src/` status | Decompiles? | Action |
 |------|-------------|------|---------------|-------------|--------|
 | `1ab9:0179` | bgi_init_viewport | set viewport 0x14×0x19, dispatch `[pm*2+0x4dda]` | **host-modeled** (thunk `1000:7b4a` → `host_bgi_set_viewport`, `#ifdef BUMPY_PLAYABLE`; default NOP kept) — VGA slot null → no pixel blit; iris = timed hold + blank-DAC (Task 3) | yes | — |
-| `1ab9:01e1` | bgi_putimage_dispatch | putimage via `[pm*2+0x5435]` | missing (thunk `7b93` = NOP) | yes | reconstruct 1:1 |
+| `1ab9:01e1` | bgi_stage_palette_dispatch | **palette stage** via `[pm*2+0x5435]` (VGA handler `1ab9:0620` = `rep movsw` of 48-byte palette into per-page slot; NOT a pixel putimage — misnomer corrected 2026-06-27) | **host-modeled** (thunk `1000:7b93` → `host_bgi_stage_image_palette`, `#ifdef BUMPY_PLAYABLE`; default NOP kept; Tasks 1–2) | yes | — |
 | `1ab9:01ff` | bgi_cleardevice_dispatch | cleardevice via vector | missing | yes | reconstruct 1:1 |
 | `1ab9:0232` | bgi_device_reset_dispatch | device reset via vector | missing (thunk `7bbd`=NOP) | yes | reconstruct 1:1 |
-| `1ab9:02b1` | bgi_palette_dispatch (page flip) | page-flip via `[pm*2+0x5441]` | missing (thunk `7bca`=NOP) | yes | reconstruct 1:1 |
-| `1ab9:0351` | bgi_present_dispatch | present via `[pm*2+0x5475]` | missing | yes | reconstruct 1:1 |
+| `1ab9:02b1` | bgi_upload_palette_to_dac_dispatch | **DAC palette upload** via `[pm*2+0x5441]` (VGA handler `1ab9:0677` = DAC write to ports `0x3c8`/`0x3c9`, slots 0–7 & 0x10–0x17; NOT a page flip — misnomer corrected 2026-06-27) | **host-modeled** (thunk `1000:7bca` → `host_bgi_upload_palette_to_dac`, `#ifdef BUMPY_PLAYABLE`; default NOP kept; Tasks 1–2) | yes | — |
+| `1ab9:0351` | bgi_present_dispatch | **CRTC page flip** via `[pm*2+0x5475]` (VGA handler `1ab9:0379` → `1ab9:06c1` = XOR Start-Address bit 5, 0x2000 swap; the ONE true frame present) | **host-modeled** (thunk `1000:7bdd` → `present_frame`, `src/host/host_video.c`; Tasks 1–2) | yes | — |
 | `1ab9:0384` | bgi_device_inc_dispatch | device-inc via vector | missing (thunk `7bea`=NOP) | yes | reconstruct 1:1 |
 | `1ab9:01c0` | bgi_driver_nop | driver no-op slot | missing | yes | reconstruct 1:1 (trivial) |
 | `1ab9:01c1` | bgi_device_clear_flag | clear device flag | missing | yes | reconstruct 1:1 |
@@ -121,10 +121,14 @@ decompiles, **except** the innermost self-modifying planar blit cores (the `bgi_
 | `1ab9:02ce` | gfx_driver_init | adapter/palette select screen | **reconstructed** (config_screens.c) | yes | — |
 
 **Also required (the wiring):** the main-segment dispatch thunks
-`1000:7b4a/7b76/7b86/7b93/7ba7/7bbd/7bca/7bea` (all NOP today), the per-`palette_mode`
-**vector tables** (DGROUP `0x4dda/0x5435/0x5441/0x5475/0x555e`), and the **BGI-init code that
-populates them** (currently absent — `init_misc_7bd7`/`init_misc_7bbd` are NOP). Without the
-table population the dispatch indirection cannot resolve.
+`1000:7b4a/7b76/7b86/7b93/7ba7/7bbd/7bca/7bea`; **Tasks 1–3 host-modeled four of these on the
+VGA (`palette_mode==2`) path**: `7b4a` → `host_bgi_set_viewport`, `7b93` →
+`host_bgi_stage_image_palette`, `7bca` → `host_bgi_upload_palette_to_dac`, `7bdd` →
+`present_frame`; their default-build NOP stubs remain. The remaining thunks (`7b76`/`7b86`/
+`7ba7`/`7bbd`/`7bea`) are still NOP. The per-`palette_mode` **vector tables** (DGROUP
+`0x4dda/0x5435/0x5441/0x5475/0x555e`) and the **BGI-init code that populates them** (currently
+absent — `init_misc_7bd7`/`init_misc_7bbd` are NOP) remain unresolved for the 1:1 path;
+the host bypass avoids the table indirection entirely.
 
 ---
 
