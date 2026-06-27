@@ -33,9 +33,9 @@
  *  See the OWNERSHIP block at the top of screens.c for the per-symbol grep evidence. */
 
 /* palette_mode (DGROUP 0x541d): the active display/palette mode — the dispatch index
- *  upload_vga_dac_palette uses (DGROUP[palette_mode*2 + 0x6976] handler) and the
- *  blitters branch on (0=CGA, 2=EGA/VGA).  Modelled as a word (the dispatch read is a
- *  word; the low byte is the mode). */
+ *  wait_vretrace_dispatch uses (DGROUP[palette_mode*2 + 0x6976] handler; mode 2 → the
+ *  vsync wait) and the blitters branch on (0=CGA, 2=EGA/VGA).  Modelled as a word (the
+ *  dispatch read is a word; the low byte is the mode). */
 extern u16 palette_mode;                  /* DGROUP 0x541d */
 
 /* render_descriptor_ptr (far ptr @ DGROUP 0x0574/0x0576, `DAT_0574`): points at the
@@ -46,8 +46,9 @@ extern u8 __far *render_descriptor_ptr;   /* DGROUP 0x0574/0x0576 */
 
 /* fullscreen_buf (off DGROUP 0x7926 / seg DGROUP 0x7928): the engine's post-vec_decode
  *  decoded-image buffer.  The screen builders point the view descriptor's image field at
- *  fullscreen_buf+99 : fullscreen_buf_seg and (upload_vga_dac_palette) read the embedded
- *  16-colour 6-bit-RGB palette at +0x33.  Split off/seg per the _off/_seg convention. */
+ *  fullscreen_buf+99 : fullscreen_buf_seg and the DAC writer (vga_dac_upload_from_buffer)
+ *  reads the embedded 16-colour 6-bit-RGB palette at +0x33.  Split off/seg per the
+ *  _off/_seg convention. */
 extern u16 fullscreen_buf;                /* DGROUP 0x7926 — near off */
 extern u16 fullscreen_buf_seg;            /* DGROUP 0x7928 — seg      */
 
@@ -135,9 +136,16 @@ void show_menu_select_screen(void);
  *  blit-view rect inward over 10 steps (4 view-blits + DAC uploads per step), then clear. */
 void play_iris_wipe_transition(void);
 
-/* upload_vga_dac_palette (1000:9864): thunk -> dispatch_by_palette_mode_2036 (the DAC
- *  palette upload; under palette_mode==2 the standalone handler emits no DAC). */
-void upload_vga_dac_palette(void);
+/* wait_vretrace_thunk (1000:9864): CALLF thunk -> wait_vretrace_dispatch (2036:0000),
+ *  whose mode-2 overlay handler (2036:0015) is a VERTICAL-RETRACE (vsync) WAIT — poll
+ *  Input Status #1 (0x3da) bit 3 until the retrace starts, then ends.  FORMERLY mis-named
+ *  upload_vga_dac_palette: it is NOT a DAC upload (Task-2 misnomer correction).  The real
+ *  DAC upload is host_bgi_upload_palette_to_dac / vga_dac_upload_from_buffer. */
+void wait_vretrace_thunk(void);
+
+/* wait_vretrace_dispatch (2036:0000): the vsync-wait dispatch wait_vretrace_thunk CALLFs
+ *  (formerly dispatch_by_palette_mode_2036). */
+void wait_vretrace_dispatch(void);
 
 /* ── PORTED (Phase-7 T5): highscore screens + name-entry + level-intro ───────────────
  *  1:1 bodies in screens.c (addresses cited there); the matching game_stubs.c stubs are

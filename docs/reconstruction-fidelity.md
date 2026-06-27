@@ -1606,18 +1606,49 @@ menu text).  Default BUMPY.EXE byte-identical (cac9ff23); all changes are host-o
    "allocated BEFORE host_fb_init" note in the resource-loader section above.
 
 3. **BGI palette: Attribute Controller + DAC upload (`host_video.c`, `screens.c`).**
-   `dispatch_by_palette_mode` is a faithful NOP for `palette_mode==2` (engine fact, T1 oracle:
-   the BGI overlay palette handler is not in the corpus), so the decoded image's palette was
-   never sent to the DAC and screens showed the BIOS mode-0x0D default ramp.  FIX: (a)
-   `host_set_bgi_attribute_palette` (one-time, in `init_display_97f1`) programs the AC palette
-   to the BGI 16-colour mapping — pixel i → DAC (i<8 ? i : 0x10+(i−8)) — matching
-   `vga_dac_upload_from_buffer`'s DAC targets (0..7, 0x10..0x17); the BIOS default AC otherwise
-   maps pixel 6→DAC 0x14 and 8..15→DAC 0x38..0x3f, which the image palette never loads.  (b)
-   `dispatch_by_palette_mode` (under `BUMPY_PLAYABLE`) drives the reconstructed
-   `vga_dac_upload_from_buffer` over the current screen image (`fullscreen_buf`, palette
-   @+0x33) — the host stand-in for the absent BGI handler.  RECONSTRUCTION FIDELITY: both are
-   host BGI-init reconstructions (the original BGI mode/palette handler is not decompilable);
-   the DAC write SEQUENCE itself stays the corpus-validated `vga_dac_upload_from_buffer`.
+   The decoded image's palette was never sent to the DAC, so screens showed the BIOS
+   mode-0x0D default ramp.  FIX: (a) `host_set_bgi_attribute_palette` (one-time, in
+   `init_display_97f1`) programs the AC palette to the BGI 16-colour mapping — pixel i →
+   DAC (i<8 ? i : 0x10+(i−8)) — matching the DAC targets (0..7, 0x10..0x17) of
+   `host_bgi_upload_palette_to_dac` / `vga_dac_upload_from_buffer`; the BIOS default AC
+   otherwise maps pixel 6→DAC 0x14 and 8..15→DAC 0x38..0x3f, which the image palette never
+   loads.  (b) the menu/title DAC upload flows through `fun_7bca_flip` →
+   `host_bgi_upload_palette_to_dac` (Task 1, staged by `fun_7b93_present_blank`).
+   RECONSTRUCTION FIDELITY: these are host BGI-init reconstructions (the original BGI
+   mode/palette handler is not decompilable); the DAC write SEQUENCE stays the
+   corpus-validated `host_bgi_upload_palette_to_dac` (slots 0..7, 0x10..0x17).
+
+4. **Level-palette pipeline + vsync-wait misnomer correction (`host_video.c`, `level.c`,
+   `screens.c`) — Task 2.**  Two corrections:
+   (a) **MISNOMER.** `upload_vga_dac_palette` (`1000:9864`) / `dispatch_by_palette_mode`
+   (`2036:0000`) were NOT a DAC upload — they are a **vsync WAIT**.  The mode-2 overlay
+   handler (`2036:0015`, table `[pm*2+0x6976][2]`) polls Input Status #1 (`0x3da`) bit 3:
+   wait for vertical retrace to start, then end.  Renamed to `wait_vretrace_thunk` /
+   `wait_vretrace_dispatch` (src + Ghidra).  The vsync poll body is `#ifdef BUMPY_PLAYABLE`
+   in `wait_vretrace_dispatch`; the default build keeps its verbatim NOP (md5 unchanged).
+   The overlay table is runtime-populated and `2036:0015` is not in the corpus, so the
+   `9864→2036:0000→2036:0015` chain is collapsed into the poll (behavior-faithful).
+   (b) **`load_palette` (`1000:08d1`) reconstructed** (host body in `host_video.c`,
+   `BUMPY_PLAYABLE`).  Engine: decode 16 packed RGB words from `[src:0x578]` into a staging
+   buffer (DGROUP `0x6c42`, palette @+0x33; each channel `<<3`; biases `DAT_75eb`/`DAT_75ec`
+   are init'd to 0 and never re-written, so 0 in the gameplay path), then stage
+   (`7b93`)→DAC upload (`7bca`)→vsync (`9864`).  `apply_level_palette` (`1000:0604`) calls
+   `load_palette(0x578,0x203b)`; the host's `apply_level_palette` now does the same instead
+   of the old (misnamed) `upload_vga_dac_palette` NOP.
+   **DATA-SOURCING DEVIATION:** the host never stages the packed palette at DGROUP `0x578`
+   (`level_populate_dg` fills only the entity frametable; `load_palette_byteswapped`
+   (`1000:063b`), whose sole job is to fill `0x578` byte-swapped from `cur_level_ptr`, is
+   therefore vestigial and OMITTED).  The host has the already-DECODED 48-byte DAC palette
+   at `g_pav_buf+51` (the engine's per-idx decode produces exactly these 48 bytes), exposed
+   via `level_pav_palette()`; the host copies those into the staging buffer +0x33 (skipping
+   the packed-word decode) then runs the faithful stage→upload→vsync tail.
+   **DAC-LAYOUT RECONCILIATION:** `load_palette`→`host_bgi_upload_palette_to_dac` writes the
+   level palette to DAC slots {0..7, 0x10..0x17} — the slots the active BGI AC mapping reads
+   — so gameplay colours 8..15 (AC→DAC 0x10..0x17) are correct.  `render_level`'s
+   `video_set_palette6` (DAC 0..15 contiguous) is KEPT (the structurally-validated path); it
+   covers only the AC's low 8 slots, so the two COEXIST: `video_set_palette6` writes 0..15
+   (8..15 unread by the AC) and `load_palette` writes the AC-read {0..7, 0x10..0x17}.  The
+   faithful path is what makes colours 8..15 resolve correctly under the BGI AC.
 
 REMAINING (not yet fixed): `run_main_menu` returns 1 almost immediately on its first poll
 (so the normal flow falls into a blank `show_highscore_screen` instead of holding the menu) —

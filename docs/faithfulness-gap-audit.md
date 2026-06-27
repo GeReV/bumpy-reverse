@@ -66,6 +66,19 @@ several presentation primitives are no-ops.
 > - `1ab9:0179` (`bgi_init_viewport`, thunk `7b4a`) has a **null** VGA blit slot
 >   (`0x4dda[2]==0`): it sets the clip/viewport extent only — no pixel blit on VGA.
 >
+> ⚠️ **CORRECTION (2026-06-27, Task 2): `upload_vga_dac_palette`/`dispatch_by_palette_mode`
+> were MISNOMERS — they are a vsync WAIT, not a DAC upload.** The thunk `1000:9864`
+> (renamed Ghidra `wait_vretrace_thunk`) CALLFs `2036:0000` (renamed `wait_vretrace_dispatch`,
+> was `dispatch_by_palette_mode_2036`), which indirect-calls overlay table `[pm*2 + 0x6976]`;
+> for the VGA boot (`pm==2`) entry[2]=`0x0015` → `2036:0015` = a **VERTICAL-RETRACE (vsync)
+> WAIT** (`mov dx,0x3da; in al,dx; test al,8`: wait for retrace start, then end). The iris
+> wipe calls it 4×/step as the wipe PACING. The genuine DAC upload is `7bca`
+> (`host_bgi_upload_palette_to_dac`) / `vga_dac_upload_from_buffer` — kept as-is. src mirror:
+> `wait_vretrace_thunk`/`wait_vretrace_dispatch` (`src/screens.c`, `#ifdef BUMPY_PLAYABLE`).
+> The level-palette loader `load_palette` (`1000:08d1`) reuses `7b93`→`7bca`→`9864`
+> (stage→DAC upload→vsync); reconstructed host body in `src/host/host_video.c` (Task 2),
+> driven by `apply_level_palette` (`1000:0604`).
+>
 > Reconstruction is tracked in `docs/superpowers/plans/2026-06-27-host-bgi-present-transitions.md`
 > (rewritten). This table's per-row "Role"/"Action" text is rewritten by that plan's Task 4.
 
@@ -198,6 +211,8 @@ faithfulness goal implies.
 | `restore_bg_view` (bgi_overlay.c) | `bgi_set_mode_01` (`1ab9:0d77`) + its `0aa0` blit core | un-merge: real dispatch + behavior-faithful core |
 | `render_player_view` model | `bgi_set_mode_10` (`1ab9:1028`) | un-merge |
 | `present_frame` (host_video.c) | CRTC double-buffer (engine mechanism unresolved) | keep behavior-faithful; document |
+| `load_palette` (host_video.c) | `1000:08d1` — host sources decoded palette `g_pav_buf+51` instead of decoding packed `0x578` (which the host never stages); omits `load_palette_byteswapped` (`1000:063b`, fills `0x578` — vestigial in host) | data-sourcing deviation; structure (stage→upload→vsync) faithful |
+| `wait_vretrace_thunk`/`_dispatch` (screens.c) | `1000:9864`/`2036:0000`/`2036:0015` — overlay-table dispatch collapsed to the vsync poll (table runtime-populated, `2036:0015` not in corpus) | keep behavior-faithful; document (misnomer corrected) |
 | `sprite_chain` | `object_list`+`clip`+`setup` (`1cec:0e48/0f50/103d`) | un-merge to three 1:1 fns |
 | `sprite_blit` / `bg_render` | self-modifying planar blit cores | keep behavior-faithful; document |
 | hardware-init (host_boot/host_video) | `init_display_*`, `init_crtc_window`, `set_display_page` | reconstruct 1:1 where decompilable |

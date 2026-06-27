@@ -1,9 +1,10 @@
 #ifdef BUMPY_PLAYABLE
-#include <i86.h>       /* int86, union REGS, MK_FP */
+#include <i86.h>       /* int86, union REGS, MK_FP, FP_OFF, FP_SEG */
 #include <conio.h>     /* inp, outp */
 #include <string.h>    /* _fmemset */
 #include "host.h"
-#include "../screens.h" /* palette_mode, upload_vga_dac_palette */
+#include "host_bgi.h"   /* host_bgi_stage_image_palette / host_bgi_upload_palette_to_dac */
+#include "../screens.h" /* palette_mode, wait_vretrace_thunk */
 
 /* ============================================================================
  * host_video.c — VGA mode 0x0D + CRTC double-buffer + DAC palette init
@@ -16,7 +17,8 @@
  *   init_crtc_window    — program CRTC Start Address for two-page layout
  *   set_display_page    — CRTC Start Address page flip (0=page0, 1=page1)
  *   clear_viewport      — zero host_framebuffer + both VGA pages
- *   apply_level_palette — drive upload_vga_dac_palette → DAC ports 0x3C8/0x3C9
+ *   load_palette        — decode/stage the level palette + DAC upload + vsync (1000:08d1)
+ *   apply_level_palette — drive load_palette → DAC ports 0x3C8/0x3C9 (1000:0604)
  *   set_palette_mode    — record palette_mode (the gameplay dispatch index)
  *   present_frame       — (BUMPY_PLAYABLE real body) flicker-free double-buffer present
  *                          + vblank sync (writes off-screen page, waits retrace, CRTC flip)
@@ -96,7 +98,7 @@ void init_crtc_window(u16 a, u16 b, u16 c, u16 d)
 /* ── set_palette_mode (palette mode dispatcher) ────────────────────────────────
  * Records palette_mode (the gameplay dispatch index: 0=CGA, 2=EGA/VGA) and the
  * secondary flag.  Called from the boot sequence to establish the session palette
- * branch; the gameplay (upload_vga_dac_palette + blitters) reads palette_mode.
+ * branch; the gameplay (the BGI palette pipeline + blitters) reads palette_mode.
  * 'mode' is the low byte of the u16 palette_mode global (DGROUP 0x541d). */
 void set_palette_mode(u8 mode, u8 flag)
 {
@@ -104,16 +106,87 @@ void set_palette_mode(u8 mode, u8 flag)
     palette_mode = (u16)mode;
 }
 
-/* ── apply_level_palette ────────────────────────────────────────────────────────
- * Drives the reconstructed DAC palette upload (upload_vga_dac_palette, 1000:9864)
- * so the level's 16-colour 6-bit-RGB palette reaches the hardware DAC registers
- * (out 0x3C8 = index, out 0x3C9 = R/G/B triplets, 16 entries × 3 bytes = 48 out).
- * The source palette lives at fullscreen_buf+0x33 (as set by the screen builders).
- * Under palette_mode==2 (EGA/VGA) the handler emits the full DAC sequence;
- * under palette_mode==0 (CGA) it is a no-op (documented engine behaviour). */
+/* level_pav_palette (level.c, BUMPY_PLAYABLE): far ptr to the level's 48-byte decoded
+ * DAC palette (g_pav_buf+51), or NULL if no level loaded.  The host load_palette's
+ * data source — see the data-sourcing fidelity note on load_palette below. */
+extern const u8 __far *level_pav_palette(void);
+
+/* ── load_palette (1000:08d1) ─────────────────────────────────────────────────────
+ * Reconstruction of the engine's level-palette loader.  ENGINE (mode-2 / VGA path):
+ * for idx 0..15 it reads a 16-bit packed RGB word w = src[idx] from the far source
+ * (apply_level_palette passes 0x578:0x203b = the byteswapped level palette) and writes
+ * three 6-bit DAC bytes (each channel << 3) into a staging buffer at DGROUP 0x6c42,
+ * palette region +0x33:
+ *     R = (w >> 8) << 3
+ *     G = ((w - (DAT_75eb << 8)) >> 4) << 3
+ *     B = ((w & 0xff) - (DAT_75ec << 4)) << 3
+ * (DAT_75eb / DAT_75ec are DGROUP bias bytes; init_game_session_state zeroes BOTH and
+ * nothing else writes them, so in the gameplay path the biases are 0 → R=(w>>8)<<3,
+ * G=(w>>4)<<3, B=(w&0xff)<<3.)  It then runs the palette tail, REUSING the Task-1 BGI
+ * primitives: bgi_stage_image_palette(0x6c42,DS,0) → bgi_upload_palette_to_dac(0) →
+ * the vsync wait (1000:9864).  (Mode-1 is the EGA fixed-palette patch path, not taken
+ * on the VGA boot.)
+ *
+ * RECONSTRUCTION FIDELITY — HOST DATA-SOURCING DEVIATION (findings §5):
+ * the host never stages the PACKED palette at DGROUP 0x578 (level_populate_dg fills
+ * only the entity frametable, and load_palette_byteswapped @1000:063b — which would
+ * fill 0x578 from cur_level_ptr — is therefore vestigial and omitted, see
+ * apply_level_palette).  The host instead has the ALREADY-DECODED 48-byte DAC palette
+ * at g_pav_buf+51 (the engine's per-idx decode produces exactly these 48 bytes).  So
+ * the host copies those 48 bytes into the staging buffer's +0x33 region — skipping the
+ * packed-word decode — then runs the faithful stage → upload → vsync tail.  The
+ * (src_off,src_seg) params are kept for signature fidelity (apply_level_palette passes
+ * 0x578,0x203b) but the host sources the palette from g_pav_buf.  Recorded in
+ * docs/reconstruction-fidelity.md ("playable host: level-palette pipeline").
+ *
+ * DAC-LAYOUT NOTE (findings §3): host_bgi_upload_palette_to_dac writes DAC slots
+ * {0..7, 0x10..0x17} — the slots the active BGI Attribute-Controller mapping
+ * (host_set_bgi_attribute_palette: pixel i → DAC i<8?i:0x10+(i-8)) reads.  This is what
+ * makes gameplay colours 8..15 correct; render_level's video_set_palette6 (DAC 0..15
+ * contiguous) only covers the AC's low 8 slots.  See the audit + the report. */
+static u8 host_palette_staging[0x33u + 48u];   /* mirrors the engine 0x6c42 buffer: palette @ +0x33 */
+
+void load_palette(u16 src_off, u16 src_seg)
+{
+    const u8 __far *pal;
+    u8 __far       *stage_fp;
+    u8              i;
+
+    (void)src_off; (void)src_seg;   /* engine far-ptr params; host sources g_pav_buf (see note) */
+
+    pal = level_pav_palette();
+    if (pal == (const u8 __far *)0) {
+        return;   /* no level loaded yet (e.g. boot-time init_display_97f1) — faithful NOP */
+    }
+
+    /* Copy the 48 decoded DAC bytes into the staging buffer's palette region (+0x33). */
+    for (i = 0u; i < 48u; i++) {
+        host_palette_staging[0x33u + i] = pal[i];
+    }
+
+    /* Engine tail (1000:09e9): stage the staged palette into the per-page BGI slot,
+     * upload it to the DAC, then wait for vertical retrace. */
+    stage_fp = (u8 __far *)host_palette_staging;
+    host_bgi_stage_image_palette(FP_OFF(stage_fp), FP_SEG(stage_fp), 0u);
+    host_bgi_upload_palette_to_dac(0u);
+    wait_vretrace_thunk();
+}
+
+/* ── apply_level_palette (1000:0604) ──────────────────────────────────────────────
+ * Engine:  if (!palette_loaded && cur_level_ptr[0x1c] != 0) load_palette_byteswapped();
+ *          else palette_loaded = 1;
+ *          load_palette(0x578, 0x203b);
+ * Loads the level's 16-colour 6-bit-RGB palette into the DAC (via load_palette).
+ *
+ * RECONSTRUCTION FIDELITY — OMITTED BYTESWAP PRE-LOAD (findings §4/§5):
+ * load_palette_byteswapped (1000:063b) exists only to fill DGROUP 0x578 from
+ * cur_level_ptr (byte-swapped); the host's load_palette sources the decoded palette
+ * from g_pav_buf instead of 0x578, so the byteswap pre-load and its palette_loaded gate
+ * have no host consumer and are omitted.  load_palette(0x578,0x203b) is the faithful
+ * tail call. */
 void apply_level_palette(void)
 {
-    upload_vga_dac_palette();
+    load_palette(0x578u, 0x203bu);
 }
 
 /* ── init_display_97f1 (1000:97f1) ─────────────────────────────────────────────

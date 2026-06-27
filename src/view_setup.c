@@ -6,7 +6,7 @@
 #include "bgi_overlay.h"      /* bgi_view_desc, render_player_view, restore_bg_view,
                                   BGI_PAGE_A000_OFF, BGI_PLANE_SIZE, BGI_PAGE_SIZE */
 #include "screens.h"          /* render_descriptor_ptr, fullscreen_buf/seg,
-                                  palette_mode, draw_number, upload_vga_dac_palette,
+                                  palette_mode, draw_number, wait_vretrace_thunk,
                                   play_iris_wipe_transition */
 #include "anim.h"             /* p1_sprite */
 
@@ -392,7 +392,7 @@ void show_text_screen(void)
     play_iris_wipe_transition();
     fun_7b93_present_blank(fullscreen_buf, fullscreen_buf_seg, 0);
     fun_7bca_flip(0);
-    upload_vga_dac_palette();
+    wait_vretrace_thunk();   /* vsync wait (1000:9864); formerly mis-named upload_vga_dac_palette */
 
     /* Render 9 sprite glyphs at row 0x60 starting at col 6.
      * p1_sprite word[1] = y = 0x60; per char: x = col * 16, frame = ch + 0x175.

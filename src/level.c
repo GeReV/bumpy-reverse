@@ -566,6 +566,28 @@ static void render_level(void)
     video_blit_planar(g_page0);
 }
 
+#ifdef BUMPY_PLAYABLE
+/* ── level_pav_palette (host accessor) ─────────────────────────────────────────
+ * Returns a far pointer to the level's 48-byte decoded DAC palette (the PAV header
+ * region g_pav_buf+51: 16 colours × 3 bytes, 6-bit R,G,B), or NULL if no level has
+ * been loaded yet.  This is the SAME palette render_level uploads via
+ * video_set_palette6; it is the source the faithful host load_palette (host_video.c)
+ * stages into the BGI palette slot then uploads to the DAC.
+ *
+ * RECONSTRUCTION FIDELITY — HOST DATA-SOURCING (see host_video.c load_palette):
+ * the engine's load_palette (1000:08d1) decodes the PACKED palette from DGROUP 0x578;
+ * the host never stages 0x578 (level_populate_dg fills only the entity frametable), so
+ * it sources the already-decoded 48 bytes from g_pav_buf instead.  g_pav_buf is static
+ * here, so this accessor exposes it to host_video.c.  BUMPY_PLAYABLE only. */
+const u8 __far *level_pav_palette(void)
+{
+    if (g_pav_buf == (u8 __far *)0) {
+        return (const u8 __far *)0;
+    }
+    return (const u8 __far *)(g_pav_buf + 51u);
+}
+#endif /* BUMPY_PLAYABLE */
+
 #endif /* } !BUMPY_COPYPROT_HARNESS — end heavy level pipeline */
 
 /* ────────────────────────────────────────────────────────────────────────────

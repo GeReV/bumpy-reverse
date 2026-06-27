@@ -12,7 +12,7 @@
  *       highscore     show_menu_select_screen / show_highscore_screen /
  *                     render_highscore_table / enter/highscore_enter_name),
  *    T5 intro/palette (level_intro_screen / show_level_intro_screen /
- *                     play_iris_wipe_transition / upload_vga_dac_palette).
+ *                     play_iris_wipe_transition / wait_vretrace_thunk).
  *  At each port the corresponding stub is removed from game_stubs.c and the body
  *  reconstructed here, validated by tools/screens_ctest.c against the Phase-7 T1
  *  trace local/build/render/screens_trace.bin (magic "SCRTRC01").
@@ -388,7 +388,9 @@ void draw_hud_composite(void)
  *    run_main_menu               1000:35a5   (the 4-option cursor state machine)
  *    show_menu_select_screen     1000:0f7a
  *    play_iris_wipe_transition   1000:3467   (the rectangle-wipe descriptor sweep)
- *    upload_vga_dac_palette      1000:9864   (thunk -> dispatch_by_palette_mode_2036)
+ *    wait_vretrace_thunk         1000:9864   (vsync-wait thunk -> wait_vretrace_dispatch
+ *                                             @2036:0000; formerly mis-named
+ *                                             upload_vga_dac_palette — see Step-5 note)
  *  The Turbo C stack-check prologue (`CMP [0x6b4c],SP; CALL ab83`) of each original
  *  is the compiler-emitted stack probe — NOT game logic — and is intentionally
  *  OMITTED (the documented player/items/anim/sound/T3 convention).
@@ -420,27 +422,30 @@ void draw_hud_composite(void)
  *      stubbed here pending T5).
  *    play_intro_animation_loop / wait_50_frames — animation idle leaves, stubbed.
  *
- *  ── upload_vga_dac_palette / play_iris_wipe_transition — the DAC carve-out ─────────
- *  upload_vga_dac_palette (1000:9864) is a 1:1 thunk to dispatch_by_palette_mode_2036
- *  (2036:0000), which indirect-calls the handler at the overlay table
- *  `[palette_mode*2 + 0x6976]`.  That table is RUNTIME-POPULATED by the BGI driver
- *  init (all-zero in the static image) and the handlers are dynamically-loaded BGI
- *  overlay code — NOT in the Ghidra corpus.  RECONSTRUCTION FIDELITY: dispatch is
- *  reconstructed 1:1; the mode-2 VGA-DAC handler is reconstructed from the raw
- *  disassembly of the static DAC writer (image off 0xb204) as
- *  `vga_dac_upload_from_buffer` — a behavior-faithful, clearly-labeled reconstruction
- *  (the sprite_blit / bg_render convention): it reads the 16-colour 6-bit palette from
- *  the decoded-image buffer at +0x33 and emits the canonical VGA-DAC write sequence
- *  (`out 0x3c8,0`; 8 colours×RGB to 0x3c9; `out 0x3c8,0x10`; 8 colours×RGB).  Under
- *  the natural boot palette_mode==2 the standalone handler emits no DAC (an engine
- *  fact surfaced by the T1 oracle); the captured 50-write DAC sequence is emitted by
- *  the iris-wipe's per-step view-blit (the stubbed BGI overlay FUN_7b4a) operating on
- *  its own faded palette state — NOT reconstructable 1:1.  The DAC port-write gate
- *  therefore drives the reconstructed `vga_dac_upload_from_buffer` over a SEEDED
- *  palette buffer and asserts its (port,value) sequence (perturbation-proven); the
- *  iris-wipe's descriptor RECT SWEEP is the faithfully-reconstructed, validated part.
- *  play_iris_wipe_transition's rectangle-wipe descriptor stepping IS reconstructed 1:1;
- *  its render/DAC leaves are stubbed.
+ *  ── wait_vretrace_thunk / play_iris_wipe_transition — the vsync + DAC carve-out ────
+ *  MISNOMER CORRECTION (Task 2):  `wait_vretrace_thunk` (1000:9864, formerly mis-named
+ *  upload_vga_dac_palette) is a 1:1 CALLF thunk to `wait_vretrace_dispatch` (2036:0000,
+ *  formerly dispatch_by_palette_mode_2036), which indirect-calls the overlay handler at
+ *  table `[palette_mode*2 + 0x6976]`.  That table is RUNTIME-POPULATED by the BGI driver
+ *  init (all-zero in the static image); for the VGA boot (palette_mode==2) the handler is
+ *  2036:0015 — a VERTICAL-RETRACE (vsync) WAIT (`mov dx,0x3da; in al,dx; test al,8`), NOT
+ *  a DAC upload.  RECONSTRUCTION FIDELITY: the dispatch chain is collapsed into the vsync
+ *  poll (see wait_vretrace_dispatch below); 2036:0015 is dynamically-loaded overlay code,
+ *  not in the Ghidra corpus.
+ *
+ *  The genuine DAC upload is a SEPARATE function: `vga_dac_upload_from_buffer` — a
+ *  behavior-faithful, clearly-labeled reconstruction (the sprite_blit / bg_render
+ *  convention) of the static DAC writer (image off 0xb204).  It reads the 16-colour
+ *  6-bit palette from a decoded-image buffer at +0x33 and emits the canonical VGA-DAC
+ *  write sequence (`out 0x3c8,0`; 8 colours×RGB to 0x3c9; `out 0x3c8,0x10`; 8 colours×RGB)
+ *  — kept as-is (it IS a real DAC upload; only the 9864 thunk was misnamed).  The DAC
+ *  port-write gate drives `vga_dac_upload_from_buffer` over a SEEDED palette buffer and
+ *  asserts its (port,value) sequence (perturbation-proven).  In the playable path the
+ *  real level-palette DAC upload now flows through the level-palette pipeline:
+ *  load_palette (host_video.c) -> host_bgi_stage_image_palette + host_bgi_upload_palette_
+ *  to_dac (host_bgi.c) -> wait_vretrace_thunk (the vsync wait).  The iris wipe calls
+ *  wait_vretrace_thunk 4x/step as the wipe PACING; its descriptor RECT SWEEP is the
+ *  faithfully-reconstructed, validated part, its render/present leaves stubbed.
  * ──────────────────────────────────────────────────────────────────────────────── */
 
 /* ── render / BGI-overlay leaves OWNED ELSEWHERE (extern — NOT defined here; resolve
@@ -585,29 +590,41 @@ void vga_dac_upload_from_buffer(u8 __far *img_buf)
     return;
 }
 
-/* dispatch_by_palette_mode_2036 — 2036:0000 (1:1).  Indirect-call the handler the BGI
- *  driver registered at overlay table [palette_mode*2 + 0x6976].  RECONSTRUCTION
- *  FIDELITY: the overlay table is runtime-populated (BGI-loaded handlers, not in the
- *  corpus).  Reconstructed as: select by palette_mode; under the boot's palette_mode==2
- *  the handler emits no DAC (an engine fact — the standalone-upload records carry 0 DAC);
- *  the reconstructed VGA-DAC handler (vga_dac_upload_from_buffer) is the modelled
- *  palette-write path the DAC gate drives over a seeded buffer. */
-void dispatch_by_palette_mode(void)
+/* wait_vretrace_dispatch — 2036:0000 (formerly mis-named dispatch_by_palette_mode_2036).
+ *  The engine thunk 1000:9864 CALLFs 2036:0000, which indirect-calls the BGI overlay
+ *  handler at table [palette_mode*2 + 0x6976].  For the VGA boot (palette_mode==2) that
+ *  handler is 2036:0015 — a VERTICAL-RETRACE (vsync) WAIT (`mov dx,0x3da; in al,dx;
+ *  test al,8`: wait for the retrace to START, then to END).  It is NOT a DAC upload:
+ *  the old names (upload_vga_dac_palette / dispatch_by_palette_mode) were MISNOMERS.
+ *  The genuine DAC upload happens earlier via fun_7bca_flip -> host_bgi_upload_palette_
+ *  to_dac (and the standalone modelled writer vga_dac_upload_from_buffer).
+ *
+ *  RECONSTRUCTION FIDELITY: the overlay handler table at 0x6976 is runtime-populated by
+ *  the BGI driver (all-zero in the static image) and 2036:0015 is dynamically-loaded
+ *  overlay code — NOT in the Ghidra corpus.  The mode-2 handler chain
+ *  (9864 -> 2036:0000 -> table[2] = 2036:0015) is collapsed here into the vsync poll the
+ *  playable build needs; the default (byte-compared, never-run) build keeps its verbatim
+ *  NOP.  Recorded in docs/reconstruction-fidelity.md + faithfulness-gap-audit.md §1. */
+void wait_vretrace_dispatch(void)
 {
+#ifdef BUMPY_PLAYABLE
+    /* 2036:0015 — poll VGA Input Status #1 (0x3da) bit 3: wait for the vertical
+     * retrace to START (bit goes high), then to END (bit goes low). */
+    while ((inp(0x3dau) & 0x08u) == 0u) { ; }
+    while ((inp(0x3dau) & 0x08u) != 0u) { ; }
+#else
     dac_palette_mode_active = palette_mode;
-    /* palette_mode==2 (the natural boot) -> no DAC here (engine fact, T1).  Other modes'
-       handlers are BGI overlay code; the modelled palette upload is gated standalone via
-       vga_dac_upload_from_buffer over a seeded buffer (see the carve-out note above).
-       The real DAC upload for the playable path now flows through fun_7bca_flip →
-       host_bgi_upload_palette_to_dac (host_bgi.c), which the engine calls explicitly
-       after staging via fun_7b93_present_blank.  No workaround needed here. */
     return;
+#endif
 }
 
-/* upload_vga_dac_palette — 1000:9864 (1:1 thunk -> dispatch_by_palette_mode_2036). */
-void upload_vga_dac_palette(void)
+/* wait_vretrace_thunk — 1000:9864 (1:1 CALLF thunk -> wait_vretrace_dispatch @2036:0000).
+ *  Formerly mis-named upload_vga_dac_palette.  This is the engine's vsync-wait entry; the
+ *  iris wipe calls it 4x/step as the wipe PACING, and load_palette calls it at its tail
+ *  after staging+uploading the level palette. */
+void wait_vretrace_thunk(void)
 {
-    dispatch_by_palette_mode();
+    wait_vretrace_dispatch();
     return;
 }
 
@@ -644,20 +661,20 @@ void play_iris_wipe_transition(void)
         *(u16 __far *)(d + 0x1e) = (u16)right_edge;
         *(u16 __far *)(d + 0x20) = 1;
         fun_7b4a_view_blit(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
-        upload_vga_dac_palette();
+        wait_vretrace_thunk();
         *(u16 __far *)(render_descriptor_ptr + 0x16) = 0x18 - (u16)step;
         fun_7b4a_view_blit(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
-        upload_vga_dac_palette();
+        wait_vretrace_thunk();
         right_edge = right_edge - 2;
         d = render_descriptor_ptr;
         *(u16 __far *)(d + 0x16) = (u16)step;
         *(u16 __far *)(d + 0x1e) = 1;
         *(u16 __far *)(d + 0x20) = (u16)bottom_edge;
         fun_7b4a_view_blit(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
-        upload_vga_dac_palette();
+        wait_vretrace_thunk();
         *(u16 __far *)(render_descriptor_ptr + 0x14) = 0x13 - (u16)step;
         fun_7b4a_view_blit(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
-        upload_vga_dac_palette();
+        wait_vretrace_thunk();
         bottom_edge = bottom_edge - 2;
     }
     {
@@ -670,7 +687,7 @@ void play_iris_wipe_transition(void)
                                SCREENS_DGROUP_RUNTIME_SEG, 0);
     }
     fun_7bca_flip(0);
-    upload_vga_dac_palette();
+    wait_vretrace_thunk();
     return;
 }
 
@@ -737,7 +754,7 @@ void show_title_background(void)
     fun_7b93_present_blank(fullscreen_buf, fullscreen_buf_seg, 0);
     fun_7bca_flip(0);
     present_frame(1);
-    upload_vga_dac_palette();
+    wait_vretrace_thunk();
     play_intro_animation_loop();
     return;
 }
@@ -811,7 +828,7 @@ void show_title_and_init(void)
     fun_7b93_present_blank(fullscreen_buf, fullscreen_buf_seg, 0);
     fun_7bca_flip(0);
     present_frame(1);
-    upload_vga_dac_palette();
+    wait_vretrace_thunk();
     input_state = 0;
     wait_keypress();
     current_level = 1;
@@ -907,7 +924,7 @@ u8 run_main_menu(void)
         *p = 0x30;
         p[1] = (u16)cursor_index * 0x10 + 0x70;
         anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
-        upload_vga_dac_palette();
+        wait_vretrace_thunk();
         poll_input();
         if (((input_state & 1) == 0) || (cursor_index == 0)) {
             if (((input_state & 2) == 0) || (2 < cursor_index)) {
@@ -986,7 +1003,7 @@ void show_menu_select_screen(void)
     play_iris_wipe_transition();
     fun_7b93_present_blank(fullscreen_buf, fullscreen_buf_seg, 0);
     fun_7bca_flip(0);
-    upload_vga_dac_palette();
+    wait_vretrace_thunk();
     /* row 1 (19 glyphs) at y=0x10. */
     col_pos = 0;
     p = (u16 __far *)p1_sprite;
@@ -1425,7 +1442,7 @@ void show_highscore_screen(void)
     fun_7b93_present_blank(fullscreen_buf, fullscreen_buf_seg, 0);
     fun_7bca_flip(0);
     present_frame(1);
-    upload_vga_dac_palette();
+    wait_vretrace_thunk();
     d = render_descriptor_ptr;
     *(u16 __far *)(d + 0x0e) = 0;
     *(u16 __far *)(d + 0x1e) = 1;
@@ -1610,7 +1627,7 @@ void show_level_intro_screen(void)
     play_iris_wipe_transition();
     fun_7b93_present_blank(fullscreen_img_buf, highscore_bg_buf_seg, 0);
     fun_7bca_flip(0);
-    upload_vga_dac_palette();
+    wait_vretrace_thunk();
     /* row 1 (13 glyphs) at y=0x50, starting col 4. */
     col_pos = 4;
     ((u16 __far *)p1_sprite)[1] = 0x50;
@@ -1717,7 +1734,7 @@ void level_intro_screen(void)
     draw_p1_sprite();
     fun_7bca_flip(0);
     present_frame(1);
-    upload_vga_dac_palette();
+    wait_vretrace_thunk();
     p1_update_grid_cell();
     p1_advance_grid_history();
     render_p1_view();

@@ -805,7 +805,7 @@ void show_title_and_init(void);
 u8   run_main_menu(void);
 void show_menu_select_screen(void);
 void play_iris_wipe_transition(void);
-void upload_vga_dac_palette(void);
+void wait_vretrace_thunk(void);   /* 1000:9864 — formerly mis-named upload_vga_dac_palette (vsync wait) */
 
 static void wrap_init_title_graphics(void)   { init_title_graphics(); }
 static void wrap_show_title_background(void)  { show_title_background(); }
@@ -820,7 +820,7 @@ static void wrap_show_menu_select_screen(void)
     menu_input_q = NULL; menu_input_n = menu_input_i = 0;
 }
 static void wrap_play_iris_wipe(void)         { play_iris_wipe_transition(); }
-static void wrap_upload_dac(void)             { upload_vga_dac_palette(); }
+static void wrap_upload_dac(void)             { wait_vretrace_thunk(); }
 
 static void wrap_run_main_menu(void)
 {
@@ -933,7 +933,7 @@ static const ported_t PORTED[] = {
      *  (FUN_7b4a) — an engine fact (scenario-10 forced-mode upload emits 0 DAC); the
      *  reconstructed vga_dac_upload_from_buffer is gated standalone over a seeded palette. */
     { 0x3467, "play_iris_wipe_transition", 'B', wrap_play_iris_wipe },
-    { 0x9864, "upload_vga_dac_palette",    'D', wrap_upload_dac },
+    { 0x9864, "wait_vretrace_thunk",       'D', wrap_upload_dac },
 };
 #define PORTED_N (sizeof(PORTED) / sizeof(PORTED[0]))
 

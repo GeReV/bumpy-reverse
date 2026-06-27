@@ -185,7 +185,7 @@ FN_NAMES: Dict[int, str] = {
     0x0d9d: "show_level_intro_screen",
     # Transition / palette
     0x3467: "play_iris_wipe_transition",
-    0x9864: "upload_vga_dac_palette",
+    0x9864: "wait_vretrace_thunk",   # formerly mis-named upload_vga_dac_palette (it is a vsync wait)
 }
 
 # fns whose execution window we scope DAC port-I/O capture to. upload_vga_dac_palette is
