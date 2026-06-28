@@ -116,6 +116,10 @@ void host_render_bind(u8 __huge *bank, u32 bank_base_lin, const u8 __far *dg);
  * g_entity_dg is static so we expose it via this minimal accessor, compiled only
  * under BUMPY_PLAYABLE (no faithful-default-build exposure). */
 u8 __far *level_get_entity_dg(void);
+/* host_video.c: faithful level-palette upload (load_palette → DAC).  render_level
+ * calls it in the playable build so the initial level frame (and the world-map /
+ * iris that precede game_loop's own apply_level_palette) use the real palette. */
+void apply_level_palette(void);
 #endif
 
 /* ── extern: op12 arena (declared in bvec_buf2.c) ─────────────────────────────
@@ -557,34 +561,53 @@ static void render_level(void)
         }
     }
 
-    /* Write palette from PAV header (offset 51 = 48 bytes of DAC values)
-       and blit planes to VGA hardware.
-       RECONSTRUCTION FIDELITY: the engine loads the palette via
-       load_palette_byteswapped() at level init.  We use video_set_palette6
-       with the palette embedded in the PAV decoded header at offset 51. */
+    /* Upload the level palette, then blit planes to VGA hardware.
+       RECONSTRUCTION FIDELITY: the engine loads the palette at level init via
+       load_palette_byteswapped() + load_palette() from cur_level_ptr (the decoded
+       .DEC, see level_packed_palette / host_video.c).  In the playable build we run
+       that faithful path (apply_level_palette → load_palette → DAC slots {0..7,
+       0x10..0x17}, the BGI AC mapping).  The differential harness (non-playable)
+       has no DAC/BGI model and apply_level_palette is a no-op stub, so it keeps the
+       direct video_set_palette6 upload; its frame compare uses the captured palette,
+       not this DAC write. */
+#ifdef BUMPY_PLAYABLE
+    apply_level_palette();
+#else
     video_set_palette6((const u8 *)(g_pav_buf + 51u));
+#endif
     video_blit_planar(g_page0);
 }
 
 #ifdef BUMPY_PLAYABLE
-/* ── level_pav_palette (host accessor) ─────────────────────────────────────────
- * Returns a far pointer to the level's 48-byte decoded DAC palette (the PAV header
- * region g_pav_buf+51: 16 colours × 3 bytes, 6-bit R,G,B), or NULL if no level has
- * been loaded yet.  This is the SAME palette render_level uploads via
- * video_set_palette6; it is the source the faithful host load_palette (host_video.c)
- * stages into the BGI palette slot then uploads to the DAC.
+/* ── level_packed_palette (host accessor for cur_level_ptr) ─────────────────────
+ * Returns a far pointer to the level's PACKED 16-colour palette — 16 big-endian
+ * 12-bit-RGB words (32 bytes) — i.e. the engine's cur_level_ptr[0..0x1f], or NULL
+ * if no level has been loaded yet.  This is the source the faithful host
+ * load_palette (host_video.c) byte-swaps and decodes into the DAC, exactly mirroring
+ * the engine's load_palette_byteswapped (1000:063b) + load_palette (1000:08d1).
  *
- * RECONSTRUCTION FIDELITY — HOST DATA-SOURCING (see host_video.c load_palette):
- * the engine's load_palette (1000:08d1) decodes the PACKED palette from DGROUP 0x578;
- * the host never stages 0x578 (level_populate_dg fills only the entity frametable), so
- * it sources the already-decoded 48 bytes from g_pav_buf instead.  g_pav_buf is static
- * here, so this accessor exposes it to host_video.c.  BUMPY_PLAYABLE only. */
-const u8 __far *level_pav_palette(void)
+ * SOURCE LOCATION (RE'd 2026-06-27): load_current_level_data (1000:32b0) sets
+ *   cur_level_ptr = DAT_203b_6bd2 + current_level_index * 0x32c;
+ * load_palette_byteswapped then reads 16 words from cur_level_ptr[0..0x1f].
+ * DAT_203b_6bd2 is the decoded D{n}.DEC buffer past its 2-byte prefix, so the
+ * per-level palette is the first 32 bytes of each level's 0x32c block:
+ *   cur_level_ptr = g_dec_buf + 2 + level_index*0x32c.
+ * Verified offline: g_dec_buf decode of D{1,2,3,9}.DEC at +2 decodes byte-for-byte
+ * to local/build/render/bum/world{n}.pal.json (the emulator-captured gameplay
+ * palette).  The host renders level-block 0 of D{current_level} (render_level →
+ * bg_render_grid(map=g_dec_buf)), so level_index is 0 → cur_level_ptr = g_dec_buf+2.
+ *
+ * RECONSTRUCTION FIDELITY: the engine's cur_level_ptr is a far ptr into its own
+ * DGROUP level archive; the host's equivalent is g_dec_buf (the decoded .DEC).  The
+ * 2-byte prefix + 0x32c per-level stride match the engine layout 1:1.  Earlier the
+ * host wrongly sourced g_pav_buf+51 (PAV background raster, not a palette → all-black
+ * DAC); corrected here.  BUMPY_PLAYABLE only. */
+const u8 __far *level_packed_palette(void)
 {
-    if (g_pav_buf == (u8 __far *)0) {
+    if (g_dec_buf == (u8 __far *)0) {
         return (const u8 __far *)0;
     }
-    return (const u8 __far *)(g_pav_buf + 51u);
+    return (const u8 __far *)(g_dec_buf + 2u);   /* cur_level_ptr, level_index 0 */
 }
 #endif /* BUMPY_PLAYABLE */
 

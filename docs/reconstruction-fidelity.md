@@ -1676,20 +1676,33 @@ menu text).  Default BUMPY.EXE byte-identical (cac9ff23); all changes are host-o
    (`7b93`)→DAC upload (`7bca`)→vsync (`9864`).  `apply_level_palette` (`1000:0604`) calls
    `load_palette(0x578,0x203b)`; the host's `apply_level_palette` now does the same instead
    of the old (misnamed) `upload_vga_dac_palette` NOP.
-   **DATA-SOURCING DEVIATION:** the host never stages the packed palette at DGROUP `0x578`
-   (`level_populate_dg` fills only the entity frametable; `load_palette_byteswapped`
-   (`1000:063b`), whose sole job is to fill `0x578` byte-swapped from `cur_level_ptr`, is
-   therefore vestigial and OMITTED).  The host has the already-DECODED 48-byte DAC palette
-   at `g_pav_buf+51` (the engine's per-idx decode produces exactly these 48 bytes), exposed
-   via `level_pav_palette()`; the host copies those into the staging buffer +0x33 (skipping
-   the packed-word decode) then runs the faithful stage→upload→vsync tail.
+   **DATA SOURCE (corrected 2026-06-27, faithful):** the host's `load_palette` inlines
+   `load_palette_byteswapped` (`1000:063b`) and sources the PACKED palette from
+   `cur_level_ptr[0..0x1f]`, exactly as the engine does — NOT the engine's own DGROUP
+   `0x578` staging buffer (which `level_populate_dg` does not fill).  `load_current_level_data`
+   (`1000:32b0`) sets `cur_level_ptr = DAT_203b_6bd2 + current_level_index*0x32c`, and
+   `DAT_6bd2` is the decoded `D{n}.DEC` past its 2-byte prefix, so the per-level palette is the
+   first 32 bytes of each level's `0x32c` block: `cur_level_ptr = g_dec_buf + 2 +
+   level_index*0x32c`, exposed via `level_packed_palette()` (host renders level-block 0 →
+   `g_dec_buf+2`).  `load_palette` byte-swaps each word (`0x578[i]=bswap(cur[i])`) and decodes
+   `R=(w>>8)<<3, G=(w>>4)<<3, B=(w&0xff)<<3` into the staging buffer +0x33, then runs the
+   faithful stage→upload→vsync tail.  Verified offline: this decode of `g_dec_buf+2` for
+   `D{1,2,3,9}.DEC` reproduces `local/build/render/bum/world{n}.pal.json` (the emulator-captured
+   gameplay palette) byte-for-byte; verified at runtime that the previously-all-black world-map/
+   level screen renders in coherent full colour.
+   **PRIOR BUG (fixed here):** the host previously sourced `g_pav_buf+51` (the PAV BACKGROUND
+   RASTER — there is no palette there), uploading raster bytes as a palette → an all-black DAC
+   for every gameplay/level/world-map screen.  Root-caused via the validated offline renderer
+   (`render_levels.py` uses a SEPARATELY-captured per-world palette, not PAV+51) + a runtime DAC
+   dump (all `(0,0,0)`).  The only host deviation now is inlining the byte-swap and sourcing
+   `cur_level_ptr` from `g_dec_buf` instead of the engine's DGROUP archive (same bytes).
    **DAC-LAYOUT RECONCILIATION:** `load_palette`→`host_bgi_upload_palette_to_dac` writes the
    level palette to DAC slots {0..7, 0x10..0x17} — the slots the active BGI AC mapping reads
-   — so gameplay colours 8..15 (AC→DAC 0x10..0x17) are correct.  `render_level`'s
-   `video_set_palette6` (DAC 0..15 contiguous) is KEPT (the structurally-validated path); it
-   covers only the AC's low 8 slots, so the two COEXIST: `video_set_palette6` writes 0..15
-   (8..15 unread by the AC) and `load_palette` writes the AC-read {0..7, 0x10..0x17}.  The
-   faithful path is what makes colours 8..15 resolve correctly under the BGI AC.
+   — so gameplay colours 8..15 (AC→DAC 0x10..0x17) are correct.  `render_level` now calls
+   `apply_level_palette()` in the playable build (was `video_set_palette6(g_pav_buf+51)`), so the
+   initial level frame and the world-map/iris that precede `game_loop`'s own `apply_level_palette`
+   use the real palette; the non-playable differential harness keeps `video_set_palette6` (its
+   frame compare uses the captured palette, not this DAC write).
 
 REMAINING (not yet fixed): `run_main_menu` returns 1 almost immediately on its first poll
 (so the normal flow falls into a blank `show_highscore_screen` instead of holding the menu) —
