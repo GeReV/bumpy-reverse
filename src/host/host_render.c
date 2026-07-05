@@ -515,11 +515,14 @@ static void hr_restore_under(const u8 __far *view, const u8 *buf, u16 cell_off, 
  * clear-view 0x8c0/0x8bc) are the single-page-vestigial double-buffer paths — NOP here
  * (a per-page save/restore is a no-op on one displayed page).  The engine's save-under
  * buffers at DGROUP 0x79be/0x7e3e are therefore not needed by the host's single-page
- * erase.  KNOWN GAP (follow-up): draw_anim_channels_b calls this leaf twice per active
- * B channel with anim_b_view1 (0x8cc) — in the engine that view's word0e==1 dispatches
- * a real a000 blit from the 0x9eba/0x9fba shadow + 0x8888 sources; the host currently
- * drops it here (pointer-identity miss), so layer-B active cells get no restore pass.
- * Recorded in docs/reconstruction-fidelity.md ("playable host: anim-channel under-erase").
+ * erase.  LAYER-B (2026-07-05, was a known gap): draw_anim_channels_b calls this leaf
+ * twice per active B channel with anim_b_view1 (0x8cc) — in the engine that view's
+ * word0e==1 dispatches an a000 blit from the 0x9eba/0x9fba shadow + 0x8888 sources.  The
+ * host never populates those shadows (the render/mask pass bgi_set_mode_00 is a NOP), so
+ * it now repaints the CLEAN TILE BACKGROUND over the B cell instead (extent view+0x0a/0x0c),
+ * the same mechanism as the layer-A erase — restoring the bg under the moving B sprite and
+ * fixing the layer-B trails/flicker + world-2 speckles.  See the per-view branch below +
+ * docs/reconstruction-fidelity.md ("playable host: anim-channel under-erase").
  *
  * 2026-07-02 FIX: this leaf previously repainted into the flat host_framebuffer and
  * host_clean_bg() was captured FROM host_framebuffer — but after the real-VGA migration
@@ -545,7 +548,9 @@ void anim_restore_bg_view_leaf(u8 __far *view)
        (layer-B gap: see header). */
     {
         extern u8 __far *pending_erase_view;   /* player.c 0x8e4 */
-        if (view != anim_a_erase_view && view != pending_erase_view) {
+        extern u8 __far *anim_b_view1;         /* anim.c 0x8cc — layer-B restore view */
+        if (view != anim_a_erase_view && view != pending_erase_view &&
+            view != anim_b_view1) {
             return;
         }
     }
@@ -556,8 +561,32 @@ void anim_restore_bg_view_leaf(u8 __far *view)
 
     cx = *(u16 __far *)(view + 0x14u);         /* grid cell X (tiles) */
     cy = *(u16 __far *)(view + 0x16u);         /* grid cell Y (tiles) */
-    ex = *(u16 __far *)(view + 0x1eu);         /* rect width  (tiles) */
-    ey = *(u16 __far *)(view + 0x20u);         /* rect height (tiles) */
+    {
+        extern u8 __far *anim_b_view1;         /* anim.c 0x8cc */
+        if (view == anim_b_view1) {
+            /* RECONSTRUCTION FIDELITY (layer-B under-erase — host-adaptation, 2026-07-05).
+               draw_anim_channels_b (anim.c:516/522) restores the layer-B background under each
+               active B channel via mode-01 (restore_bg_view/bgi_set_mode_01) with anim_b_view1,
+               whose EXTENT is view+0x0a (width) × view+0x0c (height) tiles and whose SOURCE is a
+               pre-composited layer-B shadow (DGROUP 0x9eba/0x9fba for the sprite pass, 0x8888 for
+               the bg pass — see bgi_overlay.c restore_bg_view).  The host never populates those
+               shadows: the render/mask pass anim_render_leaf_80ac (blit_view_masked/bgi_set_mode_00)
+               is a NOP because the engine's composited double-buffer is single-page-vestigial here.
+               With no shadow to blit, the host instead REPAINTS THE CLEAN TILE BACKGROUND over the
+               B cell — the SAME mechanism the layer-A erase (anim_a_erase_view) uses — restoring the
+               bg under the moving layer-B sprite before draw_anim_channels_b re-blits it.  Fixes the
+               layer-B trails/flicker + world-2 background speckles (the KNOWN GAP noted in this
+               file's dispatch header).  Extent from the faithful +0x0a/+0x0c mode-01 fields (NOT the
+               +0x1e/+0x20 mode-10 footprint the layer-A path reads; for anim_b_view1 those are 1/4).
+               DEVIATION vs the engine: the clean-bg repaint does not composite overlapping STATIC
+               layer-B content the shadow blit would preserve.  docs/reconstruction-fidelity.md. */
+            ex = *(u16 __far *)(view + 0x0au);     /* mode-01 width  (tiles), runtime 1 or 3 */
+            ey = *(u16 __far *)(view + 0x0cu);     /* mode-01 height (tiles), = 4            */
+        } else {
+            ex = *(u16 __far *)(view + 0x1eu);     /* layer-A / pending footprint width  (tiles) */
+            ey = *(u16 __far *)(view + 0x20u);     /* layer-A / pending footprint height (tiles) */
+        }
+    }
     wbytes = (u16)(ex * 2u);                   /* 2 bytes/tile (16 px) */
     hrows  = (u16)(ey * 8u);                   /* 8 rows/tile          */
     sox    = (u16)(cx * 2u);
