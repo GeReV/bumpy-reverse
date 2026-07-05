@@ -1033,8 +1033,10 @@ void start_level(u8 world, u8 level)
    init_sprite_structs are idempotent.
 
    RECONSTRUCTION FIDELITY: mirrors start_level steps 9-10 (bank load/transform + DG populate
-   + init_sprite_structs + host_render_bind) MINUS any level content; the engine's
-   process_sprites stays a NOP (the palette_mode-2 VGA table transform is done by
+   + init_sprite_structs + host_render_bind) MINUS any level content; the playable host
+   keeps process_sprites a NOP (its palette_mode-2 frame prep, prepare_sprite_frames, is
+   faithfully reconstructed in the default build but the host resolves frames per-blit via
+   sprite_prepare_frame; the bank's BE offset->far-ptr relocation is done by
    sprite_bank_load_transform).  docs/reconstruction-fidelity.md. */
 void level_preload_session_sprites(void)
 {

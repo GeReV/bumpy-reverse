@@ -605,7 +605,25 @@ void c_close(int handle) { (void)handle; }
 void vec_decode(u16 buf_off, u16 buf_seg, u32 size, u16 arg, u16 flag)
 { (void)buf_off; (void)buf_seg; (void)size; (void)arg; (void)flag; }
 #endif /* !BUMPY_PLAYABLE */
+/* process_sprites (1000:93d8) — the load-time sprite-bank frame processor: a thin
+ * wrapper over sprite_proc_dispatch (1cec:2ced), which indirect-calls the per-
+ * palette-mode handler (mode 2 = prepare_sprite_frames, sprite_anim.c).  Called from
+ * init_title_graphics + load_graphics_resources to prepare each sprite object's
+ * current frame + header (and, for ctrl&0x40 frames, expand packed pixels). */
+#ifdef BUMPY_PLAYABLE
+/* RECONSTRUCTION FIDELITY (playable host deviation): the host does NOT run the load-
+ * time prepare_sprite_frames.  Its blit path resolves each frame per-blit via
+ * sprite_prepare_frame (sprite_anim.c) against the flat halloc'd bank, and the host
+ * resource loader (host_resource.c) drains the engine's sprite-bank reads rather than
+ * building the engine's in-place object list at 0xa0c6 — so there is no valid obj list
+ * to process here.  Kept a NOP; the faithful body is compiled into the byte-compared
+ * default build.  See docs/reconstruction-fidelity.md ("playable host: process_sprites"). */
 void process_sprites(u16 buf_off, u16 buf_seg) { (void)buf_off; (void)buf_seg; }
+#else
+/* Default (faithful, byte-compared, never executed) build: the real dispatch chain. */
+void sprite_proc_dispatch(u16 obj_list_off, u16 obj_list_seg);  /* sprite_anim.c */
+void process_sprites(u16 buf_off, u16 buf_seg) { sprite_proc_dispatch(buf_off, buf_seg); }
+#endif
 #ifdef BUMPY_PLAYABLE
 /* Playable build: route to host palette-stage primitive (host_bgi.c).
  * fun_7b93 thunk (1000:7b93) dispatches into BGI overlay 1ab9:0620, which

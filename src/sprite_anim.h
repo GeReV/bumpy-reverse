@@ -40,4 +40,13 @@ void sprite_prepare_frame(u8 __far *obj, u8 __huge *bank, u32 bank_base_lin);
 u8 __far *sprite_expand_frame(u8 __far *frame, u8 __far *scratch,
                               const u8 __far *bitrev, u8 path, u16 mode);
 
+/* FAITHFUL reconstruction of the engine's palette_mode-2 sprite processor
+   (prepare_sprite_frames, 1cec:2ded) and its dispatcher (sprite_proc_dispatch,
+   1cec:2ced), which process_sprites (1000:93d8) drives at load time.  Far-pointer
+   model, transcribed 1:1 from the binary; built in the byte-compared default build
+   only (the playable host resolves frames per-blit via sprite_prepare_frame).  See
+   the RECONSTRUCTION FIDELITY notes in sprite_anim.c + docs/reconstruction-fidelity.md. */
+void prepare_sprite_frames(u8 __far *obj_list);
+void sprite_proc_dispatch(u16 obj_list_off, u16 obj_list_seg);
+
 #endif /* SPRITE_ANIM_H */

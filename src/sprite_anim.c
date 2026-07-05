@@ -187,3 +187,109 @@ u8 __far *sprite_expand_frame(u8 __far *frame, u8 __far *scratch,
     }
     return dst;
 }
+
+/* -------------------------------------------------------------------------------
+   prepare_sprite_frames — FAITHFUL reconstruction of the engine's palette_mode-2
+   sprite processor (1cec:2ded), the handler sprite_proc_dispatch selects for the
+   VGA path.  Walks the NULL-terminated list of sprite-object FAR POINTERS (the arg
+   process_sprites forwards), and per object:
+     * select the current animation frame: frame = frame_table[frame_idx], where the
+       frame table is the far ptr at obj+6 and the index the word at obj+4; store the
+       frame far ptr into obj+0xc/0xe;
+     * copy the 12-byte frame header sitting just BEFORE the frame data — height/width
+       at frame[-2]/[-4], X/Y anchor at frame[-6]/[-8], a sub-header count at frame[-0xc]
+       clamped to 3, then that many 3-word entries walking backwards into obj+0x1a;
+     * store the ctrl byte (frame[-0xa]) into obj+0xb, and if ctrl&0x40 expand the
+       packed pixels into the DGROUP decode scratch (via sprite_expand_frame) and
+       repoint obj+0xc/0xe at scratch+0xc.
+
+   --- RECONSTRUCTION FIDELITY ---
+   * Transcribed 1:1 from the engine (far-pointer model; DS=0x203b DGROUP with the
+     decode-scratch cursor at 0x56ee→0x56f0 and pixel_bitrev_lut at 0x66f0).  Unlike the
+     host-testable sprite_prepare_frame() above (which resolves frame-table pointers to
+     bank OFFSETS and early-returns on the dead null-frame path), this is the literal
+     engine control flow, INCLUDING the null-frame fall-through (obj+0xa=0 then the
+     header reads proceed at the near-null address — a dead path never hit at runtime).
+   * Built ONLY in the byte-compared default BUMPY.EXE (which is never executed); the
+     playable host does NOT run it — it resolves each frame per-blit via
+     sprite_prepare_frame instead (see process_sprites in screens.c + the fidelity
+     audit).  The scratch/LUT DGROUP addresses are therefore the engine's static
+     offsets, documenting the binary rather than a live host layout.
+   * The ctrl&0x40 expansion reuses sprite_expand_frame (itself unvalidated / dead for
+     BUMSPJEU, whose frames are all ctrl=0x03).  The mode flag is the engine's
+     iRam00010ded (passed 0 here, the byte-swap de-interleave the decomp shows).
+   ------------------------------------------------------------------------------- */
+#define SPRITE_DGROUP_SEG   0x203bu   /* engine static DGROUP (this body is never run) */
+#define SPRITE_SCRATCH_OFF  0x56f0u   /* decode-scratch start (cursor var @0x56ee)      */
+#define SPRITE_BITREV_OFF   0x66f0u   /* pixel_bitrev_lut                               */
+
+void prepare_sprite_frames(u8 __far *obj_list)
+{
+    const u8 __far *cursor = obj_list;
+    u8 __far       *scratch = (u8 __far *)MK_FP(SPRITE_DGROUP_SEG, SPRITE_SCRATCH_OFF);
+    const u8 __far *bitrev  = (const u8 __far *)MK_FP(SPRITE_DGROUP_SEG, SPRITE_BITREV_OFF);
+
+    for (;;) {
+        u8 __far       *obj = (u8 __far *)MK_FP(obj_rd16(cursor + 2), obj_rd16(cursor));
+        u8 __far       *frame_tbl;
+        u8 __far       *frame;
+        const u8 __far *src;
+        u8 __far       *dst;
+        u16             frame_idx, count, i;
+        u8              ctrl;
+
+        if (FP_SEG(obj) == 0 && FP_OFF(obj) == 0) {
+            break;                                       /* NULL terminates the list */
+        }
+        frame_idx = obj_rd16(obj + 4);
+        frame_tbl = (u8 __far *)MK_FP(obj_rd16(obj + 8), obj_rd16(obj + 6));
+        frame     = (u8 __far *)MK_FP(obj_rd16(frame_tbl + frame_idx * 4 + 2),
+                                      obj_rd16(frame_tbl + frame_idx * 4));
+        obj_wr16(obj + 0x0c, FP_OFF(frame));
+        obj_wr16(obj + 0x0e, FP_SEG(frame));
+        if (FP_SEG(frame) == 0 && FP_OFF(frame) == 0) {
+            obj_wr16(obj + 0x0a, 0);                     /* engine falls through (dead path) */
+        }
+        obj_wr16(obj + 0x12, obj_rd16(frame - 2));       /* height   */
+        obj_wr16(obj + 0x10, obj_rd16(frame - 4));       /* width    */
+        obj_wr16(obj + 0x14, obj_rd16(frame - 6));       /* X anchor */
+        obj_wr16(obj + 0x16, obj_rd16(frame - 8));       /* Y anchor */
+        count = obj_rd16(frame - 0x0c);
+        if (count > 2) { count = 3; }
+        obj_wr16(obj + 0x18, count);
+        src = frame - 0x0c;
+        dst = obj + 0x1a;
+        for (i = 0; i < count; i = i + 1) {              /* count 3-word entries, backwards */
+            obj_wr16(dst + 0, obj_rd16(src - 2));
+            obj_wr16(dst + 2, obj_rd16(src - 4));
+            obj_wr16(dst + 4, obj_rd16(src - 6));
+            dst = dst + 6;
+            src = src - 6;
+        }
+        ctrl = *(frame - 0x0a);
+        obj[0x0b] = ctrl;
+        if ((ctrl & 0xc0) != 0 && (ctrl & 0x40) != 0) {
+            obj_wr16(obj + 0x0c, (u16)(FP_OFF(scratch) + 0x0c));
+            obj_wr16(obj + 0x0e, SPRITE_DGROUP_SEG);
+            scratch = sprite_expand_frame(frame, scratch, bitrev, obj[0x0a], 0);
+        }
+        cursor = cursor + 4;                             /* next obj far ptr in the list */
+    }
+}
+
+/* sprite_proc_dispatch (1cec:2ced) — the engine indirect-calls the per-palette-mode
+ * sprite processor from CS:[0x2d09 + palette_mode*2], passing the object-list far ptr
+ * in ES:DI.  Reconstructed for palette_mode 2 (VGA, the mode the game runs) =
+ * prepare_sprite_frames; modes 0/1 are the CGA/EGA sprite-processor variants, not
+ * reconstructed (no runtime path reaches them). */
+void sprite_proc_dispatch(u16 obj_list_off, u16 obj_list_seg)
+{
+    extern u16 palette_mode;                             /* screens.c — DGROUP 0x541d */
+    u8 __far *obj_list = (u8 __far *)MK_FP(obj_list_seg, obj_list_off);
+    switch (palette_mode) {
+    case 2:
+    default:
+        prepare_sprite_frames(obj_list);
+        break;
+    }
+}
