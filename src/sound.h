@@ -85,12 +85,12 @@ extern u8  snd_select_scratch_83ee;   /* CODE   0x83ee — select-from-mask rese
 extern u16 snd_select_scratch_83ef;   /* CODE   0x83ef — select-from-mask reset scratch */
 
 /* L1 event-wrapper LUTs (DGROUP) — exact image bytes; defined in sound.c (T4). */
-extern u8 action_sound_lut_opl_260e[0x30];   /* DGROUP 0x260e */
-extern u8 action_sound_lut_std_263e[0x30];   /* DGROUP 0x263e */
-extern u8 state_sound_lut_opl_26ce[0x30];    /* DGROUP 0x26ce */
-extern u8 state_sound_lut_std_26fe[0x30];    /* DGROUP 0x26fe */
-extern u8 contact_sound_lut_opl_276e[0x30];  /* DGROUP 0x276e */
-extern u8 contact_sound_lut_std_278e[0x30];  /* DGROUP 0x278e */
+extern u8 action_sound_lut_opl_260e[0x100];   /* DGROUP 0x260e */
+extern u8 action_sound_lut_std_263e[0x100];   /* DGROUP 0x263e */
+extern u8 state_sound_lut_opl_26ce[0x100];    /* DGROUP 0x26ce */
+extern u8 state_sound_lut_std_26fe[0x100];    /* DGROUP 0x26fe */
+extern u8 contact_sound_lut_opl_276e[0x100];  /* DGROUP 0x276e */
+extern u8 contact_sound_lut_std_278e[0x100];  /* DGROUP 0x278e */
 
 /* ── EXTERN — owned elsewhere (see sound.c ownership block for grep evidence) ────
  *  sound_device_state (player.c 0x689c) — the L1 dispatch selector;

@@ -68,7 +68,12 @@ u8  items_remaining;             /* DGROUP 0xa0cf — items left on the current 
 u8  level_exit_cell;             /* DGROUP 0x8572 — grid cell of the level exit     */
 u8  level_complete_anim_counter; /* DGROUP 0x8550 — set to 0xf2 when last item taken*/
 u8  p1_item_code;                /* DGROUP 0x79b8 — latched layer-C item byte        */
-u8  sharp_item_counter;          /* DGROUP 0x791a — '#'-item pickup counter          */
+/* DGROUP 0x791a ('#'-item / tries counter) is ONE engine byte owned by game.c as
+   settle_countdown (Ghidra's name; also init'd =5 by game_loop, decremented by
+   run_physics_settle, drawn by draw_icon_row).  An earlier revision defined a
+   separate sharp_item_counter here — the split left draw_icon_row reading 0
+   (no icons) and '#' pickups not extending the counter.  Unified 2026-07-02. */
+extern u8 settle_countdown;      /* game.c — DGROUP 0x791a ('#' pickups increment) */
 u8  collect_mode_2810;           /* DGROUP 0x2810 — set to 0xf at p1_collect_item entry*/
 
 /*
@@ -101,28 +106,47 @@ void read_tile_layer2(u8 cell)
  * +0xfa always, then +0x2616 ('/') or +0xc256 ('0') with carry.  This port mirrors
  * the machine code (the faithful form); the result is identical to the decomp.
  *
- * RECONSTRUCTION FIDELITY (cell-view erase queue, disasm 6ca1–6ce7): the engine
- * stages a 2-tile erase of the player's cell view — pending_erase_count=2,
- * pending_erase_x/y from the posC pixel tables at DGROUP [0x274]/[0x276], and an
- * erase_kind (1/2 by cell parity) into the pending_erase_view descriptor.  These
- * are render-subsystem state (the per-tick view-present chain, Phase 5) and are
- * NOT part of the validated semantic state, so the erase staging is documented
- * here rather than reproduced against invented render globals.
+ * Cell-view erase staging (disasm 6ca1–6ce7, reconstructed 2026-07-02): the engine
+ * stages a deferred erase of the collected item's cell — pending_erase_count=2 (one
+ * per a000/a200 page), pending_erase_x/y from the posC pixel tables at DGROUP
+ * [0x274]/[0x276] (>>4 / >>3 → tile units), and the erase width (1/2 by cell
+ * parity) into pending_erase_view[+0x1e].  restore_bg_pending (player.c, called
+ * once per tick from the game loop) consumes it: clean-bg repaint over the cell —
+ * THIS is what removes the collected item's pixels.  Its omission left item ghosts
+ * on screen feeding a save-under/channel-erase flicker loop (2026-07-02 playtest).
+ * BUMPY_PLAYABLE only: the posC read needs level_get_entity_dg (playable-only, same
+ * precedent as p1_set_pixel_from_cell); the default build never runs gameplay.
  */
 void p1_collect_item_score(void)
 {
-    /* --- cell-view erase staging (render-subsystem, Phase 5) — see note above ---
-       pending_erase_count = 2;
-       pending_erase_x = posC_X[p1_cell] >> 4;   (DGROUP [p1_cell*4 + 0x274] >> 4)
-       pending_erase_y = posC_Y[p1_cell] >> 3;   (DGROUP [p1_cell*4 + 0x276] >> 3)
-       pending_erase_view->kind = (p1_cell & 1) ? 1 : 2;                          */
+#ifdef BUMPY_PLAYABLE
+    /* --- cell-view erase staging, 1:1 with disasm 6ca1–6ce7 --- */
+    {
+        extern u8        pending_erase_count;              /* player.c 0xa1a8 */
+        extern s16       pending_erase_x;                  /* player.c 0x9b9a */
+        extern s16       pending_erase_y;                  /* player.c 0x9ba2 */
+        extern u8 __far *pending_erase_view;               /* player.c 0x8e4  */
+        extern u8 __far *level_get_entity_dg(void);        /* level.c — posC @ +0x274 */
+        u8 __far *dg = level_get_entity_dg();
+        if (dg != (u8 __far *)0 && pending_erase_view != (u8 __far *)0) {
+            u16 base = (u16)(0x274u + (u16)p1_cell * 4u);
+            s16 px = (s16)((u16)dg[base]      | ((u16)dg[base + 1u] << 8));
+            s16 py = (s16)((u16)dg[base + 2u] | ((u16)dg[base + 3u] << 8));
+            pending_erase_count = 2u;                      /* 6ca1: one per page  */
+            pending_erase_x = (s16)(px >> 4);              /* 6ca6..6cb9: SAR AX,4 */
+            pending_erase_y = (s16)(py >> 3);              /* 6cbc..6cd1: SAR ×3   */
+            *(u16 __far *)(pending_erase_view + 0x1e) =    /* 6cd4..6ce7: width    */
+                ((p1_cell & 1u) != 0u) ? 1u : 2u;
+        }
+    }
+#endif
 
     /* base award: +250 to the 32-bit score (ADD score_lo,0xfa; ADC score_hi,0). */
     score_hi = score_hi + (u16)(score_lo + 0xfa < score_lo);   /* carry out of +0xfa */
     score_lo = score_lo + 0xfa;
 
     if (p1_item_code == '#') {
-        sharp_item_counter = sharp_item_counter + 1;
+        settle_countdown = settle_countdown + 1;   /* 0x791a — tries/icon counter */
     } else if (p1_item_code == '/') {
         score_hi = score_hi + (u16)(score_lo + 0x2616 < score_lo);   /* +9750  */
         score_lo = score_lo + 0x2616;

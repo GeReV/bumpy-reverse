@@ -1,4 +1,7 @@
 #include "sprite_blit.h"
+#ifdef BUMPY_PLAYABLE
+#include "host/host.h"          /* host_vga_rmw4 / host_vga_blit_end — real-VGA store */
+#endif
 
 /* See sprite_blit.h.  This mirrors the inner per-column arithmetic of the engine
    blitter exactly (ror / current-column mask / inter-column carry / RMW plane
@@ -12,7 +15,13 @@
    sprite blit.  The sel!=0 table entries are reached only by OTHER (non-sprite)
    callers of 10e1 and are out of scope here (not a dead branch of the sprite path). */
 
+/* Plane stride — must match the host framebuffer (HOST_PLANE_SIZE).  HOST_FB_16K
+   (playable EXE) → 16 KB/plane; default build + ctests → full 64 KB (byte-unchanged). */
+#ifdef HOST_FB_16K
+#define PLANE_SIZE  0x4000UL
+#else
 #define PLANE_SIZE  0x10000UL
+#endif
 
 /* rotate a 16-bit word right by n (n in 0..15) */
 static u16 ror16(u16 v, u8 n)
@@ -42,6 +51,15 @@ void sprite_blit_planar_vga(u8 __huge *planes, const u8 __far *src,
     u16 row;
     u16 col;
 
+#ifdef BUMPY_PLAYABLE
+    /* Engine 1cec:1113-1132 programs the GC ONCE before the store loop: write-mode 0
+       (GC idx5=0) + function MOV (GC idx3=0).  host_vga_rmw4 sets only the per-byte
+       Bit-Mask + per-plane Map-Mask and ASSUMES write-mode 0 / MOV — so without this
+       the blit inherits a stale GC mode (post-iris-wipe or a prior op) and writes the
+       sprite OPAQUE instead of RMW-blending with the background latch.  reset_gc also
+       clears set/reset (harmless) and sets Bit-Mask=FF (host_vga_rmw4 overrides it). */
+    host_vga_reset_gc();
+#endif
     for (row = 0; row < rows; row++) {
         const u8 __far *s = src + (u32)row * src_stride;
         u32 d = (u32)voff + (u32)row * dst_stride;
@@ -66,7 +84,9 @@ void sprite_blit_planar_vga(u8 __huge *planes, const u8 __far *src,
             u16 both;
             u8 bm;
             u8 vals[4];
-            u8 p;
+#ifndef BUMPY_PLAYABLE
+            u8 p;   /* plane index — flat-buffer store only; VGA path uses host_vga_rmw4 */
+#endif
 
             if (col < cols) {
                 u8 p0 = s[0];
@@ -90,11 +110,19 @@ void sprite_blit_planar_vga(u8 __huge *planes, const u8 __far *src,
             vals[2] = (u8)(cx & 0xFF);
             vals[3] = (u8)(cx >> 8);
 
+#ifdef BUMPY_PLAYABLE
+            /* Faithful real-VGA store: write the four plane bytes into the a000
+               window via the Sequencer Map-Mask + GC Bit-Mask + latches — exactly
+               what the engine's 1cec blitter does.  d is the page-folded VGA byte
+               offset (< 0x4000).  vals/bm are the validated per-byte results. */
+            host_vga_rmw4((u16)d, vals[0], vals[1], vals[2], vals[3], bm);
+#else
             for (p = 0; p < 4; p++) {
                 u32 idx = (u32)p * PLANE_SIZE + d;
                 u8 old = planes[idx];
                 planes[idx] = (u8)((vals[p] & bm) | (old & (u8)~bm));
             }
+#endif
             d++;
 
             if (col < cols) {
@@ -108,4 +136,8 @@ void sprite_blit_planar_vga(u8 __huge *planes, const u8 __far *src,
             }
         }
     }
+#ifdef BUMPY_PLAYABLE
+    (void)planes;                 /* VGA path writes a000 directly, not the buffer */
+    host_vga_blit_end();          /* restore default VGA write state after the blit */
+#endif
 }

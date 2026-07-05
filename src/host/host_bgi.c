@@ -114,46 +114,88 @@ void host_bgi_upload_palette_to_dac(u16 page)
 
 /* ── host_bgi_set_viewport ───────────────────────────────────────────────────
  * Functional equivalent of BGI overlay bgi_init_viewport (1ab9:0179), called
- * via main-segment thunk 1000:7b4a (Ghidra: bgi_set_viewport_thunk, formerly
- * blit_view_step).
+ * via main-segment thunk 1000:7b4a (Ghidra: bgi_set_viewport_thunk).
  *
  * Engine disassembly (1ab9:0179):
  *   *(u16*)(view + 0x18) = 0x14;         -- clip extent width  = 20 (constant)
  *   *(u16*)(view + 0x1a) = 0x19;         -- clip extent height = 25 (constant)
  *   bgi_write_mode_flag_a = 2;           -- DGROUP 0x541f
  *   bgi_write_mode_flag_b = 1;           -- DGROUP 0x5420
- *   (*(code*)table[palette_mode*2+0x4dda])(); -- VGA slot (mode 2) = 0x0000 -> NULL -> no blit
+ *   CALL [palette_mode*2 + 0x4dda]       -- EGA/VGA slot = 0x0000
  *
- * VGA iris degeneration — CRITICAL (see findings §2, docs/faithfulness-gap-audit.md §1):
- *   On VGA (palette_mode==2) the dispatch table 0x4dda[2] is NULL -> NO pixel blit.
- *   The iris loop (play_iris_wipe_transition, screens.c:657) passes a per-step rect
- *   in fields +0x14/+0x16/+0x1e/+0x20, but bgi_init_viewport IGNORES them: it always
- *   writes the CONSTANTS 0x14/0x19 to +0x18/+0x1a.  The compose path reads clip from
- *   +0x0a/+0x0c (different fields), so no geometric shrink occurs on VGA.
- *   The visible VGA iris = the vsync-timed hold (4x wait_vretrace_thunk/step, 10 steps)
- *   + the final blank-palette upload (fun_7b93 -> fun_7bca -> DAC zeroed).
- *   This is a TIMED-HOLD -> BLANK-TO-BLACK, not a shrinking rectangle.
- *   The geometric iris is an EGA/CGA effect (non-null blit handler for modes 0/1);
- *   on VGA (mode 2) it degenerates.
+ * ── CORRECTION (2026-07-05): the 0x4dda EGA/VGA slot is a RECT FILL, not a no-op ──
+ * The prior reconstruction here (and faithfulness-gap-audit.md §1) called the
+ * 0x4dda[1]/[2]==0 slot a "null → no pixel blit".  That was WRONG: `CALL word ptr
+ * [BX+0x4dda]` with the entry value 0 does NOT no-op — it calls the near address 0,
+ * i.e. 1ab9:0000, which is a REAL secondary dispatcher.  Fully disassembled
+ * (2026-07-05, all in the non-decompiling overlay seg 1ab9):
+ *   1ab9:0000  runs GC/SEQ setup (0x64d) + geometry setup (0x427) from the descriptor,
+ *              reads sub-mode `view[+0x1c]`, dispatches table `0x4dcc[view+0x1c]`.
+ *   0x4dcc[0] = 1ab9:002b  = a SOLID RECTANGLE FILL across all 4 planes (per-plane
+ *              SEQ map-mask + `rep stosw`).  Fill value = the per-plane colour built
+ *              from `view[+0x22..+0x25]` (1ab9:05cf); for the iris and the name-entry
+ *              cursor those bytes are 0 → BLACK.
+ *   Geometry (1ab9:0427, with bgi_write_mode_flag_a==2 → dest-only, no source copy):
+ *     dest byte-x = view[+0x14] * 2   (0x5421)
+ *     dest row    = view[+0x16] * 8   (0x542d)     stride = 40 (0x5429, flag_b==1)
+ *     width bytes = view[+0x1e] * 2   (0x5431)
+ *     height rows = view[+0x20] * 8   (0x5433)
+ *     dest offset = row*40 + byte-x + current-draw-page  (1ab9:052d)
  *
- * RECONSTRUCTION FIDELITY:
- *   This host function mirrors bgi_init_viewport for the VGA path: sets view[+0x18]/
- *   [+0x1a] + the two mode flags exactly as the original, then returns (null dispatch).
- *   The per-step iris rect (+0x14/+0x16/+0x1e/+0x20) is UNCONSUMED on VGA — neither
- *   here nor in the compose path; the visible iris is the timed hold + Task-1/2 palette
- *   pipeline, not a geometric redraw.  Deviation recorded in docs/reconstruction-
- *   fidelity.md ("playable host: BGI overlay primitives") and docs/faithfulness-gap-
- *   audit.md §1.
+ * This one primitive is BOTH long-standing gaps:
+ *   - the IRIS (play_iris_wipe_transition drives shrinking black rects → the geometric
+ *     "closing square"; the recon's prior timed-hold+palette-blank was an approximation),
+ *   - the NAME-ENTRY cursor ERASE (draw_name_entry_cursor fills the cursor cell black
+ *     BEFORE re-blitting the glyph → no letter trail on cycling).
+ * It also clears the code/password screen (show_menu_select composes no bg).
+ *
+ * RECONSTRUCTION FIDELITY: only sub-mode 0 (the rect fill) with a black fill colour is
+ * reconstructed — that is the only path the playable build's callers (iris + name entry)
+ * exercise; other `view[+0x1c]` sub-handlers and non-black fills are not reached and are
+ * left unimplemented (early return).  The self-modifying per-plane inner loop is replaced
+ * by an equivalent all-planes zero fill (Map-Mask=0x0F, write 0).  Recorded in docs/
+ * reconstruction-fidelity.md ("playable host: BGI overlay primitives").
  *
  * Called from fun_7b4a_view_blit (screens.c) under #ifdef BUMPY_PLAYABLE. */
 void host_bgi_set_viewport(u8 __far *view, u16 seg)
 {
+    u16 dx_t, dy_t, w_t, h_t;
+    u16 wb, hr, base, r, c;
+    u8 __far *vga;
+
     (void)seg;
     *(u16 __far *)(view + 0x18) = 0x14u;   /* clip extent width  = 20 (constant) */
     *(u16 __far *)(view + 0x1a) = 0x19u;   /* clip extent height = 25 (constant) */
     bgi_write_mode_flag_a = 2u;             /* DGROUP 0x541f */
     bgi_write_mode_flag_b = 1u;             /* DGROUP 0x5420 */
-    /* VGA dispatch: table[palette_mode*2 + 0x4dda] for mode 2 = 0x0000 -> NULL -> no blit */
+
+    /* Secondary dispatch (1ab9:0000 → 0x4dcc[view+0x1c]); only sub-mode 0 = rect fill
+       is reached by the recon (iris + name-entry cursor). */
+    if ((*(u16 __far *)(view + 0x1c)) != 0u) {
+        return;
+    }
+    /* Fill colour = view[+0x22..+0x25] (per-plane); the recon callers all use black. */
+    if ((view[0x22] | view[0x23] | view[0x24] | view[0x25]) != 0u) {
+        return;
+    }
+    dx_t = *(u16 __far *)(view + 0x14);     /* dest x (tiles) */
+    dy_t = *(u16 __far *)(view + 0x16);     /* dest y (tiles) */
+    w_t  = *(u16 __far *)(view + 0x1e);     /* width  (tiles) */
+    h_t  = *(u16 __far *)(view + 0x20);     /* height (tiles) */
+    wb   = (u16)(w_t * 2u);                 /* width in VGA bytes  (2 bytes / 16px tile) */
+    hr   = (u16)(h_t * 8u);                 /* height in rows      (8 rows / tile)       */
+    base = (u16)(host_draw_page_off() + (u16)((u16)(dy_t * 8u) * 40u) + (u16)(dx_t * 2u));
+
+    vga = (u8 __far *)MK_FP(VGA_SEG_PAGE0, 0u);
+    outp(GC_INDEX, GC_BIT_MASK); outp(GC_DATA, 0xFFu);   /* all bits writable */
+    outp(SEQ_INDEX, SEQ_MAP_MASK); outp(SEQ_DATA, 0x0Fu);/* all 4 planes: one write = black */
+    for (r = 0u; r < hr; r++) {
+        u16 off = (u16)(base + (u16)(r * 40u));
+        for (c = 0u; c < wb; c++) {
+            vga[off + c] = 0u;
+        }
+    }
+    host_vga_blit_end();                    /* restore default Map-Mask/Bit-Mask */
 }
 
 #endif /* BUMPY_PLAYABLE */

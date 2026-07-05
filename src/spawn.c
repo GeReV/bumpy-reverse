@@ -117,6 +117,9 @@ extern u16 host_dgroup_seg(void);   /* host_render.c — loaded image's real DGR
 #endif
 #endif
 
+/* NOTE: the decomp opens with the Borland stack-overflow-check prologue
+   (CMP SP,stack_check_limit; CALL FUN_1000_ab83).  That is a non-semantic
+   compiler-emitted guard, omitted here as throughout the reconstruction. */
 void spawn_and_draw_level_entities(void)
 {
     anim_chan_rec __far *rec_a;   /* local_12 — A slot-0 record (active slot)         */

@@ -1,6 +1,8 @@
 #ifdef BUMPY_PLAYABLE
 #include <string.h>
 #include <malloc.h>           /* _fmalloc */
+#include <conio.h>            /* inp/outp — mode-11 latch-copy GC programming */
+#include <i86.h>              /* MK_FP */
 #include "host/host.h"        /* host_framebuffer, VGA constants */
 #include "bumpy.h"
 #include "bgi_overlay.h"      /* bgi_view_desc, render_player_view, restore_bg_view,
@@ -100,7 +102,19 @@ extern u16 score_hi;   /* DGROUP 0xa0d6 */
  * nonzero bg tile.  CARVE-OUT: not yet reconstructed; NOP stub for the link.
  * In the default build, setup_fullscreen_view is itself a NOP (game_stubs.c)
  * so this symbol is never needed there. */
-void redraw_level_background_tiles(void) {}
+void redraw_level_background_tiles(void)
+{
+    /* The engine's redraw_level_background_tiles (1000:2a0a) rebuilds the level's bg tile
+       runs — driven by setup_fullscreen_view at GAME-ENTRY (inside spawn_and_draw_level_
+       entities, after the iris).  The recon renders the tiles via the semantic
+       level_render_bg() (clear a000 + bg_render_grid) rather than the original's
+       self-modifying BGI tile-run chain (setup_sprite_descriptor/restore_bg_tile_run,
+       which do not decompile).  This is where the playable level bg is painted now —
+       render_level (start_level) only BINDS the context (no early paint → no level flash
+       before the overworld, and the bg survives for gameplay).  docs/reconstruction-fidelity.md. */
+    extern void level_render_bg(void);   /* level.c */
+    level_render_bg();
+}
 
 /* BGI-overlay screen present thunks (stubs in screens.c).
  * show_text_screen calls these after loading the fullscreen image.
@@ -140,12 +154,13 @@ static u8 __far *hv_saveunder_buf = (u8 __far *)0;
  * handlers (see the wiring note in init_sprite_structs). */
 static void (__far *hv_p2_state_handlers[16])(void);
 
-/* Safe no-op for the table slots the engine's captured data does not cover (index 0
- * and 5..15).  p2_ctest only ever exercises move_states 1..4; the original's other
- * entries are unknown, so the playable build points them at this no-op rather than
- * leave them NULL (a NULL slot is an indirect far-call to 0000:0000 → invalid-opcode
- * storm).  DIVERGENCE: faithful values for these slots are not recovered; documented
- * in docs/reconstruction-fidelity.md. */
+/* No-op for the table slots outside the four cell-move handlers.  GROUNDED
+ * (2026-07-03): the engine's 0x85c table is STATIC DGROUP data in the image (file
+ * 0x11440+0x85c, 10 NEAR code-ptr entries, no runtime writer): [1..4] = the four
+ * cell-move handlers (1000:5025/503f/5059/506f) and [0],[5..9] = the compiled EMPTY
+ * fn at 1000:7111 — so seeding every non-move slot with a no-op IS the faithful
+ * table (slots 10..15 here are only harness headroom, never indexed: move states
+ * are 1..9).  Recorded in docs/reconstruction-fidelity.md. */
 static void __far hv_p2_state_noop(void) {}
 #define HV_SAVEUNDER_SIZE (4u * 0x1F40u)   /* 4 planes × 8000 B = 32000 B */
 
@@ -237,8 +252,13 @@ void init_sprite_structs(void)
      * Mirrors: p2_sprite = (dword)&sprite_obj_203b_795a; */
     p2_sprite = dg + DG_P2_OBJ;
 
-    /* hud_icon_sprite_ptr (DGROUP 0x7986): not declared in the C source; skipped.
-     * No callers in the validated gameplay path.  See RECONSTRUCTION FIDELITY §2. */
+    /* hud_icon_sprite_ptr → HUD icon-row obj at DGROUP 0x7986 (draw_icon_row, 1000:6130,
+     * called from level_intro_screen + show_pause_screen).
+     * Mirrors: hud_icon_sprite_ptr = (dword)&sprite_obj_203b_7986; */
+    {
+        extern u8 __far *hud_icon_sprite_ptr;   /* anim.c */
+        hud_icon_sprite_ptr = dg + 0x7986u;
+    }
 }
 
 /* ── init_fullscreen_view_desc — 1000:5181 ─────────────────────────────────────
@@ -276,10 +296,36 @@ void init_fullscreen_view_desc(u8 mode, u8 flag)
     *(u16 __far *)(d + 0x1e) = 0x14;
     *(u16 __far *)(d + 0x20) = 0x19;
 
-    /* Engine: bgi_set_mode_11_thunk(off, seg) — dynamically-loaded BGI overlay
-     * (1ab9:126e), not reconstructable.  Host: present the composed framebuffer
-     * to real VGA.  See RECONSTRUCTION FIDELITY note §3. */
-    present_frame(1);
+    /* Engine: bgi_set_mode_11_thunk(off, seg) — the FULL-SCREEN PAGE SYNC: copy
+     * page[word00=mode] → page[word0e=flag] (e.g. (1,0) copies the just-composed
+     * gameplay page onto the other page so BOTH hold the clean screen before the
+     * sprite draws + the first present flip).  A prior revision routed this to
+     * present_frame(1) — harmless while present was a NOP, but wrong (and a stray
+     * page flip) under the real flip model; corrected 2026-07-02 with the real
+     * copy against the LIVE page table. */
+    {
+        u16 src = host_page_off_of(mode);
+        u16 dst = host_page_off_of(flag);
+        if (src != dst) {
+            /* VGA LATCH COPY (write mode 1): one read loads all 4 planes into the
+               latches, one write stores them — the mode the hardware provides for
+               exactly this page-to-page copy (the overlay's own copy is a rep-movs
+               latch loop).  The first host implementation moved each byte through
+               host_vga_read4/put4 (~8 port ops per byte, ~64k per sync) — slow
+               enough that the menu's per-frame sync opened a visible cursor-less
+               window (arrow flicker) and lagged input. */
+            const u8 __far *sp = (const u8 __far *)MK_FP(VGA_SEG_PAGE0, src);
+            u8 __far       *dp = (u8 __far *)MK_FP(VGA_SEG_PAGE0, dst);
+            u16 off;
+            outp(0x3C4u, 2u);  outp(0x3C5u, 0x0Fu);   /* Map Mask: all planes   */
+            outp(0x3CEu, 5u);  outp(0x3CFu, 0x01u);   /* GC Mode: write mode 1  */
+            for (off = 0u; off < (u16)0x1F40u; off++) {
+                dp[off] = sp[off];                     /* latch copy, 4 planes   */
+            }
+            outp(0x3CEu, 5u);  outp(0x3CFu, 0x00u);   /* back to write mode 0   */
+            host_vga_blit_end();                       /* Bit-Mask FF / Map 0F   */
+        }
+    }
 }
 
 /* ── setup_fullscreen_view — 1000:483c ─────────────────────────────────────────
@@ -307,7 +353,6 @@ void setup_fullscreen_view(void)
 {
     u8 __far *d;
     const bgi_view_desc __far *view;
-    u8  plane;
 
     /* Step 1: rebuild background tile runs (1:1 engine call). */
     redraw_level_background_tiles();
@@ -331,35 +376,48 @@ void setup_fullscreen_view(void)
     *(u16 __far *)(d + 0x1e) = 0x14;
     *(u16 __far *)(d + 0x20) = 0x19;
 
-    /* Step 3: host flat-RAM save-under capture (RECONSTRUCTION FIDELITY note §1).
+    /* Step 3: clean-background capture (RECONSTRUCTION FIDELITY note §1).
      * Engine calls render_player_view(off, seg) which copies VGA a000 → fullscreen_buf.
-     * Host: allocate hv_saveunder_buf if needed, then copy host_framebuffer page-0
-     * (4 planes × BGI_PAGE_SIZE bytes) into it — the flat-RAM equivalent. */
+     * Host: allocate hv_saveunder_buf if needed, then read the freshly-painted a000
+     * page-0 (4 planes × BGI_PAGE_SIZE bytes, via host_vga_read4) into it.
+     * (2026-07-02 FIX: this previously memcpy'd from the flat host_framebuffer, which
+     * the real-VGA blitters no longer write — the snapshot was all zeros and the
+     * anim-channel erase repainted black.  redraw_level_background_tiles above has
+     * just painted the level bg to VGA, so a000 page-0 IS the clean background.) */
     if (hv_saveunder_buf == (u8 __far *)0) {
         hv_saveunder_buf = (u8 __far *)_fmalloc(HV_SAVEUNDER_SIZE);
     }
-    if (host_framebuffer != (u8 __huge *)0 && hv_saveunder_buf != (u8 __far *)0) {
-        /* Copy page-0 of each plane (BGI_PAGE_SIZE = 0x1F40 B per plane)
-         * from host_framebuffer into hv_saveunder_buf[plane * 0x1F40].
-         * Each plane's page-0 starts at plane*BGI_PLANE_SIZE + BGI_PAGE_A000_OFF. */
-        for (plane = 0; plane < 4u; plane++) {
-            const u8 __huge *src = host_framebuffer
-                                 + (u32)plane * (u32)BGI_PLANE_SIZE
-                                 + (u32)BGI_PAGE_A000_OFF;
-            u8 __far *dst = hv_saveunder_buf + (u16)plane * (u16)0x1F40u;
-            memcpy((void __far *)dst, (const void __huge *)src, (size_t)0x1F40u);
+    if (hv_saveunder_buf != (u8 __far *)0) {
+        u16 off;
+        u16 pg = host_draw_page_off();   /* the page the bg was just painted to */
+        for (off = 0u; off < (u16)0x1F40u; off++) {
+            host_vga_read4((u16)(pg + off),
+                           &hv_saveunder_buf[off],
+                           &hv_saveunder_buf[(u16)0x1F40u + off],
+                           &hv_saveunder_buf[2u * (u16)0x1F40u + off],
+                           &hv_saveunder_buf[3u * (u16)0x1F40u + off]);
         }
     }
 
-    /* Drive the reconstructed render_player_view with the built descriptor
-     * (structural 1:1 call site; in the host the copy lands from host_framebuffer
-     * page-0 into the fullscreen_buf dest ptr — the engine's fullscreen_buf is
-     * the decoded-image buffer, not planar VGA, so this diverges structurally but
-     * the critical save-under is the hv_saveunder_buf copy above). */
+    /* Structural 1:1 call site: the engine drives render_player_view with the built
+     * descriptor to fill fullscreen_buf.  The host's clean-bg equivalent is the
+     * hv_saveunder_buf VGA capture above; the flat host_framebuffer copy this used
+     * to do was orphaned by the real-VGA migration and is dropped. */
     view = (const bgi_view_desc __far *)d;
-    if (host_framebuffer != (u8 __huge *)0) {
-        render_player_view(host_framebuffer, host_framebuffer, view);
-    }
+    (void)view;
+}
+
+/* ── host_clean_bg — accessor for the flat-RAM clean-background save-under ───────
+ * Returns the page-0 clean-background snapshot captured by setup_fullscreen_view
+ * (hv_saveunder_buf), or NULL if not yet captured.  This is the host's stand-in for
+ * the engine's fullscreen_buf clean-bg image (a000 gameplay is single-page — see
+ * host_video.c present_frame).  The anim-channel erase leaf (host_render.c) reads it
+ * to repaint the background under active-platform sprites, mirroring the engine's
+ * restore_bg_view(fullscreen_buf) erase in draw_anim_channels_a (anim.c:422).
+ * BUMPY_PLAYABLE only. */
+const u8 __far *host_clean_bg(void)
+{
+    return hv_saveunder_buf;
 }
 
 /* ── show_text_screen — 1000:11eb ───────────────────────────────────────────────
@@ -369,13 +427,21 @@ void setup_fullscreen_view(void)
  *
  * Structural port of 1000:11eb.  Resource-load / BGI-overlay / DAC leaves are
  * faithful stubs (screens.c); the p1_sprite glyph-blit path is live.
- * The text-buf data comes from a DGROUP stack-local (fmemcpy in the engine); in the
- * host this buffer is not accessible, so glyphs render as spaces (0x20) — runtime
- * text correctness deferred to Task 9/11.
+ * The engine fmemcpy's the far ptr at DGROUP 0x11ae into a stack-local text_buf
+ * ptr and renders text_buf[0..8]; statically 0x11ae = {0x1327, DGROUP} — the
+ * string "GAME OVER" at DGROUP 0x1327.  Modelled here as a file-static string +
+ * far-ptr pair (hv_text_ptr_11ae) the loop reads through, mirroring the engine's
+ * indirection (nothing else writes 0x11ae in the corpus).
  *
  * RECONSTRUCTION FIDELITY: resource-load / BGI-overlay leaves stubbed (same
- * convention as screens.c screen fns).  text_buf not accessible in host model.
+ * convention as screens.c screen fns).
  * ──────────────────────────────────────────────────────────────────────────── */
+
+/* DGROUP 0x1327: the "GAME OVER" string; DGROUP 0x11ae: the far ptr to it that
+ * show_text_screen copies into its stack-local text_buf. */
+static const char hv_text_str_1327[] = "GAME OVER";
+static const char __far *hv_text_ptr_11ae = hv_text_str_1327;
+
 void show_text_screen(void)
 {
     u16 __far *p;
@@ -396,18 +462,20 @@ void show_text_screen(void)
 
     /* Render 9 sprite glyphs at row 0x60 starting at col 6.
      * p1_sprite word[1] = y = 0x60; per char: x = col * 16, frame = ch + 0x175.
-     * Skip spaces (ch == 0x20).  text_buf: DGROUP stack-local in engine; not
-     * accessible in host — default all chars to space, nothing blitted. */
+     * Skip spaces (ch == 0x20).  text_buf = the DGROUP 0x11ae far ptr copied to a
+     * stack-local in the engine; here read through hv_text_ptr_11ae ("GAME OVER"). */
     col_pos = 6;
     if (p1_sprite != (u8 __far *)0) {
         p = (u16 __far *)p1_sprite;
         p[1] = 0x60;                          /* y = 0x60 (obj word at +0x02) */
         for (char_idx = 0; char_idx < 9; char_idx = char_idx + 1) {
-            ch = 0x20;                        /* default: space (text_buf not live) */
+            ch = (u8)hv_text_ptr_11ae[char_idx];
             p[2] = (u16)(ch + 0x175u);        /* frame */
             p[0] = (u16)((u16)col_pos << 4);  /* x = col * 16 */
             if (ch != 0x20) {
-                anim_blit_sprite_leaf(0x792e, 0x203b);
+                /* blit_sprite(0x792e, DS) — engine stamps the static DGROUP 0x203b;
+                 * pass the loaded image's real DGROUP (host_dgroup_seg convention). */
+                anim_blit_sprite_leaf(0x792e, host_dgroup_seg());
             }
             col_pos = col_pos + 1;
         }
@@ -426,26 +494,36 @@ void show_text_screen(void)
  * poll for resume (scancode 0x19) or quit (fun_75a2_poll_action), optionally
  * execute the tileflip cheat (scancodes 0x1d + 0x21), then restore the bg view.
  *
- * Structural 1:1 port of 1000:49d7.  render_player_view / restore_bg_view use
- * the reconstructed host 3-arg signatures.  The tileflip cheat body (walk
+ * Structural 1:1 port of 1000:49d7.  The tileflip cheat body (walk
  * move_descriptor_table) is structurally present but the far ptr is not exposed
  * from player.c here — deferred to Task 9/11 (playable boot).
  *
  * RECONSTRUCTION FIDELITY: move_descriptor_table cheat path deferred (not in
- * validated gameplay path).  Runtime pause correctness deferred to Task 9/11.
+ * validated gameplay path).  The strip SAVE/RESTORE (engine: render_player_view /
+ * restore_bg_view driven by the descriptor below, word00/word0e = 0 → page[table[0]])
+ * is executed as a direct VGA 4-plane copy between page[table[0]] and hv_pause_strip
+ * (the model of the engine's DGROUP 0x9694 save buffer) — the descriptor-driven
+ * BGI-overlay copy leaves are not live on the real-VGA host; the descriptor field
+ * writes are kept 1:1 as documentation.
  * ──────────────────────────────────────────────────────────────────────────── */
+
+/* Engine DGROUP 0x9694: the 0x500-byte pause strip save buffer — 0x14 tiles × 1 tile
+ * row = 40 bytes × 8 rows × 4 planes, PLANE-MAJOR (320 bytes per plane). */
+static u8 hv_pause_strip[4u * 8u * 40u];
+
 void show_pause_screen(void)
 {
     u8  key_state;
     char quit_pressed;
     u8 __far *d;
-    const bgi_view_desc __far *view;
+    u16 pg;
+    u8  r;
+    u8  c;
 
     if (render_descriptor_ptr == (u8 __far *)0) {
         return;
     }
     d = render_descriptor_ptr;
-    view = (const bgi_view_desc __far *)d;
 
     /* Build the pause-overlay source-copy descriptor (1:1 from decomp):
      * word[0]=0 (source page-1 = a200), dest=0x9694:0x203b, 0x14 × 1 rect,
@@ -463,9 +541,22 @@ void show_pause_screen(void)
     *(u16 __far *)(d + 0x1e) = 0x14u;
     *(u16 __far *)(d + 0x20) = 1;
 
-    /* render_player_view: copy the status-strip from the current draw page. */
-    if (host_framebuffer != (u8 __huge *)0) {
-        render_player_view(host_framebuffer, host_framebuffer, view);
+    /* SAVE (engine: render_player_view with the descriptor above, word00=0 →
+     * source page[table[0]]): read the 0x14×1-tile strip at (0,0) — 40 bytes ×
+     * 8 rows × 4 planes — from VGA into hv_pause_strip, plane-major (320 B/plane),
+     * mirroring the engine's copy into DGROUP 0x9694.  page[table[0]] is resolved
+     * LIVE (host_page_off_of(0)); at this point it is the DISPLAYED page the pause
+     * UI below draws onto inside the fun_9410(0)…(1) bracket. */
+    pg = host_page_off_of(0);
+    for (r = 0; r < 8u; r++) {
+        for (c = 0; c < 40u; c++) {
+            u16 i = (u16)((u16)r * 40u + c);
+            host_vga_read4((u16)(pg + i),
+                           &hv_pause_strip[i],
+                           &hv_pause_strip[320u + i],
+                           &hv_pause_strip[2u * 320u + i],
+                           &hv_pause_strip[3u * 320u + i]);
+        }
     }
 
     /* Switch to visible page 0 + sprite table 0 (draw to page1). */
@@ -518,20 +609,21 @@ void show_pause_screen(void)
     *(u16 __far *)(d + 0x14) = 0;
     *(u16 __far *)(d + 0x16) = 0;
 
-    /* restore_bg_view: restore the background at the saved-under area.
-     * Host: vga_src = hv_saveunder_buf (flat-RAM save-under; engine uses fullscreen_buf).
-     * word0e=0 → dest page a200:0000 (plane offset 0x2000) in host_framebuffer. */
-    if (host_framebuffer != (u8 __huge *)0 && hv_saveunder_buf != (u8 __far *)0) {
-        restore_bg_view(host_framebuffer,
-                        (const u8 __huge *)hv_saveunder_buf,
-                        (const bgi_view_desc __far *)d);
-    } else if (host_framebuffer != (u8 __huge *)0) {
-        /* hv_saveunder_buf not yet allocated — drive the call structurally with
-         * a NOP-guarded view (word0e=0 ≤ 1, but vga_src is null; guard will pass).
-         * Worst case: no restore (deferred to Task 9/11 when save-under is live). */
-        restore_bg_view(host_framebuffer, host_framebuffer,
-                        (const bgi_view_desc __far *)d);
+    /* RESTORE (engine: restore_bg_view with the descriptor above, word0e=0 →
+     * dest page[table[0]], source the 0x9694 strip buffer): write hv_pause_strip's
+     * 4 planes back to the same VGA rect, then end the plane-store sequence. */
+    pg = host_page_off_of(0);
+    for (r = 0; r < 8u; r++) {
+        for (c = 0; c < 40u; c++) {
+            u16 i = (u16)((u16)r * 40u + c);
+            host_vga_put4((u16)(pg + i),
+                          hv_pause_strip[i],
+                          hv_pause_strip[320u + i],
+                          hv_pause_strip[2u * 320u + i],
+                          hv_pause_strip[3u * 320u + i]);
+        }
     }
+    host_vga_blit_end();
 }
 
 #endif /* BUMPY_PLAYABLE */

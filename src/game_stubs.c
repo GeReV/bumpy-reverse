@@ -111,35 +111,78 @@ void FUN_1000_7fef(void)         {}   /* 1000:7fef timer_teardown_restore — in
 void FUN_1000_6183(void)         {}   /* 1000:6183 sweep_active_entities — out-of-scope entity sweep (carve) */
 /* apply_contact_action (1000:6a89) — RECONSTRUCTED in player.c (Phase-9 T1); the
    no-op stub is removed (it would now be a duplicate symbol against player.obj). */
-void play_walk_anim_default(void)           {}  /* 1000:4361 */
-/* p1_set_pixel_from_cell 1000:4906 — set p1_pixel_x/y + move_step_count from the
-   cell-coord table at DGROUP 0x274/0x276.  A player.c leaf (move/teleport spine)
-   not yet reconstructed there; items.c's teleport_to_next_exit_tile (Phase-3 T4)
-   calls it, so a faithful-signature stub satisfies the BUMPY.EXE link.  It writes
-   semantic state (move_step_count/p1_pixel_y), so the FULL port lands with the
-   player move-spine; the items host harness (items_ctest.c) reproduces its effect
-   faithfully for the per-fn differential.  CARVE-OUT (player subsystem leaf). */
-void p1_set_pixel_from_cell(void)           {}  /* 1000:4906 */
-void step_walk_anim(u8 anim_base, u8 period, u16 frame_off, u16 frame_seg)
-{ (void)anim_base; (void)period; (void)frame_off; (void)frame_seg; }  /* 1000:495c */
-void FUN_1000_4802(void)                    {}  /* 1000:4802 move_step_teleport_exit — pending==0x0f leaf (carve) */
+/* play_walk_anim_default (1000:4361) — RECONSTRUCTED in player.c (audit 2026-06-28); stub removed. */
+/* p1_set_pixel_from_cell (1000:4906) — RECONSTRUCTED in player.c (audit 2026-06-28);
+   the no-op stub is removed (would be a duplicate symbol against player.obj). */
+/* step_walk_anim (1000:495c) — RECONSTRUCTED in player.c (audit 2026-06-28); stub removed. */
+/* ── game-mode handler-table targets — RECONSTRUCTED from Ghidra (no longer carve-outs).
+   FUN_ names kept to avoid churning the game_mode_handlers[] call sites (NAMING rule). */
+extern void play_sound(u8 sound_id);
+extern void apply_cell_animation(u8 action_code);
+extern void enter_game_mode(u8 mode);
+extern void dispatch_move_step(void);
+extern void compute_move_descriptor_ptr(void);
+extern void p1_input_dispatch_bit01(void);
+extern void p1_settle_idle(void);
+extern u8   anim_target_cell;
+extern u8   p1_cell;
+extern u8   round_continue_flag;
+extern u8   input_state;
+extern u16  sound_device_state;
+extern u16  move_descriptor_ptr;
+extern u16  move_descriptor_ptr_seg;
+u8 dgroup_flag_a1a9;     /* DGROUP 0xa1a9 — round-activate flag set by idx30 handler */
+
+/* FUN_1000_4802 = move_step_teleport_exit (1000:4802): exit/teleport trigger. */
+void FUN_1000_4802(void)
+{
+    u8 sound_id = (sound_device_state == 4u) ? 0x28u : 3u;
+    play_sound(sound_id);
+    anim_target_cell = p1_cell;
+    apply_cell_animation(0x27u);
+    enter_game_mode(0x0eu);
+    dispatch_move_step();
+}
 
 /* (3) Out-of-scope handler-table targets (modes outside the §4.2 slice set):
  *     bounce / jump / teleport / fall-step / physics-freeze / die / pvp modes.
  *     Referenced by game_mode_handlers[] but not reached on the level-1 path. */
-void move_walk_right_anim_step(void)        {}  /* 1000:2423  idx 0x05 */
-void enter_mode_0b_jump_start(void)         {}  /* 1000:2470  idx 0x0a */
-void move_anim_step_to_mode0c(void)         {}  /* 1000:248e  idx 0x0b */
-void move_step_check_walkable(void)         {}  /* 1000:24d7  idx 0x0c */
-void move_step_dispatch_input(void)         {}  /* 1000:250a  idx 0x0d */
+/* move_walk_right_anim_step (1000:2423) — RECONSTRUCTED in player.c (audit 2026-06-28); stub removed. */
+/* enter_mode_0b_jump_start (1000:2470) — RECONSTRUCTED in player.c (audit 2026-06-28); stub removed. */
+/* move_anim_step_to_mode0c (1000:248e) — RECONSTRUCTED in player.c (audit 2026-06-28); stub removed. */
+/* move_step_check_walkable (1000:24d7) — RECONSTRUCTED in player.c (audit 2026-06-28); stub removed. */
+/* move_step_dispatch_input (1000:250a) — RECONSTRUCTED in player.c (audit 2026-06-28); stub removed. */
 /* teleport_to_next_exit_tile (1000:25ad, idx 0x0e) is RECONSTRUCTED in items.c
    (Phase-3 T4) — no longer stubbed here (would be a duplicate symbol). */
 /* FUN_1000_22b0 (idx 0x10/0x2c) + run_physics_settle_wrap (1000:22c1, idx 0x2d)
    are now RECONSTRUCTED in player.c (Phase 2, Task 4). */
-void p1_input_dispatch_bit10(void)          {}  /* 1000:4344  idx 0x1c */
-void FUN_1000_4437(void)                     {}  /* 1000:4437 game_mode_handler_idx1d — idx 0x1d..0x20 (carve) */
-void advance_physics_freeze(void)           {}  /* 1000:22d2  idx 0x2e */
-void FUN_1000_1e3d(void)                     {}  /* 1000:1e3d game_mode_handler_idx30 — idx 0x30 (carve) */
+/* p1_input_dispatch_bit10 (1000:4344) — RECONSTRUCTED in player.c (audit 2026-06-28); stub removed. */
+/* FUN_1000_4437 = game_mode_handler_idx1d (1000:4437, idx 0x1d..0x20): input router —
+   fire (0x10) settles to idle, else dispatch the direction bits.
+   (Binary: 1000:4443 TEST [0x8244],0x10; JZ 444f; CALL 440c; 444f CALL 4398.)
+   NOTE 2026-07-02: this body and FUN_1000_1e3d's were SWAPPED in the original
+   reconstruction (each carried the other address's code); re-verified against the
+   disasm and the dispatch table at DGROUP 0x7ca (2-byte near offsets) and corrected. */
+void FUN_1000_4437(void)
+{
+    if ((input_state & 0x10u) == 0u) {
+        p1_input_dispatch_bit01();
+    } else {
+        p1_settle_idle();
+    }
+}
+/* advance_physics_freeze (1000:22d2) — RECONSTRUCTED in player.c (audit 2026-06-28); stub removed. */
+/* FUN_1000_1e3d = game_mode_handler_idx30 (1000:1e3d, idx 0x30): activate current
+   move-descriptor entry (set round-continue + a1a9 flags, mark the entry done).
+   (Binary: 1000:1e49 MOV AL,1; MOV [0x9d30],AL; MOV [0xa1a9],AL; CALL 3a88;
+   LES BX,[0x9baa]; MOV ES:[BX],0x1.)  See the swap note above. */
+void FUN_1000_1e3d(void)
+{
+    round_continue_flag = 1u;
+    dgroup_flag_a1a9 = 1u;
+    compute_move_descriptor_ptr();
+    *(u8 __far *)MK_FP(move_descriptor_ptr_seg, move_descriptor_ptr) = 1u;
+}
 
 /* (4) mode_script_tbl (DGROUP 0x2252): far-ptr-per-game_mode to its [anim,dx,dy]
  *     move script.  Runtime-populated in the engine (not statically resolvable —
@@ -207,7 +250,8 @@ void init_misc_7bd7(void)
 }
 
 #ifndef BUMPY_PLAYABLE
-/* 1000:97a4 init_display_controller_a — display controller init. */
+/* 1000:97a4 — near-thunk to detect_video_adapter (202c:0000), an adapter probe
+   (stores adapter/mode code at 0x26c4c).  Default build: no-op (no live BIOS). */
 void init_display_97a4(void)
 {
 }
@@ -237,10 +281,12 @@ void set_display_page(u8 page)
     (void)page;
 }
 
-/* 1000:97c5 set_palette_display_mode — set palette/display mode (mode, flag). */
-void set_palette_mode(u8 mode, u8 flag)
+/* 1000:97c5 — BGI set-text-colour thunk → 1ab9:1311 → pm-2 handler 1ab9:14ef
+   (fg/bg 4-plane expansions at DGROUP 0x68a6/0x68ae).  Formerly misnomered
+   set_palette_display_mode/set_palette_mode — it never touches palette_mode. */
+void set_text_color(u8 fg, u8 bg)
 {
-    (void)mode; (void)flag;
+    (void)fg; (void)bg;
 }
 
 /* set_resource_table 1000:... — point the resource table at (off,seg). */
@@ -296,13 +342,12 @@ void load_current_level_data(void)
    P1/P2 BUM-header spawn reader).  No longer stubbed here — spawn.obj owns the body
    (no dup; validated by tools/validate_spawn.sh). */
 
-/* 1000:31de init_round_state — CARVE-OUT (never-decompiled): the post-spawn
-   round-counter reset.  Ghidra now carries the canonical label init_round_state but
-   its DECOMPILATION still fails (UNCERTAIN body, address-out-of-bounds); the disasm
-   is not confidently reconstructable, so a faithful no-op stub stands in. */
-void reset_round_counters(void)
-{
-}
+/* 1000:31de init_round_state (recon name reset_round_counters) — RECONSTRUCTED in
+   player.c from the disassembly (decompiler still fails on it, but the asm is complete
+   and every store maps to a named global).  It was previously a no-op stub; that DROPPED
+   its p1_set_pixel_from_cell/p2_set_pixel_from_cell calls (player spawned at the stale
+   world-map pixel) and its move-step counter resets (movement state garbage).  Owned by
+   player.obj now (most of its written globals are player.c-local). */
 
 
 /* ── D. game_loop (1000:0c18) per-tick spine callees ────────────────────────── */
@@ -435,19 +480,74 @@ void rotate_timing_flags_and_wait(void) {}
    P1↔P2 collision (check_pvp_collision 1000:50fb) — RECONSTRUCTED in player2.c
    (Phase-4 T5); its stub is removed (dup-symbol once player2.obj links). */
 
-/* ── Callee of p2_tile_move_check still stubbed after Phase-4 T4 ───────────────
+/* ── Callee of p2_tile_move_check — the DGROUP 0x870 move-state dispatch ───────
  * Phase-4 T4 RECONSTRUCTED the P2 AI decision layer in player2.c, including
  * p2_run_move_state_handler (1000:5003) and p2_ai_select_move_random (1000:4fd3) —
- * their stubs are REMOVED here (now real symbols in player2.obj).  One callee of
- * p2_tile_move_check remains stubbed:
- *   - p2_dispatch_move_state_handler: models the engine's indirect call through the
- *     per-state move-state handler table at DGROUP 0x870 (the handler bytes are
- *     engine level-data, not reached on any captured P2 path); kept as a stub so the
- *     indirect-call site in p2_tile_move_check is preserved 1:1 without inventing the
- *     deferred table.
- * RECONSTRUCTION FIDELITY: faithful-signature no-op stub so player2.obj links;
- * not reached on the harness's captured P2 paths.  CARVE-OUT (P2 indirect-call backend). */
+ * their stubs are REMOVED here (now real symbols in player2.obj).
+ *
+ * p2_dispatch_move_state_handler models the engine's indirect NEAR call at
+ * 1000:4db9 in p2_tile_move_check:
+ *     MOV AL,[0x8562] ; MOV AH,0 ; SHL AX,1 ; MOV BX,AX ;
+ *     CALL word ptr [BX + 0x870]
+ * GROUNDED (2026-07-03): the DGROUP 0x870 table is STATICALLY INITIALIZED in the
+ * unpacked image (file 0x11440+0x870) — 16-bit NEAR code pointers into seg 1000;
+ * a full opcode scan of the code image finds NO writer (the only references to
+ * 0x85c/0x870 are the two `CALL word ptr [BX+disp]` sites at 1000:5021/1000:4db9):
+ *     [0]  0x7111  (compiled empty C fn — no-op)
+ *     [1]  0x4dbf  p2_pick_move_priority_a
+ *     [2]  0x4e44  p2_pick_move_priority_b
+ *     [3]  0x4ec9  p2_pick_move_priority_c
+ *     [4]  0x4f4e  p2_ai_dispatch_move
+ *     [5..9] 0x4dbf  p2_pick_move_priority_a  (the random states 5..9)
+ *     [10] 0x7111  (no-op)
+ * All four distinct targets are RECONSTRUCTED in player2.c (Phase-4 T4). */
+#ifndef BUMPY_PLAYABLE
+/* Default (byte-faithful) build: kept as the historical link-only carve-out stub
+ * so BUMPY.EXE and the differential ctest harnesses (which shim this symbol
+ * themselves) are unchanged.  RECONSTRUCTION FIDELITY: faithful-signature no-op
+ * stub; not reached on the harness's captured P2 paths.  CARVE-OUT (P2
+ * indirect-call backend). */
 void p2_dispatch_move_state_handler(void) {}  /* DGROUP 0x870[move_state] */
+#else  /* BUMPY_PLAYABLE */
+/* Playable build: the REAL dispatch.  Without it nothing re-arms the P2 state
+ * script when p2_move_steps_left hits 0, so p2_step_scripted_move walks past the
+ * script end and p2_pixel accumulates garbage (wild blits on the P2 levels).
+ *
+ * RECONSTRUCTION FIDELITY (indirect handler dispatch): the engine's table holds
+ * 16-bit NEAR code pointers in DGROUP (statically initialized, dumped above);
+ * the recon mirrors it as a static C function-pointer table with the SAME
+ * per-index targets, and the [0]/[10] empty-fn filler (engine 1000:7111) as a
+ * local no-op.  The index/deref is 1:1 with the asm (no bounds check — the
+ * engine has none; p2_set_move_state only ever produces states 1..9).
+ * Recorded in docs/reconstruction-fidelity.md. */
+extern u8 p2_move_state;                       /* game.c DGROUP 0x8562 */
+extern void p2_pick_move_priority_a(void);     /* player2.c 1000:4dbf */
+extern void p2_pick_move_priority_b(void);     /* player2.c 1000:4e44 */
+extern void p2_pick_move_priority_c(void);     /* player2.c 1000:4ec9 */
+extern void p2_ai_dispatch_move(void);         /* player2.c 1000:4f4e */
+
+static void gs_p2_move_noop(void) {}           /* engine 1000:7111 (empty fn) */
+
+/* Mirror of the static engine table at DGROUP 0x870 (file 0x11440+0x870). */
+static void (* const gs_p2_move_handler_tbl[11])(void) = {
+    gs_p2_move_noop,            /* [0]  0x7111 */
+    p2_pick_move_priority_a,    /* [1]  0x4dbf */
+    p2_pick_move_priority_b,    /* [2]  0x4e44 */
+    p2_pick_move_priority_c,    /* [3]  0x4ec9 */
+    p2_ai_dispatch_move,        /* [4]  0x4f4e */
+    p2_pick_move_priority_a,    /* [5]  0x4dbf */
+    p2_pick_move_priority_a,    /* [6]  0x4dbf */
+    p2_pick_move_priority_a,    /* [7]  0x4dbf */
+    p2_pick_move_priority_a,    /* [8]  0x4dbf */
+    p2_pick_move_priority_a,    /* [9]  0x4dbf */
+    gs_p2_move_noop             /* [10] 0x7111 */
+};
+
+void p2_dispatch_move_state_handler(void)      /* (*0x870[p2_move_state])() */
+{
+    (*gs_p2_move_handler_tbl[p2_move_state])();
+}
+#endif /* BUMPY_PLAYABLE */
 
 /* all_entries_flag_set (1000:3e8a) — level-complete predicate.  RECONSTRUCTED in
    level.c (Phase-9 T3): walks the per-level move-descriptor table ANDing each

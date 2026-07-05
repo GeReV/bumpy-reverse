@@ -75,8 +75,16 @@
  * mode-flips is out of scope for the host bring-up.  The corresponding F2/F5
  * key pulses are therefore omitted from the DOSBox boot input script.
  * Recorded in docs/reconstruction-fidelity.md ("playable host: palette-select
- * screen skip"). The default BUMPY.EXE main below is byte-unchanged.
+ * screen skip").  NOTE: the default BUMPY.EXE main is NO LONGER byte-unchanged —
+ * it gained the init_worldmap_data()/init_anim_data() calls (both builds need the
+ * relocated tables: start_level reads the worldmap accessors and spawn/anim read
+ * the anim tables unconditionally).  Nothing automated consumes the old image
+ * md5; the "byte-unchanged"/md5 baselines recorded in docs are historical.
  * ------------------------------------------------------------------------- */
+extern void init_move_scripts(void);   /* move_scripts.c — fill mode_script_tbl + reloc blob */
+extern void init_worldmap_data(void);  /* worldmap_data.c — relocate overworld nav tables */
+extern void init_anim_data(void);      /* anim_data.c — fill+relocate in-level anim/entity tables */
+extern void level_preload_session_sprites(void);  /* level.c — session-init sprite-bank bring-up */
 int main(void)
 {
     gfx_driver_init();           /* config_screens.c — 1ab9:02ce: text mode 0x02, header +
@@ -95,6 +103,38 @@ int main(void)
                                     (the reconstruction's pointer-split layout needs
                                     this before init_view_anim_descriptors writes
                                     through the descriptor far pointers; see game.c) */
+    init_move_scripts();         /* move_scripts.c — relocate the move-script blob's
+                                    far pointers into the runtime DGROUP + fill the
+                                    mode_script_tbl stub.  Without this, in-level movement
+                                    reads a garbage move script and crashes (INT 6) — the
+                                    long-standing bug #3.  Safe to wire now that the
+                                    real-VGA host removed the flat-buffer DGROUP fragility. */
+    init_worldmap_data();        /* worldmap_data.c — relocate the per-level overworld
+                                    move-descriptor + anim-coord lookup tables (extracted
+                                    verbatim) so start_level can point move_descriptor_table
+                                    / anim_coord_table_ptr at real data (overworld nav). */
+    init_anim_data();            /* anim_data.c — fill the zero-init in-level entity DGROUP
+                                    tables (layer A/B/C spawn-type / anim-frame far-ptrs /
+                                    grid / pos tables + the P2 frame table) so the platform
+                                    bars, items, and Bumpy draw via spawn_and_draw_level_entities. */
+    init_highscore_default_table();/* screens.c — fill g_highscore_default_table (DGROUP 0x8f0)
+                                    with the 7 built-in high scores (loader-relocated static
+                                    data in the original) so show_highscore_screen renders the
+                                    defaults; see RECONSTRUCTION FIDELITY in screens.c. */
+    init_password_table();       /* screens.c — fill password_table (DGROUP 0x135c) with the 8
+                                    level passwords (ACCESS/BUTTON/…/SYSTEM) so the "ENTER YOUR
+                                    PASSWORD" screen validates codes (else every code -> ERROR). */
+    level_preload_session_sprites();/* level.c — load+transform the main sprite bank
+                                    (BUMSPJEU.BIN) + wire the DG shadow / p1_sprite / host
+                                    render context at SESSION INIT (as the engine does), so the
+                                    title/menu/highscore/menu-select screens can blit sprite-
+                                    glyph text.  Without it hr_dg/hr_bank stay NULL until a level
+                                    loads and every menu-context glyph blit is a NOP (blank HOF /
+                                    password screen).  start_level reuses these (==0-guarded). */
+    host_load_cursor_bank();     /* host_resource.c — load+transform FLECHE.BIN (the menu
+                                    cursor arrow, engine resource 9) so run_main_menu can
+                                    blit it; the host resource path drains the engine's
+                                    own sprite-bank reads, so load it explicitly here. */
     init_game_session_state();   /* game.c — 1000:0282 (installs host INT8/INT9) */
     run_game_session();          /* game.c — 1000:0258 (session/round/tick loop) */
     /* Teardown: restore the saved interrupt vectors + the BIOS PIT divisor so
@@ -106,6 +146,10 @@ int main(void)
 #else
 int main(void)
 {
+    extern void init_worldmap_data(void);  /* worldmap_data.c */
+    extern void init_anim_data(void);      /* anim_data.c */
+    init_worldmap_data();        /* relocate overworld nav tables (both builds use start_level) */
+    init_anim_data();            /* fill+relocate in-level entity tables (platform bars/items/Bumpy) */
     init_game_session_state();   /* game.c — 1000:0282 */
     run_game_session();          /* game.c — 1000:0258 */
     return 0;

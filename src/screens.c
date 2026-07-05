@@ -36,8 +36,12 @@
  *                                 decoded-image buffer); no symbol def — owned here.
  *      timing_flag_accumulator    DGROUP 0x854f.  grep `0x854f`/`timing_flag` finds
  *                                 nothing in src/ — new symbol.
- *      highscore_name_buf[128]    DGROUP 0x8f0 (name-entry buffer, 8B/row × 16 rows).
- *                                 grep `0x8f0`/`highscore_name` finds nothing — new.
+ *      highscore_name_buf[56]     DGROUP 0x8f0 — storage for g_highscore_default_table, the
+ *                                 7-entry DEFAULT high-score table (Ghidra HighScoreEntry[7];
+ *                                 {char __far *name; u32 score}).  NOT a blank name-entry
+ *                                 scratch — it holds the built-in scores render_highscore_table
+ *                                 draws + shifts.  grep `0x8f0`/`highscore_name` finds nothing
+ *                                 else — owned here.
  *      formatted_number_buf[16]   number-formatter ASCII scratch.  No other TU defines
  *                                 it — new symbol.
  *    None of these names appear in any other src/ TU (checked: game.c, level.c,
@@ -91,9 +95,53 @@ u16 fullscreen_buf_seg;            /* DGROUP 0x7928 — decoded-image buffer seg
 /* ── per-tick timing accumulator (run_main_menu) ────────────────────────────────── */
 u8  timing_flag_accumulator;       /* DGROUP 0x854f */
 
-/* ── highscore name-entry buffer + number-formatter scratch ─────────────────────── */
-u8  highscore_name_buf[HIGHSCORE_NAME_LEN * HIGHSCORE_TABLE_ROWS];  /* DGROUP 0x8f0 */
+/* ── highscore default table (DGROUP 0x8f0) + number-formatter scratch ───────────── */
+u8  highscore_name_buf[HIGHSCORE_NAME_LEN * HIGHSCORE_TABLE_ROWS];  /* DGROUP 0x8f0 — g_highscore_default_table storage (7 entries) */
 char formatted_number_buf[FORMATTED_NUMBER_LEN];                    /* number-formatter ASCII */
+
+#ifdef BUMPY_PLAYABLE
+/* ── g_highscore_default_table reconstruction (Ghidra: HighScoreEntry[7] @ DGROUP 0x8f0) ──
+ *  The 7 built-in high scores.  In the original these are loader-relocated STATIC data at
+ *  DGROUP 0x8f0 — each 8-byte entry { char __far *name; u32 score } holds a far ptr to an
+ *  8-char name string (the strings live separately at DGROUP 0x11e6..0x121c, 9 bytes each)
+ *  plus the 32-bit points.  '.' padding in a name renders blank (0x2e -> space) unless it is
+ *  the freshly-inserted row.  Names + scores decoded 1:1 from the unpacked EXE @ DGROUP 0x8f0.
+ *
+ *  RECONSTRUCTION FIDELITY: the recon cannot statically embed the DOS-loader-relocated name
+ *  far pointers into the highscore_name_buf byte storage, so the playable build POPULATES the
+ *  table at startup via init_highscore_default_table (called from the playable main, exactly
+ *  like init_move_scripts / init_worldmap_data / init_anim_data relocate their static tables).
+ *  The default BUMPY.EXE keeps the zero-init storage — the data is documented here + in Ghidra,
+ *  but the byte-faithful build does not run the initializer. */
+typedef struct {
+    char __far *name;    /* 0x00: name_off:u16 + name_seg:u16 (loader-relocated far ptr) */
+    u32         score;   /* 0x04: score_lo:u16 + score_hi:u16 */
+} HighScoreEntry;
+
+static char s_hof_name_big_jim[9] = "BIG JIM.";   /* DGROUP 0x11e6 — 5,000,000 */
+static char s_hof_name_super_jo[9] = "SUPER JO";  /* DGROUP 0x11ef — 3,000,000 */
+static char s_hof_name_steve[9]    = "STEVE...";  /* DGROUP 0x11f8 — 1,000,000 */
+static char s_hof_name_wiliam[9]   = "WILIAM..";  /* DGROUP 0x1201 —   200,000 */
+static char s_hof_name_johnny[9]   = "JOHNNY..";  /* DGROUP 0x120a —    30,000 */
+static char s_hof_name_frank[9]    = "FRANK...";  /* DGROUP 0x1213 —     4,000 */
+static char s_hof_name_mike[9]     = "MIKE....";  /* DGROUP 0x121c —       500 */
+
+void init_highscore_default_table(void)
+{
+    static char __far * const hof_name[HIGHSCORE_TABLE_ROWS] = {
+        s_hof_name_big_jim, s_hof_name_super_jo, s_hof_name_steve, s_hof_name_wiliam,
+        s_hof_name_johnny,  s_hof_name_frank,    s_hof_name_mike };
+    static const u32 hof_score[HIGHSCORE_TABLE_ROWS] = {
+        5000000UL, 3000000UL, 1000000UL, 200000UL, 30000UL, 4000UL, 500UL };
+    HighScoreEntry __far *tbl = (HighScoreEntry __far *)highscore_name_buf;
+    u8 i;
+
+    for (i = 0; i < HIGHSCORE_TABLE_ROWS; i = i + 1) {
+        tbl[i].name  = hof_name[i];
+        tbl[i].score = hof_score[i];
+    }
+}
+#endif /* BUMPY_PLAYABLE */
 
 /* ════════════════════════════════════════════════════════════════════════════
  *  Phase-7 Task 3 — text / number primitives + the in-game score HUD.
@@ -110,11 +158,12 @@ char formatted_number_buf[FORMATTED_NUMBER_LEN];                    /* number-fo
  *    already reconstructed as a faithful-signature stub in anim.c
  *    (anim_render_leaf_80ac) — the SAME engine function (1000:80ac); draw_hud_composite
  *    calls it through that symbol so BUMPY.EXE links it once (anim.obj).  Likewise
- *    blit_sprite (1000:942a) is anim.c's anim_blit_sprite_leaf.  The font/BGI-overlay
- *    text leaves draw_text_at forwards to — FUN_1000_9837 (1000:9837, a thunk to the
- *    text-clip overlay FUN_1ab9_1441) and FUN_1000_9804 (1000:9804, a thunk to
- *    draw_string_glyphs) — have no reconstructed callable symbol (BGI overlay text,
- *    not decompiled), so they are kept as faithful-signature no-op stubs HERE.
+ *    blit_sprite (1000:942a) is anim.c's anim_blit_sprite_leaf.  The BGI-overlay
+ *    text leaves draw_text_at forwards to — FUN_1000_9837 (1000:9837, a thunk to
+ *    overlay 1ab9:1441 = SET TEXT POSITION) and FUN_1000_9804 (1000:9804, a thunk
+ *    to 1ab9:13ec = DRAW STRING / draw_string_glyphs) — are self-modifying overlay
+ *    code with no decomp; the default build keeps faithful-signature no-op stubs
+ *    HERE, the playable build routes them to host_render.c's host text model.
  *    RECONSTRUCTION FIDELITY: these leaves preserve each call site 1:1 without
  *    re-driving the BGI overlay / Phase-0 render core; their observable output (the
  *    render_descriptor_ptr view struct + the p1_sprite blit descriptor) IS produced
@@ -166,23 +215,43 @@ extern void run_n_frames(u8 n);             /* game_stubs.c 1000:05e7 */
 void show_highscore_screen(void);           /* 1000:5681 (T5) */
 void render_highscore_table(void);          /* 1000:57e1 (T5) */
 void highscore_enter_name(u8 row);          /* 1000:59d3 (T5) */
-u8   enter_highscore_name(u8 col, u8 row);  /* 1000:5c87 (T5) */
+u8   enter_password(u8 col, u8 row);  /* 1000:5c87 (T5) */
 void level_intro_screen(void);              /* 1000:3852 (T5) */
 void show_level_intro_screen(void);         /* 1000:0d9d (T5) */
 u16  draw_name_entry_cursor(u8 col, u8 row, u16 frame, char do_blit); /* 1000:5fdb */
 
 /* render/text leaves (see header block).  FUN_80ac / blit_sprite are anim.c's
-   faithful-signature stubs (the SAME engine fns); the font leaves are stubbed here. */
+   faithful-signature stubs (the SAME engine fns); the BGI text leaves live here.
+   (2026-07-02 misnomer fix: these were previously named text_clip_leaf_9837(clip_w,
+   clip_h) / draw_string_glyphs_9804(x,y) — WRONG semantics.  The overlay disasm:
+   1000:9837 -> 1ab9:1441 = SET TEXT POSITION (stores x/y to DGROUP 0x6942/0x6944);
+   1000:9804 -> 1ab9:13ec = DRAW STRING (walks the NUL-terminated far string at
+   str_seg:str_off; per char an 8-wide 1-bpp glyph from the DDFNT2.CAR font object
+   bound at DGROUP 0x68a2 is blitted at the current text position, which advances
+   by glyph width + font[4] per char).  The call-site arg ROUTING was already 1:1
+   (9837 gets args 3/4, 9804 gets args 1/2) — only the names were wrong.) */
 void anim_render_leaf_80ac(u8 __far *view);       /* FUN_1000_80ac  1000:80ac (anim.obj) */
 void anim_blit_sprite_leaf(u16 obj_off, u16 obj_seg); /* blit_sprite 1000:942a (anim.obj) */
-void text_clip_leaf_9837(u16 clip_w, u16 clip_h); /* FUN_1000_9837  1000:9837 (BGI text)  */
-void draw_string_glyphs_9804(u16 x, u16 y);       /* FUN_1000_9804  1000:9804 (BGI glyphs) */
+void bgi_set_text_pos_9837(u16 x, u16 y);              /* 1000:9837 -> 1ab9:1441 */
+void bgi_draw_string_9804(u16 str_off, u16 str_seg);   /* 1000:9804 -> 1ab9:13ec */
 
+#ifdef BUMPY_PLAYABLE
+/* Playable build: route to the host text primitives (host_render.c) — the text
+ * position pair models DGROUP 0x6942/0x6944, the string walk + glyph blit models
+ * overlay 1ab9:13ec/13bc/1607 with the runtime-loaded DDFNT2.CAR font.
+ * RECONSTRUCTION FIDELITY: see host_render.c (fg/bg = the engine's session text
+ * colours 14/1, set by init_game_session_state via set_text_color / 1000:97c5). */
+extern void host_text_set_pos(u16 x, u16 y);              /* host/host_render.c */
+extern void host_text_draw_string(u16 str_off, u16 str_seg);
+void bgi_set_text_pos_9837(u16 x, u16 y)            { host_text_set_pos(x, y); }
+void bgi_draw_string_9804(u16 str_off, u16 str_seg) { host_text_draw_string(str_off, str_seg); }
+#else
 /* RECONSTRUCTION FIDELITY: BGI-overlay text leaves — faithful-signature no-op stubs
-   (no clean decomp; do not invent a body).  draw_text_at's call sites are preserved
-   1:1; the text pixels are the BGI overlay's, not modelled here. */
-void text_clip_leaf_9837(u16 clip_w, u16 clip_h) { (void)clip_w; (void)clip_h; return; }
-void draw_string_glyphs_9804(u16 x, u16 y)       { (void)x; (void)y; return; }
+   in the default build (self-modifying overlay; no clean decomp).  draw_text_at's
+   call sites are preserved 1:1; the text pixels are the BGI overlay's. */
+void bgi_set_text_pos_9837(u16 x, u16 y)            { (void)x; (void)y; return; }
+void bgi_draw_string_9804(u16 str_off, u16 str_seg) { (void)str_off; (void)str_seg; return; }
+#endif
 
 /* DS-stamped far-data segment for the HUD view descriptor (+0x12).  Default = the
    Ghidra static DGROUP segment 0x203b; the host harness overrides to the captured
@@ -198,16 +267,17 @@ extern u16 host_dgroup_seg(void);   /* host_render.c — loaded image's real DGR
 
 /* ════════════════════════════════════════════════════════════════════════════
  *  draw_text_at — 1000:07f0
- *  Render a string at (x:y) with a clip extent (clip_w, clip_h): set the text clip
- *  rect (FUN_9837) then draw the glyphs (FUN_9804).  Called by draw_number with the
- *  formatted-string far ptr in (x,y) and the caller's two trailing args in
- *  (clip_w, clip_h).  Disasm 07f0: PUSH [BP+0xa];PUSH [BP+8];CALL 9837;
- *  PUSH [BP+6];PUSH [BP+4];CALL 9804.
+ *  Render the NUL-terminated string at str_seg:str_off at text position (x, y):
+ *  set the text position (FUN_9837 -> overlay 1ab9:1441, DGROUP 0x6942/0x6944)
+ *  then draw the glyph string (FUN_9804 -> overlay 1ab9:13ec).  Disasm 07f0:
+ *  PUSH [BP+0xa];PUSH [BP+8];CALL 9837;  PUSH [BP+6];PUSH [BP+4];CALL 9804 —
+ *  i.e. 9837(x=arg3, y=arg4) then 9804(str_off=arg1, str_seg=arg2).
+ *  (Args 3/4 were previously misnamed clip_w/clip_h — see the leaf block above.)
  * ════════════════════════════════════════════════════════════════════════════ */
-void draw_text_at(u16 x, u16 y, u16 clip_w, u16 clip_h)
+void draw_text_at(u16 str_off, u16 str_seg, u16 x, u16 y)
 {
-    text_clip_leaf_9837(clip_w, clip_h);
-    draw_string_glyphs_9804(x, y);
+    bgi_set_text_pos_9837(x, y);
+    bgi_draw_string_9804(str_off, str_seg);
     return;
 }
 
@@ -215,8 +285,8 @@ void draw_text_at(u16 x, u16 y, u16 clip_w, u16 clip_h)
  *  draw_number — 1000:0816
  *  Format the 32-bit value (val_hi:val_lo) as a right-justified, space-padded decimal
  *  string of `width` digits and draw it via draw_text_at; prints "OVER FLOW" if
- *  width >= 8.  Two trailing args (arg_a, arg_c) are forwarded to draw_text_at as its
- *  clip_w / clip_h.  Disasm 0816: pad digit_buf[0..width-1]=' '; digit_buf[width]=0;
+ *  width >= 8.  Two trailing args (arg_a, arg_c) are the TEXT POSITION (x, y)
+ *  forwarded to draw_text_at.  Disasm 0816: pad digit_buf[0..width-1]=' '; digit_buf[width]=0;
  *  per digit val/=10 (a8ee), rem=val_lo - quot*10 (aa14), digit_buf[width-1]=rem+'0'.
  * ════════════════════════════════════════════════════════════════════════════ */
 void draw_number(u16 val_lo, u16 val_hi, u8 width, u16 arg_a, u16 arg_c)
@@ -244,12 +314,19 @@ void draw_number(u16 val_lo, u16 val_hi, u8 width, u16 arg_a, u16 arg_c)
     } else {
         out_str = "OVER FLOW";                          /* s_OVER_FLOW @ DS:0x62e */
     }
-    /* The engine passes the string's near offset as draw_text_at's x (and DS/SS as y);
-       on the host the value is unused (draw_text_at's text leaves are stubbed) — the
-       formatted_number_buf contents ARE the validated output (semantic gate).  Cast via
-       `unsigned long` so the host 64-bit pointer narrows without a pointer-size warning;
-       in the 16-bit OW build out_str is a near char* and the cast is a plain truncation. */
+    /* The engine passes the digit string's far ptr (off, SS — a stack-local buf) plus
+       the caller's (x, y) text position to draw_text_at.  Playable: pass out_str's real
+       seg:off (formatted_number_buf is DGROUP-resident here, not SS — the documented
+       storage-class deviation above) so the live 9804 leaf can walk it.  Default build /
+       64-bit ctest host: the leaves are NOPs and the seg is unused — keep the old
+       pointer-narrowing cast so the 64-bit host build stays warning-free; the
+       formatted_number_buf contents remain the validated output (semantic gate). */
+#ifdef BUMPY_PLAYABLE
+    draw_text_at((u16)((u32)(const char __far *)out_str & 0xffffu),
+                 (u16)((u32)(const char __far *)out_str >> 16), arg_a, arg_c);
+#else
     draw_text_at((u16)(unsigned long)out_str, 0, arg_a, arg_c);
+#endif
     return;
 }
 
@@ -417,8 +494,8 @@ void draw_hud_composite(void)
  *      reconstructed; wait_keypress is game_stubs.c; FUN_75a2 stubbed here).  The host
  *      seeds the scripted input sequence (the captured FUN_75a2 return stream) so the
  *      menu / state-machine loops progress exactly as the engine did.
- *    show_highscore_screen / enter_highscore_name — TASK 5 (highscore); stubbed
- *      (show_highscore_screen owned by game_stubs.c — extern; enter_highscore_name
+ *    show_highscore_screen / enter_password — TASK 5 (highscore); stubbed
+ *      (show_highscore_screen owned by game_stubs.c — extern; enter_password
  *      stubbed here pending T5).
  *    play_intro_animation_loop / wait_50_frames — animation idle leaves, stubbed.
  *
@@ -562,9 +639,25 @@ void fun_7b4a_view_blit(u8 __far *view, u16 seg) { host_bgi_set_viewport(view, s
 #else
 void fun_7b4a_view_blit(u8 __far *view, u16 seg) { (void)view; (void)seg; }
 #endif
+/* fun_9410_set_sprite_table (1000:9410 → 1cec:2dd2 set_sprite_table_ptr): select the
+ * sprite draw page — cur_sprite_data := &sprite_table_base[arg] (DGROUP 0x5415;
+ * [0]=a200, [1]=a000, swapped by each present).  The UI screens bracket their draws
+ * with (0)…(1): the menu/highscore/pause UI draws onto slot 0 — the page the mode-11
+ * sync READS FROM — which is what erases the previous cursor wholesale each frame
+ * (the engine has NO cursor save-under).  Leaving this a NOP under the real
+ * page-flip present re-baked the stale arrow every frame (2026-07-02 regression). */
+#ifdef BUMPY_PLAYABLE
+void fun_9410_set_sprite_table(u16 arg)
+{
+    extern void host_set_draw_page(u8 index);   /* host/host_render.c */
+    host_set_draw_page((u8)arg);
+}
+#else
 void fun_9410_set_sprite_table(u16 arg) { (void)arg; }
-void play_intro_animation_loop(void) { }
-void wait_50_frames(void) { }
+#endif
+void play_intro_animation_loop(void) { }   /* PENDING: decompile 1000:... */
+/* wait_50_frames (1000:...): idle 50 (0x32) frame ticks via run_n_frames. */
+void wait_50_frames(void) { run_n_frames(0x32u); }
 
 /* ── DAC palette-mode dispatch + the reconstructed VGA-DAC handler ────────────────── */
 
@@ -694,9 +787,12 @@ void play_iris_wipe_transition(void)
         for (clear_idx = 0; clear_idx < 0x32; clear_idx = clear_idx + 1) {
             blank_tiles[clear_idx] = 0;
         }
-        /* FUN_7b93(&blank_tiles, SS, 0) — present the blanked tile strip. */
-        fun_7b93_present_blank((u16)(unsigned long)blank_tiles,
-                               SCREENS_DGROUP_RUNTIME_SEG, 0);
+        /* FUN_7b93(&blank_tiles, SS, 0) — present the blanked tile strip.
+           RECONSTRUCTION FIDELITY: the original passes the STACK segment (unaff_SS)
+           for this stack-local buffer; passing DGROUP here read a garbage palette
+           (blank_tiles' SS offset interpreted in DGROUP) so the iris fade staged a
+           non-black palette.  Use blank_tiles' real far segment/offset. */
+        fun_7b93_present_blank(FP_OFF(blank_tiles), FP_SEG(blank_tiles), 0);
     }
     fun_7bca_flip(0);
     wait_vretrace_thunk();
@@ -936,6 +1032,15 @@ u8 run_main_menu(void)
         *p = 0x30;
         p[1] = (u16)cursor_index * 0x10 + 0x70;
         anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
+#ifdef BUMPY_PLAYABLE
+        /* Host: the engine's p1_sprite obj has no DGROUP backing bound pre-level, so
+           anim_blit_sprite_leaf NOPs here.  Blit the cursor arrow (FLECHE frame 0) from
+           the dedicated host cursor bank at the same (x,y) instead. */
+        {
+            extern void host_blit_cursor(u16 x, u16 y);   /* host_render.c */
+            host_blit_cursor(0x30u, (u16)((u16)cursor_index * 0x10u + 0x70u));
+        }
+#endif /* BUMPY_PLAYABLE */
         wait_vretrace_thunk();
         poll_input();
         if (((input_state & 1) == 0) || (cursor_index == 0)) {
@@ -981,7 +1086,7 @@ u8 run_main_menu(void)
  *  show_menu_select_screen — 1000:0f7a
  *  Display fullscreen image (resource 3) + palette, render three text rows as sprite
  *  glyphs (via the p1_sprite descriptor + blit_sprite per glyph), set current_level
- *  from enter_highscore_name() (default 1 if 0), then animate a few frames.
+ *  from enter_password() (default 1 if 0), then animate a few frames.
  *
  *  RECONSTRUCTION FIDELITY: the three text-row source strings live in SS-local arrays
  *  the engine fmemcpy's from DGROUP; reconstructed here as DGROUP-extern row tables the
@@ -1002,6 +1107,25 @@ void show_menu_select_screen(void)
     u8   col_pos;
     const u8 *third_row;
 
+#ifdef BUMPY_PLAYABLE
+    /* RECONSTRUCTION FIDELITY — menu-select text rows.  The engine fmemcpy's three
+     * loader-relocated far pointers (DGROUP 0x11a2/0x11a6/0x11aa → the strings at
+     * DGROUP 0x12f5/0x1309/0x1318) into SS-locals, then draws each char as a sprite
+     * glyph (frame = char + 0x175).  The reconstruction keeps the row buffers as module
+     * globals and fills them here from the SAME DGROUP string literals — the relocated
+     * far pointers can't be statically embedded (same rationale as
+     * init_highscore_default_table).  Without this row1 stayed zero-filled and drew 19×
+     * the char-0 glyph (an orb) instead of "ENTER YOUR PASSWORD". */
+    {
+        static const char r1[0x13]  = "ENTER YOUR PASSWORD";   /* DGROUP 0x12f5 */
+        static const char r3a[0x0e] = " PASSWORD OK  ";         /* DGROUP 0x1309 (match) */
+        static const char r3b[0x0e] = "PASSWORD ERROR";         /* DGROUP 0x1318 (no match) */
+        u8 i;
+        for (i = 0; i < 0x13u; i++) { menu_select_row1[i]  = (u8)r1[i]; }
+        for (i = 0; i < 0x0eu; i++) { menu_select_row3a[i] = (u8)r3a[i]; }
+        for (i = 0; i < 0x0eu; i++) { menu_select_row3b[i] = (u8)r3b[i]; }
+    }
+#endif
     set_resource_table(0x928, SCREENS_DGROUP_RUNTIME_SEG);
     fun_9410_set_sprite_table(0);
     fullscreen_img_buf   = fullscreen_buf;
@@ -1016,6 +1140,18 @@ void show_menu_select_screen(void)
     fun_7b93_present_blank(fullscreen_buf, fullscreen_buf_seg, 0);
     fun_7bca_flip(0);
     wait_vretrace_thunk();
+    /* show_menu_select composes NO background (unlike show_highscore_screen's
+     * restore_bg_view): it draws "ENTER YOUR PASSWORD" + the entry field as sprite
+     * glyphs over a screen that is BLACK by the time it draws.  That clean-black is
+     * the engine's own doing: play_iris_wipe_transition() above drives the geometric
+     * rect-fill iris (bgi_init_viewport 1ab9:0179 → the 1ab9:0000 secondary dispatcher
+     * → 0x4dcc[0]=1ab9:002b solid black rect fill, now reconstructed in
+     * host_bgi_set_viewport), whose shrinking outline rings tile the whole 20×25 view
+     * to black.  No separate host clear is needed — capture-confirmed 2026-07-05 that
+     * the iris alone clears the code screen (nonzero VGA bytes 1799, vs 36921 for the
+     * old un-cleared menu bleed).  (An earlier reconstruction inserted an invented
+     * host_vga_clear_display() here on the mistaken premise that the iris was a
+     * palette-only blank and fun_7b4a a null no-op; the real primitive supersedes it.) */
     /* row 1 (19 glyphs) at y=0x10. */
     col_pos = 0;
     p = (u16 __far *)p1_sprite;
@@ -1038,11 +1174,11 @@ void show_menu_select_screen(void)
         anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
         col_pos = col_pos + 1;
     }
-    /* current_level = enter_highscore_name(col=0xa, row=7); default 1 + pick the third
+    /* current_level = enter_password(col=0xa, row=7); default 1 + pick the third
        row.  Disasm 0f7a@112d: PUSH 7; PUSH 0xa; CALL 5c87 (C right-to-left → col=0xa,
-       row=7).  enter_highscore_name is now ported (T5); its captured return is the
+       row=7).  enter_password is now ported (T5); its captured return is the
        table-match index. */
-    current_level = enter_highscore_name(0xa, 7);
+    current_level = enter_password(0xa, 7);
     if (current_level == 0) {
         third_row = menu_select_row3b;
         current_level = 1;
@@ -1077,7 +1213,7 @@ void show_menu_select_screen(void)
  *    show_highscore_screen      1000:5681
  *    render_highscore_table     1000:57e1
  *    highscore_enter_name       1000:59d3   (the 8-char table-row name entry SM)
- *    enter_highscore_name       1000:5c87   (the 6-char menu-select name entry SM)
+ *    enter_password       1000:5c87   (the 6-char menu-select name entry SM)
  *    draw_name_entry_cursor     1000:5fdb   (the shared cursor draw helper)
  *    level_intro_screen         1000:3852   (the per-level intro + move loop)
  *    show_level_intro_screen    1000:0d9d   (the level-name sprite-glyph screen)
@@ -1086,7 +1222,7 @@ void show_menu_select_screen(void)
  *  documented player/items/anim/sound/T3/T4 convention).
  *
  *  ── NAME-ENTRY STATE MACHINES (the SEMANTIC gate) ──────────────────────────────
- *  highscore_enter_name (59d3) and enter_highscore_name (5c87) are the interactive
+ *  highscore_enter_name (59d3) and enter_password (5c87) are the interactive
  *  text-input loops: each polls the engine's ONE input primitive FUN_1000_75a2
  *  (DIRECTLY, not via poll_input), and on the action bits 1=left / 2=right (cycle the
  *  current letter through 0x1ad..0x1cf) / 4=prev char / 8=next char / 0x10=done builds
@@ -1095,10 +1231,10 @@ void show_menu_select_screen(void)
  *  (the v3 input script) through fun_75a2_poll_action in FIFO lockstep — the engine's
  *  real input path — so the cursor walk + name-buffer edits reproduce host-side.  The
  *  validated SEMANTIC output is the screen-global SCRSNAP (incl. the 0x8f0 row-0 entry)
- *  + the AX return (enter_highscore_name's table-match index / void AL leftover).
+ *  + the AX return (enter_password's table-match index / void AL leftover).
  *    - highscore_enter_name (59d3): edits the 8-char name string the table row points
  *      at (highscore_entry_ptr = 0x203b:(row*8+0x8f0); the string is at *that ptr).
- *    - enter_highscore_name (5c87): edits a 6-char SS-LOCAL buffer (fmemcpy'd from
+ *    - enter_password (5c87): edits a 6-char SS-LOCAL buffer (fmemcpy'd from
  *      DGROUP 0x256a), then on 0x10 compares it against the 8-entry name table at
  *      DGROUP 0x135c and returns the matched index + 2 (or 0).  RECONSTRUCTION
  *      FIDELITY: the SS-local buffer is reconstructed as a module-static array so the
@@ -1138,36 +1274,270 @@ extern void p1_advance_grid_history(void);        /* game_stubs.c            */
 extern u8   get_key_state(u8 scancode);           /* input.c   1000:7ab4    */
 extern u16  p1_pixel_x;                            /* entity.c / level state  */
 extern u16  p1_pixel_y;                            /* "                       */
-extern u16  p1_start_x;                            /* level.c                 */
-extern u16  p1_start_y;                            /* level.c                 */
-extern u8   p1_move_anim;                          /* entity.c / level.c      */
+extern u16  p1_start_x;                            /* level.c — DGROUP 0x791c word */
+extern u16  p1_start_y;                            /* level.c — DGROUP 0x791e word */
+extern u16  p1_move_anim;                          /* player.c — WORD @0x824a  */
 extern u8   current_entity_index;                  /* level.c   0x...         */
 
-/* ── unowned level-intro gameplay leaves / globals (no other src def) — faithful-
- *    signature stubs reconstructed HERE so level_intro_screen's 1:1 call sites resolve.
- *    RECONSTRUCTION FIDELITY: the per-level move/anim subsystem is not modelled by the
- *    front-end gate; these preserve each call site without re-driving it. */
+/* ── overworld/level-intro movement + animation subsystem (1000:3a88..3cf7) ────────
+ *    Reconstructed 1:1 from the Ghidra decomp.  level_intro_screen (the overworld map
+ *    navigation screen) auto-walks Bumpy node-to-node via these move-descriptor steps,
+ *    animates the map nodes (play_anim_sequence), and starts a level (intro_start_level).
+ *    Data tables (move_descriptor_table / anim_coord_table_ptr) are loaded per-level by
+ *    start_level (level.c) from the binary's per-level pointer tables. */
+extern void erase_p1_view(void);                  /* player.c 1000:... */
+extern void rotate_timing_flags_and_wait(void);   /* host_video.c / game_stubs */
+extern s16  p1_grid_x_new;                         /* player.c */
+extern s16  p1_grid_y_new;                         /* player.c */
+extern u8 __far *move_descriptor_table;            /* level.c 0x8246 — per-level entry list */
+extern u8   saved_entity_index;                    /* defined below (DGROUP) */
+
+void compute_move_descriptor_ptr(void);
 void p1_move_step_up(void);
 void p1_move_step_down(void);
 void p1_move_step_left(void);
 void p1_move_step_right(void);
-void draw_icon_row(void);
+void p1_animate_frame(void);
+void draw_anim_seq_frame(void);
+void p1_compute_grid_from_pixel(void);
 void play_anim_sequence(void);
-void compute_move_descriptor_ptr(void);
+void draw_icon_row(void);
 u8   intro_start_level(void);
 
-void p1_move_step_up(void)            { }
-void p1_move_step_down(void)          { }
-void p1_move_step_left(void)          { }
-void p1_move_step_right(void)         { }
-void draw_icon_row(void)              { }
-void play_anim_sequence(void)         { }
-void compute_move_descriptor_ptr(void){ }
-/* intro_start_level (1000:3cf7) returns did_start (1 when the level begins); the fire
-   branch exits level_intro_screen's loop on its non-zero return.  Reconstructed as a
-   faithful-signature stub returning 1 (the per-level move-script execution it performs
-   is a separate gameplay subsystem, not the front-end screen build). */
-u8   intro_start_level(void)          { return 1; }
+/* runtime move-descriptor cursor (DGROUP 0x9baa/0x9bac) — far ptr into the per-level
+ * move_descriptor_table for entity current_entity_index (9-byte stride). */
+u16 move_descriptor_ptr;        /* DGROUP 0x9baa — offset */
+u16 move_descriptor_ptr_seg;    /* DGROUP 0x9bac — segment */
+/* per-level anim-coordinate table far ptr (DGROUP 0x8554/0x8556), set by start_level. */
+u16 anim_coord_table_ptr;       /* DGROUP 0x8554 — offset of the {x,y} coord table */
+u16 anim_coord_table_seg;       /* DGROUP 0x8556 — segment */
+
+/* compute_move_descriptor_ptr (1000:3a88): far ptr to move_descriptor_table entry for
+ * current_entity_index (9-byte stride). */
+void compute_move_descriptor_ptr(void)
+{
+    move_descriptor_ptr     = (u16)((u16)FP_OFF(move_descriptor_table)
+                                    + (u16)current_entity_index * 9u);
+    move_descriptor_ptr_seg = (u16)FP_SEG(move_descriptor_table);
+}
+
+/* p1_move_step_{up,down,left,right} (1000:3ab2/3b0f/3b6c/3bc9): move-descriptor fields
+ * 1/3/5/7 hold the next-node anim id; if nonzero, step Bumpy 4px N times (N = field
+ * 2/4/6/8 >> 2) toward that direction, re-animating each step.  The loop count/anim id
+ * are read from the ORIGINAL descriptor (saved before compute_move_descriptor_ptr
+ * re-points move_descriptor_ptr to the new node). */
+void p1_move_step_up(void)
+{
+    u8 __far *desc = (u8 __far *)MK_FP(move_descriptor_ptr_seg, move_descriptor_ptr);
+    u8 step_count = desc[1];
+    if (step_count != 0) {
+        current_entity_index = step_count;
+        compute_move_descriptor_ptr();
+        for (step_count = (u8)(desc[2] >> 2); step_count != 0; step_count--) {
+            p1_pixel_y = p1_pixel_y - 4;
+            p1_animate_frame();
+        }
+    }
+}
+
+void p1_move_step_down(void)
+{
+    u8 __far *desc = (u8 __far *)MK_FP(move_descriptor_ptr_seg, move_descriptor_ptr);
+    u8 step_count = desc[3];
+    if (step_count != 0) {
+        current_entity_index = step_count;
+        compute_move_descriptor_ptr();
+        for (step_count = (u8)(desc[4] >> 2); step_count != 0; step_count--) {
+            p1_pixel_y = p1_pixel_y + 4;
+            p1_animate_frame();
+        }
+    }
+}
+
+void p1_move_step_left(void)
+{
+    u8 __far *desc = (u8 __far *)MK_FP(move_descriptor_ptr_seg, move_descriptor_ptr);
+    u8 step_count = desc[5];
+    if (step_count != 0) {
+        current_entity_index = step_count;
+        compute_move_descriptor_ptr();
+        for (step_count = (u8)(desc[6] >> 2); step_count != 0; step_count--) {
+            p1_pixel_x = p1_pixel_x - 4;
+            p1_animate_frame();
+        }
+    }
+}
+
+void p1_move_step_right(void)
+{
+    u8 __far *desc = (u8 __far *)MK_FP(move_descriptor_ptr_seg, move_descriptor_ptr);
+    u8 step_count = desc[7];
+    if (step_count != 0) {
+        current_entity_index = step_count;
+        compute_move_descriptor_ptr();
+        for (step_count = (u8)(desc[8] >> 2); step_count != 0; step_count--) {
+            p1_pixel_x = p1_pixel_x + 4;
+            p1_animate_frame();
+        }
+    }
+}
+
+/* p1_animate_frame (1000:3c26): advance Bumpy one animation frame on the map. */
+void p1_animate_frame(void)
+{
+    p1_advance_grid_history();
+    p1_update_grid_cell();
+    erase_p1_view();
+    render_p1_view();
+    draw_p1_sprite();
+    present_frame(1);
+    rotate_timing_flags_and_wait();
+}
+
+/* draw_anim_seq_frame (1000:3c9d): set p1_sprite x/y from the anim coord table indexed
+ * by (current_entity_index-1), z=0x1da, then blit.  Coord entry = {x word, y word}. */
+void draw_anim_seq_frame(void)
+{
+    u8 __far *act = (u8 __far *)MK_FP(anim_coord_table_seg, anim_coord_table_ptr);
+    u16 idx = (u16)(current_entity_index - 1);
+    if (p1_sprite == (u8 __far *)0) {
+        return;   /* default build: sprite objs never bound (init_sprite_structs is a
+                     stub carve-out) — guard like draw_icon_row, don't store to 0000:xxxx */
+    }
+    *(u16 __far *)(p1_sprite + 4) = 0x1dau;
+    *(u16 __far *)(p1_sprite + 0) = (u16)(*(u16 __far *)(act + idx * 4u) - 1u);
+    *(u16 __far *)(p1_sprite + 2) = *(u16 __far *)(act + idx * 4u + 2u);
+    anim_blit_sprite_leaf(0x792eu, SCREENS_DGROUP_RUNTIME_SEG);   /* blit_sprite(0x792e,DS) */
+}
+
+/* p1_compute_grid_from_pixel (1000:3...): grid cell from pixel pos minus sprite origin,
+ * clamped to [0..0x12]/[0..0x16]. */
+void p1_compute_grid_from_pixel(void)
+{
+    s16 ox = *(s16 __far *)(p1_sprite + 0x14);
+    s16 oy = *(s16 __far *)(p1_sprite + 0x16);
+    p1_grid_x_new = (s16)((((s16)p1_pixel_x - ox) + 0xe) >> 4) - 1;
+    p1_grid_y_new = (s16)((((s16)p1_pixel_y - oy) - 10) >> 3);
+    if (p1_grid_x_new < 0) {
+        p1_grid_x_new = 0;
+    } else if (p1_grid_x_new > 0x12) {
+        p1_grid_x_new = 0x12;
+    }
+    if (p1_grid_y_new < 0) {
+        p1_grid_y_new = 0;
+    } else if (p1_grid_y_new > 0x16) {
+        p1_grid_y_new = 0x16;
+    }
+}
+
+/* play_anim_sequence (1000:3c4f): step current_entity_index from 1, drawing each anim
+ * frame, until the move-descriptor's [0] byte hits the -1 sentinel. */
+void play_anim_sequence(void)
+{
+    char at_sentinel = '\0';
+    saved_entity_index = current_entity_index;
+    current_entity_index = 1;
+    do {
+        u8 __far *mdp;
+        compute_move_descriptor_ptr();
+        mdp = (u8 __far *)MK_FP(move_descriptor_ptr_seg, move_descriptor_ptr);
+        if ((s8)mdp[0] == -1) {
+            at_sentinel = '\x01';
+        } else if (mdp[0] != 0) {
+            draw_anim_seq_frame();
+        }
+        current_entity_index = current_entity_index + 1;
+    } while (at_sentinel == '\0');
+}
+
+/* draw_icon_row (1000:6130): draw a horizontal row of `settle_countdown` HUD icon
+   sprites (frame 0x1aa, the '#'-item glyph) starting at x=0x50, step 8.  Writes x/y/frame
+   into the HUD blit obj at hud_icon_sprite_ptr (g_entity_dg+0x7986) and blits each via the
+   shared sprite leaf.  Reconstructed 1:1 from the decomp.  Loop count = DGROUP 0x791a =
+   settle_countdown — ONE engine byte (game_loop inits =5, '#' pickups ++, physics settle
+   --, this fn draws it); an earlier revision read a split-off sharp_item_counter copy that
+   stayed 0 → no icons ever (fixed 2026-07-02). */
+void draw_icon_row(void)
+{
+    extern u8 __far *hud_icon_sprite_ptr;   /* anim.c — HUD icon obj far ptr */
+    extern u8        settle_countdown;      /* game.c — DGROUP 0x791a */
+    u8 icon_idx;
+
+    if (hud_icon_sprite_ptr == (u8 __far *)0) {
+        return;   /* DG shadow not yet bound (pre-level) → nothing to draw */
+    }
+    *(u16 __far *)(hud_icon_sprite_ptr + 4) = 0x1aau;   /* +0x04 frame */
+    *(u16 __far *)(hud_icon_sprite_ptr + 2) = 0u;       /* +0x02 y     */
+    for (icon_idx = settle_countdown; icon_idx != 0u; icon_idx--) {
+        *(u16 __far *)(hud_icon_sprite_ptr + 0) = (u16)icon_idx * 8u + 0x50u;  /* +0x00 x */
+        anim_blit_sprite_leaf(0x7986u, SCREENS_DGROUP_RUNTIME_SEG);
+    }
+}
+/* intro_start_level (1000:3cf7): when fire is pressed on the level-intro screen and the
+   current node's descriptor flag is clear, walk Bumpy into the level entrance via the
+   0x1114 walk-in move script (22 steps), then begin the level (return 1).  If the node's
+   descriptor flag is already set (level done), return 0 (stay on the intro screen).
+   Reconstructed 1:1 from the decomp; the walk-in script data is in worldmap_data.c. */
+u8 intro_start_level(void)
+{
+    extern u8        game_mode;                    /* player.h */
+    extern u8        timing_flag_accumulator;      /* player.h — DGROUP 0x854f */
+    extern u8        p1_move_steps_left;           /* player.h */
+    extern u16 __far *p1_move_script;              /* player.h */
+    extern s16       sound_device_state;           /* DGROUP 0x689c */
+    extern void      play_sound(u8 sound_id);      /* game_stubs.c */
+    extern char      p1_step_scripted_move(void);  /* player.c 1000:13df */
+    extern u16 __far *intro_walk_script(void);     /* worldmap_data.c — 0x1114 walk-in */
+    u8 __far *desc;
+    u8 did_start = 0;
+
+    game_mode = 0;
+    p1_animate_frame();
+    p1_animate_frame();
+    compute_move_descriptor_ptr();
+    desc = (u8 __far *)MK_FP(move_descriptor_ptr_seg, move_descriptor_ptr);
+    if (*desc == 0u) {
+        play_sound((sound_device_state == 4) ? 0x28u : 3u);
+        timing_flag_accumulator = 0xaau;
+        p1_start_y = p1_pixel_y;
+        p1_start_x = p1_pixel_x;
+        p1_move_script    = intro_walk_script();    /* DGROUP 0x1114 */
+        p1_move_steps_left = 0x16u;                  /* 22 steps */
+        /* nudge to the entrance, draw the pre-walk frame, then restore */
+        p1_pixel_x = (u16)(p1_pixel_x - 0xfu);
+        p1_pixel_y = (u16)(p1_pixel_y + 3u);
+        p1_move_anim = 0xcbu;
+        erase_p1_view();
+        draw_p1_sprite();
+        render_p1_view();
+        p1_pixel_x = (u16)(p1_pixel_x + 0xfu);
+        p1_pixel_y = (u16)(p1_pixel_y - 3u);
+        p1_move_anim = 0u;
+        p1_advance_grid_history();
+        p1_compute_grid_from_pixel();
+        draw_p1_sprite();
+        present_frame(1);
+        rotate_timing_flags_and_wait();
+        erase_p1_view();
+        render_p1_view();
+        draw_p1_sprite();
+        present_frame(1);
+        rotate_timing_flags_and_wait();
+        do {
+            p1_advance_grid_history();
+            p1_step_scripted_move();
+            p1_update_grid_cell();
+            erase_p1_view();
+            render_p1_view();
+            draw_p1_sprite();
+            present_frame(1);
+            rotate_timing_flags_and_wait();
+        } while (p1_move_steps_left != 0u);
+        wait_50_frames();
+        did_start = 1;
+    }
+    return did_start;
+}
 
 /* level-intro saved/scratch globals (no other src TU defines them — owned here). */
 u8   saved_timing_flag;     /* DGROUP — saved timing_flag_accumulator across the intro  */
@@ -1186,10 +1556,49 @@ u16 __far *highscore_entry_ptr;   /* DGROUP 0x8574/0x8576 -> the 8-byte table en
 u16 highscore_new_name_off;   /* DGROUP 0x0920 */
 u16 highscore_new_name_seg;   /* DGROUP 0x0922 */
 
-/* the 8-entry 6-char name table enter_highscore_name compares the typed name against
- *  (DGROUP 0x135c, stride 4 = a far ptr per entry).  Owned here; harness-seeded (under
- *  the boot it is the engine's default-initials table). */
-u16 highscore_name_table[8 * 2];   /* DGROUP 0x135c (8 × far ptr = off/seg pairs) */
+/* ── password / level-code table (DGROUP 0x135c) ──────────────────────────────
+ *  The 8 six-char level PASSWORDS enter_password compares the typed code against.
+ *  DGROUP 0x135c is an 8-entry far-ptr table → the 6-char strings at DGROUP 0x256e
+ *  (stride 7), decoded 1:1 from the unpacked EXE (verified: table[i] → ACCESS,
+ *  BUTTON, ISLAND, PRETTY, WINNER, ZOMBIE, LOVELY, SYSTEM).  `matched index + 2` →
+ *  current_level, so ACCESS→2 … SYSTEM→9.
+ *
+ *  MISNOMER CORRECTED (2026-07-05): was named `highscore_name_table` — WRONG.  0x135c
+ *  is the PASSWORD table for the "ENTER YOUR PASSWORD" screen (show_menu_select_screen
+ *  → enter_password), NOT the high-score initials.  The high-score initials are the
+ *  separate 8-char table (BIG JIM./SUPER JO/… at DGROUP 0x11e6, used by
+ *  highscore_enter_name).  Renamed in Ghidra + here.
+ *
+ *  RECONSTRUCTION FIDELITY: same loader-relocated-far-ptr constraint as the HOF
+ *  default table (init_highscore_default_table) — the playable build POPULATES
+ *  password_table at startup via init_password_table (called from the playable main);
+ *  the default BUMPY.EXE keeps the zero-init storage (documented here + in Ghidra, not
+ *  run).  Without this the table was all-NULL, so every code mismatched → the screen
+ *  always returned 0 = "PASSWORD ERROR". */
+u16 password_table[8 * 2];   /* DGROUP 0x135c (8 × far ptr = off/seg pairs) */
+
+#ifdef BUMPY_PLAYABLE
+static const char s_pw_access[7] = "ACCESS";   /* DGROUP 0x256e → current_level 2 */
+static const char s_pw_button[7] = "BUTTON";   /* DGROUP 0x2575 → 3 */
+static const char s_pw_island[7] = "ISLAND";   /* DGROUP 0x257c → 4 */
+static const char s_pw_pretty[7] = "PRETTY";   /* DGROUP 0x2583 → 5 */
+static const char s_pw_winner[7] = "WINNER";   /* DGROUP 0x258a → 6 */
+static const char s_pw_zombie[7] = "ZOMBIE";   /* DGROUP 0x2591 → 7 */
+static const char s_pw_lovely[7] = "LOVELY";   /* DGROUP 0x2598 → 8 */
+static const char s_pw_system[7] = "SYSTEM";   /* DGROUP 0x259f → 9 */
+
+void init_password_table(void)
+{
+    static const char __far * const pw[8] = {
+        s_pw_access, s_pw_button, s_pw_island, s_pw_pretty,
+        s_pw_winner, s_pw_zombie, s_pw_lovely, s_pw_system };
+    u8 i;
+    for (i = 0; i < 8u; i = i + 1) {
+        password_table[i * 2]     = FP_OFF((const char __far *)pw[i]);
+        password_table[i * 2 + 1] = FP_SEG((const char __far *)pw[i]);
+    }
+}
+#endif /* BUMPY_PLAYABLE */
 
 /* the per-screen palette patch source render_highscore_table / show_highscore_screen /
  *  show_level_intro_screen copy when palette_mode==1 (DGROUP 0x71e — the same table the
@@ -1464,7 +1873,7 @@ void show_highscore_screen(void)
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
- *  enter_highscore_name — 1000:5c87
+ *  enter_password — 1000:5c87
  *  The interactive 6-char menu-select name-entry state machine.  fmemcpy a 6-char
  *  SS-local buffer from DGROUP 0x256a (reconstructed as the module-static
  *  enter_name_buf), seeds it to 'A', then loops polling FUN_75a2 (same letter-cycle /
@@ -1475,7 +1884,7 @@ void show_highscore_screen(void)
  * ════════════════════════════════════════════════════════════════════════════ */
 u8 enter_name_buf[6];   /* SS-local in the original; module-static here (RECON FIDELITY) */
 
-u8 enter_highscore_name(u8 col, u8 row)
+u8 enter_password(u8 col, u8 row)
 {
     u16 cur_letter;
     u8  blink_counter;
@@ -1585,8 +1994,8 @@ u8 enter_highscore_name(u8 col, u8 row)
     matched_idx = 0;
     idx = 0;
     while ((idx < 8) && (matched_idx == 0)) {
-        u8 __far *tbl = (u8 __far *)MK_FP(highscore_name_table[(u16)idx * 2 + 1],
-                                          highscore_name_table[(u16)idx * 2]);
+        u8 __far *tbl = (u8 __far *)MK_FP(password_table[(u16)idx * 2 + 1],
+                                          password_table[(u16)idx * 2]);
         mismatch = 0;
         cursor_pos = 0;
         while ((cursor_pos < 6) && (!mismatch)) {

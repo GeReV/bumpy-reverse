@@ -45,9 +45,11 @@ extern u8  level_exit_cell;             /* DGROUP 0x8572 — cell of the level e
 extern u8  level_complete_anim_counter; /* DGROUP 0x8550 — set 0xf2 on completion  */
 extern u8  p1_item_code;                /* DGROUP 0x79b8 — latched layer-C item byte*/
 
-/* Two further item-collection DGROUP bytes no other module owns (NOT part of the
-   semantic-state SNAP / replay gate — see items.c for their use & addresses): */
-extern u8  sharp_item_counter;          /* DGROUP 0x791a — '#'-item pickup counter  */
+/* Item-collection DGROUP byte no other module owns (NOT part of the semantic-state
+   SNAP / replay gate — see items.c for its use & address).  NOTE: the '#'-item
+   counter at DGROUP 0x791a is game.c's settle_countdown (one engine byte, four
+   users) — the former separate sharp_item_counter was a split-brain copy, unified
+   2026-07-02. */
 extern u8  collect_mode_2810;           /* DGROUP 0x2810 — p1_collect_item entry tag */
 
 /* ── the item/exit functions (T3 + T4 ported into items.c) ───────────────────── */

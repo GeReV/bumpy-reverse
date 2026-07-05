@@ -49,6 +49,7 @@
 #ifdef BUMPY_PLAYABLE
 #include "host/host.h"  /* host_tick — the relocated INT8-timing leaves spin on it */
 #include "screens.h"    /* timing_flag_accumulator (DGROUP 0x854f) */
+#include "dosio.h"      /* dosio_save — live per-tick diagnostic logger (below) */
 #endif
 
 /* init_view_anim_descriptors writes its view-descriptor far-ptr SEG halves as the
@@ -75,7 +76,13 @@ u8 frame_abort_flag;         /* DGROUP 0x928d (DAT_203b_928d) */
 u8  current_level_index;     /* DGROUP 0x7310 — 0-based level index (= current_level-1) */
 u8  palette_loaded;          /* DGROUP — set 0 by init, by apply_level_palette later   */
 u8  menu_option2_setting;    /* game_loop menu scratch */
-u8  settle_countdown;        /* game_loop per-round settle counter (init 5) */
+u8  settle_countdown;        /* DGROUP 0x791a — ONE engine byte, four users (unified
+                                2026-07-02; was split into settle_countdown +
+                                items.c sharp_item_counter → draw_icon_row always
+                                read 0 and '#' pickups never extended the counter):
+                                game_loop inits =5; '#' item pickup ++ (items.c);
+                                run_physics_settle -- (player.c); draw_icon_row
+                                draws that many icons (screens.c). */
 u16 score_lo;                /* score low word  */
 u16 score_hi;                /* score high word */
 u8  p2_move_state;           /* P2 launch state passed to p2_set_move_state */
@@ -137,11 +144,16 @@ u8        deferred_contact_buf[16];    /* DGROUP 0x0886 — the event buffer (he
  *       resets are performed here; the opaque remainder is collapsed into the
  *       documented reset_opaque_session_globals() stub (game_stubs.c) which
  *       records the exact decomp lines it stands in for.  DEVIATION — see the
- *       fidelity audit.
+ *       fidelity audit.  VERIFIED HARMLESS (audit 2026-06-28): every opaque reset,
+ *       including the six NON-zero defaults (0x6bc5=1, 0x6bc4=0x14, 0x6bf6=1,
+ *       0x6c26=1, 0x7316=0x6c, 0x6bc7=9), is read NOWHERE in the reconstruction, so
+ *       the collapse is behaviourally faithful (BSS-zero matches the zero defaults;
+ *       the non-zero ones are dead).  Reproducing them as ~46 named externs would
+ *       invent structure the binary does not document.
  *   (2) The hardware-setup sub-calls (init_timer_resource_table=7bad,
  *       init_sound_tables=7563, init_display_97a4=97a4 / init_display_97f1=97f1,
  *       init_crtc_window=set_crtc_window 9821, set_display_page=9814,
- *       set_palette_mode=97c5, set_resource_table, install_interrupt_handler,
+ *       set_text_color=97c5, set_resource_table, install_interrupt_handler,
  *       init_joystick_handlers, mouse_reset, set_disk_swap_callback) are audio/CRTC/
  *       resource hardware init that cannot run without the full game data + real DOS;
  *       they are genuine HARDWARE-INIT CARVE-OUT stubs in game_stubs.c.
@@ -161,18 +173,25 @@ void init_game_session_state(void)
     mouse_reset();
     init_sound_tables(0x4c00, 0x4cd0, 0x203b);    /* 1000:7563 init_sound_tables */
     init_misc_7bd7();                              /* 1000:7bd7 bgi_overlay_thunk_gfx_init */
-    init_display_97a4();                           /* 1000:97a4 init_display_controller_a */
+    init_display_97a4();                           /* 1000:97a4 thunk→detect_video_adapter (adapter probe); host folds the mode-0x0D set here */
     init_misc_7bbd(2);                             /* 1000:7bbd bgi_overlay_thunk_0232 */
-    init_display_97f1();                           /* 1000:97f1 init_display_controller_b */
-    init_crtc_window(0, 0, 0x13f, 199);            /* 1000:9821 set_crtc_window */
+    init_display_97f1();                           /* 1000:97f1 → 1ab9:137b bgi_draw_sequence (text pos/window/page/colour init) */
+    init_crtc_window(0, 0, 0x13f, 199);            /* 1000:9821 → 1ab9:1422 clip-window store (NO CRTC — see host_video.c) */
     set_display_page(1);                           /* 1000:9814 set_active_display_page */
-    set_palette_mode(0xe, 1);                       /* 1000:97c5 set_palette_display_mode */
+    set_text_color(0xe, 1);                        /* 1000:97c5 → 1ab9:1311/14ef: session text colours fg=14, bg=1 (disasm @1000:02f1) */
     set_resource_table(0x90, 0x203b);
 
+#ifndef BUMPY_PLAYABLE
     /* Set VGA mode 0x0D (320x200x16 EGA planar). DEVIATION: see header note —
-       the original does this inside the set_crtc_window (1000:9821) CRTC block;
-       surfaced here so the boot harness has an observable mode set. */
+       the original's mode set lives in the BGI driver initgraph (absent from the
+       corpus); surfaced here so the boot harness has an observable mode set.
+       PLAYABLE build: the mode set is folded into init_display_97a4 above —
+       repeating it HERE would reset the CRTC start address to 0 AFTER
+       init_display_97f1 programmed the 0x2000 boot page parity, inverting
+       `displayed == page[table[0]]` for the whole session (the 2026-07-03
+       menu-cursor hidden-page bug).  See host_video.c host_crtc_set_start. */
     video_set_mode_0d();
+#endif /* !BUMPY_PLAYABLE */
 
     /* The named, in-scope session-default resets (decomp lines 448-494). */
     current_level_index = 0;
@@ -284,6 +303,68 @@ void reset_game_state(void)
  * end-to-end harness (tools/int8_ctest.c) can drive one tick at a time.  No
  * statement is added, removed, or reordered.  Recorded in the fidelity audit.
  * ============================================================================ */
+#if defined(BUMPY_PLAYABLE) && defined(HOST_TICKLOG)
+/* ----------------------------------------------------------------------------
+ * HOST DIAGNOSTIC (playable-only, #ifdef BUMPY_PLAYABLE) — LIVE PER-TICK TRACE.
+ * Inert in the faithful build (default BUMPY.EXE) and in the int8 gate (neither
+ * defines BUMPY_PLAYABLE).  Not part of the decompilation.
+ *
+ * Records the same state fields the int8 differential trace captures, one 16-byte
+ * record per game_tick, into a 256-entry ring.  Every 64 ticks the whole ring is
+ * flushed to C:\TICKLOG.BIN (the mounted game dir -> local/build/capture/game/).
+ * Each record carries a tick counter [14..15] so the offline parser can reorder
+ * the wrapped ring and drop stale entries.  Purpose: catch the exact tick where
+ * position changes without a matching fresh input (the "spontaneous movement"),
+ * without needing the (bit-rotted) DOSBox original-capture harness.
+ *
+ * LAYOUT-NEUTRALITY (important): the 4 KB ring MUST live in FAR_DATA, NOT in the
+ * near DGROUP.  This host is DGROUP-layout-sensitive (the _dgroup_pal_patch_* /
+ * per-level pointer machinery); adding 4 KB of static BSS to DGROUP shifts every
+ * global linked after it and regressed level rendering to all-black (vganz=0).
+ * `__far` keeps the near-DGROUP image byte-identical to a build without the logger,
+ * so the diagnostic can never perturb the very state it is trying to observe.
+ * The flush therefore uses the streaming (far-buffer) dosio API, not dosio_save.
+ * -------------------------------------------------------------------------- */
+#define TICKLOG_RECS 256u
+#define TICKLOG_RECSZ 16u
+static u8 __far g_ticklog[TICKLOG_RECS * TICKLOG_RECSZ];
+static u16 g_ticklog_idx = 0;      /* next record slot (wraps) */
+static u16 g_ticklog_tick = 0;     /* monotonic tick counter (low 16 bits) */
+
+static void ticklog_record(void)
+{
+    u8 __far *r = g_ticklog + (u16)g_ticklog_idx * TICKLOG_RECSZ;
+    r[0]  = input_state;
+    r[1]  = game_mode;
+    r[2]  = prev_game_mode;
+    r[3]  = p1_cell;
+    r[4]  = (u8)(p1_pixel_x & 0xffu);
+    r[5]  = (u8)((p1_pixel_x >> 8) & 0xffu);
+    r[6]  = (u8)(p1_pixel_y & 0xffu);
+    r[7]  = (u8)((p1_pixel_y >> 8) & 0xffu);
+    r[8]  = p1_move_steps_left;
+    r[9]  = move_step_count;
+    r[10] = move_locked;
+    r[11] = p1_contact_code;
+    r[12] = p1_pending_action;
+    r[13] = current_level;
+    r[14] = (u8)(g_ticklog_tick & 0xffu);
+    r[15] = (u8)((g_ticklog_tick >> 8) & 0xffu);
+
+    g_ticklog_idx = (u16)((g_ticklog_idx + 1u) % TICKLOG_RECS);
+    g_ticklog_tick++;
+#ifndef TICKLOG_NOWRITE
+    if ((g_ticklog_tick & 0x3fu) == 0u) {
+        int fd = dosio_create("TICKLOG.BIN");   /* far-buffer streaming write */
+        if (fd >= 0) {
+            dosio_write(fd, g_ticklog, (u16)sizeof g_ticklog);
+            dosio_close(fd);
+        }
+    }
+#endif
+}
+#endif /* BUMPY_PLAYABLE */
+
 void game_tick(void)
 {
     u8 key;
@@ -321,6 +402,9 @@ void game_tick(void)
     if (key != 0) {
         show_pause_screen();
     }
+#if defined(BUMPY_PLAYABLE) && defined(HOST_TICKLOG)
+    ticklog_record();   /* host-only live per-tick trace (inert in faithful build) */
+#endif
 }
 
 void game_loop(void)
@@ -373,7 +457,11 @@ LAB_0c2c:
                     apply_level_palette();
                     present_frame(1);
                     run_n_frames(1);
-                    wait_keypress();
+#ifndef AUTOKEY
+                    wait_keypress();        /* level-entry 'press a key to begin' pause.
+                                               AUTOKEY (headless capture harness only)
+                                               skips this so captures reach gameplay. */
+#endif
                     p1_update_grid_cell();
                     p2_update_grid_cell();
                     p1_advance_grid_history();
@@ -425,7 +513,7 @@ LAB_0c2c:
  *       countdown = 0x0a;                    // re-arm the per-event delay
  *       p1_cell_prev = *deferred_contact_ptr;// the queued event's cell
  *       apply_contact_action(0x18);          // fire the deferred contact (1000:6a89)
- *       play_sound(sound_device_state==4 ? 0x11 : 0x0e);  // device-dependent id
+ *       play_sound(sound_device_state==4 ? 0x0e : 0x11);  // device-dependent id (==4 → 0x0e per disasm 62e6)
  *       deferred_contact_ptr++;              // advance to the next queued event
  *   else:
  *       countdown--;                         // still counting down
@@ -523,7 +611,13 @@ extern u8 __far *anim_a_clear_view;        /* anim.c 0x8c0 */
 extern u8 __far *anim_b_draw_view;         /* anim.c 0x8d0 */
 extern u8 __far *anim_a_erase_view;        /* anim.c 0x8d4 */
 extern u8 __far *anim_a_draw_view;         /* anim.c 0x8e0 */
-/* The four unnamed P2-side anim view descriptors (owned here). */
+extern u8 __far *anim_b_view0;             /* anim.c 0x8c8 — ALIAS of p2_anim_clear_view_8c8 */
+extern u8 __far *anim_b_view1;             /* anim.c 0x8cc — ALIAS of p2_anim_clear_view_8cc */
+/* The four unnamed P2-side anim view descriptors (owned here).  NOTE: 0x8c8/0x8cc
+ * are ALSO written by draw_anim_channels_b (anim.c anim_b_view0/anim_b_view1) — the
+ * recon carries two pointer names for the same engine descriptor, so BOTH names must
+ * be bound to the same slot (fixed 2026-07-02: anim_b_view0/1 were left NULL, so any
+ * active layer-B channel far-stored through 0000:xxxx). */
 u8 __far *p2_anim_clear_view_8c8;          /* DGROUP 0x8c8 — P2 anim clear/draw view (a) */
 u8 __far *p2_anim_clear_view_8cc;          /* DGROUP 0x8cc — P2 anim clear view (b)       */
 u8 __far *p2_anim_erase_view_8d8;          /* DGROUP 0x8d8 — P2 anim erase view (a)       */
@@ -606,6 +700,8 @@ void host_view_descriptors_init(void)
     anim_a_draw_view       = blk + 0x0au * HV_DESC_LEN;   /* anim.c    0x8e0 */
     p2_anim_clear_view_8c8 = blk + 0x0bu * HV_DESC_LEN;   /* game.c    0x8c8 */
     p2_anim_clear_view_8cc = blk + 0x0cu * HV_DESC_LEN;   /* game.c    0x8cc */
+    anim_b_view0           = p2_anim_clear_view_8c8;      /* anim.c    0x8c8 (same desc) */
+    anim_b_view1           = p2_anim_clear_view_8cc;      /* anim.c    0x8cc (same desc) */
     p2_anim_erase_view_8d8 = blk + 0x0du * HV_DESC_LEN;   /* game.c    0x8d8 */
     p2_anim_erase_view_8dc = blk + 0x0eu * HV_DESC_LEN;   /* game.c    0x8dc */
 }
@@ -637,19 +733,24 @@ void rotate_timing_flags_and_wait(void)
 }
 
 /* ── run_n_frames (1000:05e7) ───────────────────────────────────────────────────
- * Wait n frame ticks (relocated from src/host/host_timer.c — engine logic that
- * spins on the host_tick PRIMITIVE the INT8 ISR drives; the ISR itself stays in
- * host_timer.c).  The engine spins on tick_counter_a (DGROUP 0x54f6) instead; the
- * observable effect — one ISR period per iteration — is identical. */
+ * Wait n frame ticks.  1:1 with the engine (1000:05e7): `while (n) { wait_vretrace_
+ * thunk(); n--; }` — the engine paces each game frame on the VGA VERTICAL RETRACE
+ * (wait_vretrace_thunk -> 2036:0015 vsync poll, ~70 Hz for mode 0x0D), NOT on the
+ * ~500 Hz PIT/INT8 tick.
+ *
+ * RECONSTRUCTION FIDELITY (bug fix 2026-06-30): this previously spun on host_tick
+ * (the 500 Hz INT8 ISR primitive), which paced the game loop ~7x too fast (~333 fps
+ * vs the engine's ~35-70 fps) — the user-reported "movement too fast".  The host
+ * INT8 ISR (host_timer.c) is still installed and drives sound/BIOS-clock chaining at
+ * the engine's 500 Hz divisor; it is simply not the FRAME-pace source.  The decompiled
+ * engine run_n_frames calls wait_vretrace_thunk, so this is both the faithful and the
+ * correct behaviour. */
 void run_n_frames(unsigned char n)
 {
-    unsigned snap;
+    extern void wait_vretrace_thunk(void);   /* screens.c — 1000:9864 vsync wait */
 
     while (n != 0u) {
-        snap = host_tick;
-        while (host_tick == snap) {
-            /* tight spin — ISR fires within 1/500 s = 2 ms */
-        }
+        wait_vretrace_thunk();
         n--;
     }
 }

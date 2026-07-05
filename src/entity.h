@@ -271,4 +271,13 @@ void entity_draw_p2(u8 __huge *planes, const u8 __far *dg,
                     u8 __huge *bank, u32 bank_base_lin,
                     const sprite_view *view);
 
+#ifdef BUMPY_PLAYABLE
+/* Draw a host screen sprite (menu cursor / level-select) with an EXPLICIT frame-table
+   far ptr — used pre-level where no DGROUP sprite descriptor is bound.  See entity.c. */
+void entity_draw_screen_sprite(u8 __huge *planes, u16 pixel_x, u16 pixel_y, u16 frame,
+                               u16 ftbl_off, u16 ftbl_seg,
+                               u8 __huge *bank, u32 bank_base_lin,
+                               const sprite_view *view);
+#endif /* BUMPY_PLAYABLE */
+
 #endif /* ENTITY_H */

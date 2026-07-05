@@ -56,12 +56,32 @@ extern u16 fullscreen_buf_seg;            /* DGROUP 0x7928 — seg      */
  *  advances; observed in the screen SNAP. */
 extern u8  timing_flag_accumulator;       /* DGROUP 0x854f */
 
-/* highscore name-entry buffer (DGROUP 0x8f0): the highscore table's name strings, 8
- *  bytes per entry; row N starts at 0x8f0 + N*8.  highscore_enter_name / enter_highscore_
- *  name edit it in place.  The SNAP captures row 0 (8 bytes).  Sized for 16 table rows. */
-#define HIGHSCORE_NAME_LEN     8
-#define HIGHSCORE_TABLE_ROWS   16
+/* highscore_name_buf (DGROUP 0x8f0): storage for g_highscore_default_table — the 7-entry
+ *  DEFAULT high-score table (Ghidra: HighScoreEntry[7]).  Each 8-byte entry is
+ *  { char __far *name (name_off:u16 + name_seg:u16, loader-relocated); u32 score }: a far
+ *  ptr to the 8-char name + the 32-bit points.  render_highscore_table draws it and, when
+ *  the current score qualifies, shifts the lower rows down + inserts a placeholder;
+ *  highscore_enter_name edits the inserted row's name in place.  Row N = 0x8f0 + N*8; the
+ *  SNAP captures row 0 (8 bytes).  The table ends exactly at 0x928 (the resource-table base)
+ *  — i.e. 7 entries (56 bytes), NOT 16, and NOT a blank name-entry scratch. */
+#define HIGHSCORE_NAME_LEN     8    /* bytes per entry (also the 8-char name length) */
+#define HIGHSCORE_TABLE_ROWS   7    /* g_highscore_default_table has 7 entries (0x8f0..0x928) */
 extern u8  highscore_name_buf[HIGHSCORE_NAME_LEN * HIGHSCORE_TABLE_ROWS];  /* DGROUP 0x8f0 */
+
+#ifdef BUMPY_PLAYABLE
+/* init_highscore_default_table — populate highscore_name_buf with the 7 built-in default
+ *  high scores.  RECONSTRUCTION FIDELITY: the original stores g_highscore_default_table as
+ *  loader-relocated STATIC data (the DOS EXE loader fixes up each entry's name far ptr); the
+ *  recon cannot statically embed relocated far pointers into the byte storage, so the
+ *  playable build fills the table at startup (same pattern as init_move_scripts /
+ *  init_worldmap_data / init_anim_data).  The default BUMPY.EXE keeps the zero-init storage. */
+void init_highscore_default_table(void);
+
+/* init_password_table — populate password_table (DGROUP 0x135c) with the 8 six-char level
+ *  passwords (ACCESS/BUTTON/ISLAND/PRETTY/WINNER/ZOMBIE/LOVELY/SYSTEM).  Same
+ *  loader-relocated-far-ptr constraint as the HOF table; playable build only. */
+void init_password_table(void);
+#endif
 
 /* formatted_number_buf: the ASCII scratch the number formatters (draw_number 0x816 /
  *  draw_number_sprites 0x603d) build the decimal/score digits into before blitting them.
@@ -87,14 +107,14 @@ extern char formatted_number_buf[FORMATTED_NUMBER_LEN];
  *  remaining screen fns (title/menu/highscore/intro — T4/T5) stay stubbed in
  *  game_stubs.c with their own faithful-signature declarations until ported. */
 
-/* draw_text_at (1000:07f0): set the text clip rect then draw the glyph string at (x,y).
- *  The two trailing args are the clip extent (clip_w, clip_h); draw_number passes the
- *  formatted-string far ptr in (x,y). */
-void draw_text_at(u16 x, u16 y, u16 clip_w, u16 clip_h);
+/* draw_text_at (1000:07f0): set the text position (x, y) (overlay 1ab9:1441 → DGROUP
+ *  0x6942/0x6944) then draw the NUL-terminated glyph string at str_seg:str_off
+ *  (overlay 1ab9:13ec).  (Fixed 2026-07-02: args 3/4 were misnamed clip_w/clip_h.) */
+void draw_text_at(u16 str_off, u16 str_seg, u16 x, u16 y);
 
 /* draw_number (1000:0816): format the 32-bit value (val_hi:val_lo) as a right-justified,
  *  space-padded decimal string of `width` digits ("OVER FLOW" if width>=8) into
- *  formatted_number_buf and draw it via draw_text_at (arg_a/arg_c → clip_w/clip_h). */
+ *  formatted_number_buf and draw it via draw_text_at (arg_a/arg_c = text position x/y). */
 void draw_number(u16 val_lo, u16 val_hi, u8 width, u16 arg_a, u16 arg_c);
 
 /* draw_number_sprites (1000:603d): render `width` right-justified decimal digit SPRITES
@@ -129,7 +149,7 @@ void show_title_and_init(void);
 u8 run_main_menu(void);
 
 /* show_menu_select_screen (1000:0f7a): fullscreen image (resource 3) + three sprite-glyph
- *  text rows; current_level = enter_highscore_name() (default 1). */
+ *  text rows; current_level = enter_password() (default 1). */
 void show_menu_select_screen(void);
 
 /* play_iris_wipe_transition (1000:3467): the rectangle-wipe screen transition — step the
@@ -163,10 +183,10 @@ void render_highscore_table(void);
  *  machine (polls FUN_75a2; left/right cycle letters, prev/next move the cursor). */
 void highscore_enter_name(u8 row);
 
-/* enter_highscore_name (1000:5c87): the interactive 6-char menu-select name-entry state
+/* enter_password (1000:5c87): the interactive 6-char menu-select name-entry state
  *  machine; compares the typed name vs the 8-entry table and returns the matched index
  *  + 2 (or 0).  Args: col (x), row (y). */
-u8 enter_highscore_name(u8 col, u8 row);
+u8 enter_password(u8 col, u8 row);
 
 /* draw_name_entry_cursor (1000:5fdb): position + draw the blinking name-entry cursor
  *  sprite at (col,row) with glyph `frame`; the shared helper of both name-entry SMs. */

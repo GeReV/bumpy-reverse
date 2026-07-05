@@ -128,11 +128,35 @@ void apply_level_palette(void);
 extern u8 __far g_op12_arena[];
 #endif /* !BUMPY_COPYPROT_HARNESS */
 
+/* Host work-buffer plane stride for g_planes (render_level's clear + page0 pack).
+ * Self-contained (host.h is BUMPY_PLAYABLE-only) and must equal HOST_PLANE_SIZE:
+ * HOST_FB_16K (playable EXE) → 16 KB/plane; default build → full 64 KB so the
+ * default reconstruction object stays byte-for-byte identical. */
+#ifdef HOST_FB_16K
+#define LEVEL_PLANE_SIZE 0x4000UL
+#else
+#define LEVEL_PLANE_SIZE 0x10000UL
+#endif
+
+/* Allocator for the small (<64 KB) level buffers (PAV/DEC/BUM/entity-DG).
+ * Under BUMPY_PLAYABLE these come from halloc (DOS-direct, like g_planes/g_bank_buf)
+ * rather than _fmalloc: interleaving _fmalloc's Watcom far-heap growth with the
+ * halloc'd framebuffer + sprite bank fragmented conventional memory badly enough that
+ * the ~167 KB of level buffers would not fit even with ~179 KB free (measured at
+ * runtime).  Making every level buffer a halloc block draws them from one
+ * contiguous DOS run, so they pack.  The level buffers are never freed, so there is no
+ * hfree/_ffree asymmetry.  The default build keeps _fmalloc → byte-for-byte unchanged. */
+#ifdef BUMPY_PLAYABLE
+#define LEVEL_FAR_ALLOC(n)  ((u8 __far *)halloc((u32)(n), 1))
+#else
+#define LEVEL_FAR_ALLOC(n)  ((u8 __far *)_fmalloc((size_t)(n)))
+#endif
+
 /* ── DGROUP globals (engine originals; defined here) ─────────────────────── */
 u8 current_level        = 1u;
 u8 copyprotect_flag     = 0u;
-u8 p1_start_x           = 0x1fu;
-u8 p1_start_y           = 0x1fu;
+u16 p1_start_x          = 0x1fu;   /* DGROUP 0x791c — WORD store in start_level (1000:2d83/2d97) */
+u16 p1_start_y          = 0x1fu;   /* DGROUP 0x791e — WORD store in start_level (1000:2d80)       */
 u8 current_entity_index = 1u;
 
 #ifndef BUMPY_COPYPROT_HARNESS   /* { heavy level pipeline — excluded from the host harness */
@@ -159,11 +183,14 @@ static u8 __far  *g_dec_buf   = (u8 __far  *)0;  /* decoded DEC map  0x2000  */
 static u8 __far  *g_bum_buf   = (u8 __far  *)0;  /* decoded BUM data 0x0400  */
 static u8 __far  *g_entity_dg = (u8 __far  *)0;  /* entity dg shadow 0xa200  */
 
+#ifndef BUMPY_PLAYABLE
 /* ── Page-0 pack buffer for video_blit_planar ─────────────────────────────────
    video_blit_planar takes a 32000-byte plane-major buffer: plane p at [p*8000].
    We copy page-0 (offsets 0..7999 in each plane of g_planes) into this buffer
-   before the final blit to VGA hardware. */
+   before the final blit to VGA hardware.  Real-VGA host writes a000 directly, so
+   this flat-buffer present (and its pack buffer) is default/ctest-build only. */
 static u8 g_page0[32000u];
+#endif
 
 /* ── big-endian word read (mirrors vec.c's be16) ──────────────────────────── */
 static u16 level_be16(const u8 __far *p, u16 off)
@@ -186,15 +213,15 @@ static int level_alloc_buffers(void)
     /* VGA planes shadow: 4 * 0x10000 = 0x40000 bytes = 256 KB.
        halloc(count, size) allocates huge memory via DOS INT 21h AH=48h. */
 #ifdef BUMPY_PLAYABLE
-    /* Playable host build (Plan A Task 2): the flat 4-plane framebuffer is owned by
-       the host layer (host_render.c).  g_planes aliases host_framebuffer so the
-       static level compose and the per-tick render-leaf draws (host_render.c blit
-       leaves) share one RAM image, and present blits that image to real VGA. */
-    if (g_planes == (u8 __huge *)0) {
-        host_fb_init();
-        g_planes = host_framebuffer;
-        if (g_planes == (u8 __huge *)0) { return -1; }
-    }
+    /* Playable host build: host_fb_init registers the VGA page table; under
+       HOST_FB_16K there is NO flat framebuffer any more (all draws write a000
+       directly — see host_fb_init) and g_planes stays NULL: every playable-path
+       consumer passes it as an inert `planes` argument the VGA blitters ignore. */
+    host_fb_init();
+    g_planes = host_framebuffer;
+#ifndef HOST_FB_16K
+    if (g_planes == (u8 __huge *)0) { return -1; }
+#endif
 #else
     if (g_planes == (u8 __huge *)0) {
         g_planes = (u8 __huge *)halloc(0x40000UL, 1);
@@ -210,25 +237,25 @@ static int level_alloc_buffers(void)
 
     /* PAV atlas: 0x7806 bytes. */
     if (g_pav_buf == (u8 __far *)0) {
-        g_pav_buf = (u8 __far *)_fmalloc(LEVEL_PAV_BUF_SIZE);
+        g_pav_buf = LEVEL_FAR_ALLOC(LEVEL_PAV_BUF_SIZE);
         if (g_pav_buf == (u8 __far *)0) { return -1; }
     }
 
     /* DEC level map: 0x2000 bytes. */
     if (g_dec_buf == (u8 __far *)0) {
-        g_dec_buf = (u8 __far *)_fmalloc(LEVEL_DEC_BUF_SIZE);
+        g_dec_buf = LEVEL_FAR_ALLOC(LEVEL_DEC_BUF_SIZE);
         if (g_dec_buf == (u8 __far *)0) { return -1; }
     }
 
     /* BUM entity data: 0x0400 bytes. */
     if (g_bum_buf == (u8 __far *)0) {
-        g_bum_buf = (u8 __far *)_fmalloc(LEVEL_BUM_BUF_SIZE);
+        g_bum_buf = LEVEL_FAR_ALLOC(LEVEL_BUM_BUF_SIZE);
         if (g_bum_buf == (u8 __far *)0) { return -1; }
     }
 
     /* Entity DG shadow: 0xa200 bytes = ~41 KB. */
     if (g_entity_dg == (u8 __far *)0) {
-        g_entity_dg = (u8 __far *)_fmalloc(LEVEL_DG_SIZE);
+        g_entity_dg = LEVEL_FAR_ALLOC(LEVEL_DG_SIZE);
         if (g_entity_dg == (u8 __far *)0) { return -1; }
     }
 
@@ -276,21 +303,15 @@ static u16 level_decode_file(const char *path)
     if (nb > OP12_ARENA_SIZE) {
         return 0u;
     }
-
-    /* Faithful header parse (mirrors vec_decode_planar): the 12-byte record
-       header is six big-endian words.  w0 > 0x0f terminates the stream; the
-       level resources are op4/op12 inner-stream files (w0 small).  We do not
-       reject on opcode here — the level files are always inner-stream records
-       fed to op12_vec_run, matching the engine's vec_decode dispatch. */
     if (nb < 12u) {
         return 0u;
     }
     w0 = level_be16((const u8 __far *)g_filebuf, 0u);
     (void)w0;  /* parsed for fidelity; op12_vec_run consumes the full record */
 
-    /* Stream raw bytes into the arena, then run the inner record loop.
-       declared_len = VEC_DECODE_MAX (op12_port DECLARED_LEN);
-       payload_len  = nb (op12_port's vsav seed = file size). */
+    /* Stream raw bytes into the arena, then run the inner record loop.  op12_vec_run
+       (op4 outer record + op12 inner record) is byte-exact vs the Python op12_port and
+       the engine's runtime decode (verified D1.{PAV,DEC,BUM}). */
     for (i = 0u; i < nb; i++) {
         g_op12_arena[i] = g_filebuf[i];
     }
@@ -370,22 +391,24 @@ static void level_make_filename(char *buf, u8 lev, const char *suffix)
    level_populate_dg — fill the entity-dg shadow with posA/B/C tables and
    sprite-object structs before a render call.
 
-   posA:  cell X = col*40 pixels, Y = row*32+24 pixels  (layer A)
-   posC:  cell X = col*40+8 pixels, Y = row*32+8 pixels (layer C)
-   posB:  cell X = col*40+32 pixels, Y = row*32 pixels  (layer B)
+   posA @0xf4 (layer A), posC @0x274 (layer C/P2), posB @0x3f4 (layer B):
+   48 cells × (x u16, y u16), copied VERBATIM from the engine's DGROUP tables
+   (extracted into anim_data.c; init_anim_data points anim_posA_tbl /
+   anim_posB_tbl / p2_cell_coord_tbl at them at boot).
 
-   RECONSTRUCTION FIDELITY: the engine computes these from the per-cell
-   animation descriptor tables at level init and stores them in DGROUP at
-   the offsets documented in entity.c.  Here we compute them analytically
-   from the grid geometry, which matches (verified in composite_ctest.c).
+   2026-07-02: an earlier revision COMPUTED these analytically (posA x=col*40,
+   y=row*32+24; posC +8/+8; posB +32/+0).  The formulas were byte-verified equal
+   to the binary tables for all 3×48 cells, but the engine READS the tables —
+   so the tables are copied now (removes the invention and the duplicate data).
    The frametable far ptr for p1/p2 sprite objects is set to point at
    g_bank_buf (the loaded sprite bank).
    ─────────────────────────────────────────────────────────────────────────── */
+extern u8 __far *anim_posA_tbl;       /* anim.c    → anim_data.c g_anim_posA (0xf4)  */
+extern u8 __far *anim_posB_tbl;       /* anim.c    → anim_data.c g_anim_posB (0x3f4) */
+extern u8 __far *p2_cell_coord_tbl;   /* player2.c → anim_data.c g_posC     (0x274) */
+
 static void level_populate_dg(void)
 {
-    u8  col;
-    u8  row;
-    u8  cell;
     u16 ftbl_off;
     u16 ftbl_seg;
 
@@ -397,45 +420,13 @@ static void level_populate_dg(void)
         }
     }
 
-    /* posA, posC, posB tables: 6 rows × 8 cols = 48 cells. */
-    for (row = 0u; row < 6u; row++) {
-        for (col = 0u; col < 8u; col++) {
-            u16 posa_x;
-            u16 posa_y;
-            u16 posc_x;
-            u16 posc_y;
-            u16 posb_x;
-            u16 posb_y;
-            u16 off;
-
-            cell   = (u8)(row * 8u + col);
-            posa_x = (u16)((u16)col * 40u);
-            posa_y = (u16)((u16)row * 32u + 24u);
-            posc_x = (u16)((u16)col * 40u + 8u);
-            posc_y = (u16)((u16)row * 32u + 8u);
-            posb_x = (u16)((u16)col * 40u + 32u);
-            posb_y = (u16)((u16)row * 32u);
-
-            off = (u16)(DG_POSA_X_BASE + (u16)cell * 4u);
-            g_entity_dg[off]     = (u8)(posa_x & 0xffu);
-            g_entity_dg[off + 1] = (u8)(posa_x >> 8u);
-            off = (u16)(DG_POSA_Y_BASE + (u16)cell * 4u);
-            g_entity_dg[off]     = (u8)(posa_y & 0xffu);
-            g_entity_dg[off + 1] = (u8)(posa_y >> 8u);
-
-            off = (u16)(DG_POSC_X_BASE + (u16)cell * 4u);
-            g_entity_dg[off]     = (u8)(posc_x & 0xffu);
-            g_entity_dg[off + 1] = (u8)(posc_x >> 8u);
-            off = (u16)(DG_POSC_Y_BASE + (u16)cell * 4u);
-            g_entity_dg[off]     = (u8)(posc_y & 0xffu);
-            g_entity_dg[off + 1] = (u8)(posc_y >> 8u);
-
-            off = (u16)(DG_POSB_X_BASE + (u16)cell * 4u);
-            g_entity_dg[off]     = (u8)(posb_x & 0xffu);
-            g_entity_dg[off + 1] = (u8)(posb_x >> 8u);
-            off = (u16)(DG_POSB_Y_BASE + (u16)cell * 4u);
-            g_entity_dg[off]     = (u8)(posb_y & 0xffu);
-            g_entity_dg[off + 1] = (u8)(posb_y >> 8u);
+    /* posA, posC, posB: copy the verbatim engine tables (48 cells × 4 B each). */
+    {
+        u16 i;
+        for (i = 0u; i < 192u; i++) {
+            g_entity_dg[DG_POSA_X_BASE + i] = anim_posA_tbl[i];
+            g_entity_dg[DG_POSC_X_BASE + i] = p2_cell_coord_tbl[i];
+            g_entity_dg[DG_POSB_X_BASE + i] = anim_posB_tbl[i];
         }
     }
 
@@ -477,46 +468,33 @@ static void level_populate_dg(void)
    ─────────────────────────────────────────────────────────────────────────── */
 static void render_level(void)
 {
-    const u8 __huge *atlas;
-    const u8 __far  *map;
-    const u8 __far  *bum;
-    const u8 __far  *dg;
-    u8 __huge       *bank;
-    u32              bank_base_lin;
+    const u8 __far  *dg   = (const u8 __far *)g_entity_dg;   /* DGROUP shadow (level_populate_dg) */
+    u8 __huge       *bank = g_bank_buf;                      /* sprite bank                       */
+    u32              bank_base_lin = (u32)((u32)FP_SEG(g_bank_buf) << 4u) +
+                                     (u32)FP_OFF(g_bank_buf);
+#ifdef BUMPY_PLAYABLE
+    /* PLAYABLE: register the per-tick blit-leaf render context ONLY — DO NOT paint the
+       level here.  The engine renders the level at GAME-ENTRY, after the iris wipe:
+       reset_game_state→spawn_and_draw_level_entities draws the entity layers and (via
+       setup_fullscreen_view → level_render_bg, below) paints the bg tile grid; the
+       game-loop entry (game.c) draws the players + uploads the palette.  start_level
+       (1000:2d14) itself does NO rendering.  Painting here flashed the level before the
+       slow overworld (MONDE.VEC) load AND was overwritten by the overworld, leaving
+       gameplay with entities on a black screen (no tile background).  RECONSTRUCTION
+       FIDELITY: docs/reconstruction-fidelity.md. */
+    host_render_bind(bank, bank_base_lin, dg);
+#else
+    /* Default/ctest build: render the FULL level into the flat g_planes work buffer and
+       present it — the byte-exact differential ctests validate this output, so the
+       paint stays here in the default build (unchanged). */
+    const u8 __huge *atlas = (const u8 __huge *)g_pav_buf + 6u;  /* PAV decoded @ +6 hdr */
+    const u8 __far  *map   = (const u8 __far *)g_dec_buf;        /* DEC grid map         */
+    const u8 __far  *bum   = (const u8 __far *)g_bum_buf;        /* BUM entity data      */
     sprite_view      view;
     u16              p;
     u16              i;
+    u32              j;
 
-    /* Atlas pointer: PAV decoded data starts at g_pav_buf[6] (6-byte header
-       per bg_render.h notes on the atlas layout). */
-    atlas = (const u8 __huge *)g_pav_buf + 6u;
-
-    /* Level grid map pointer: decoded DEC data at g_dec_buf. */
-    map = (const u8 __far *)g_dec_buf;
-
-    /* BUM entity data pointer: decoded BUM data at g_bum_buf. */
-    bum = (const u8 __far *)g_bum_buf;
-
-    /* DGROUP shadow (populated by level_populate_dg). */
-    dg = (const u8 __far *)g_entity_dg;
-
-    /* Sprite bank. */
-    bank = g_bank_buf;
-    bank_base_lin = (u32)((u32)FP_SEG(g_bank_buf) << 4u) +
-                    (u32)FP_OFF(g_bank_buf);
-
-#ifdef BUMPY_PLAYABLE
-    /* Register the render context for the per-tick blit leaves (host_render.c):
-       the engine's blit leaf reads bank / dg / view from globals; we hand it the
-       same three inputs so anim_blit_sprite_leaf / p1_blit_sprite_leaf can re-run
-       the validated blit into host_framebuffer's current draw page. */
-    host_render_bind(bank, bank_base_lin, dg);
-#endif
-
-    /* Full-screen sprite viewport (left=0,right=40,top=0,bottom=199,
-       height=199, data_off=0, data_seg=0xa000).
-       RECONSTRUCTION FIDELITY: these globals are set by the engine before
-       draw calls.  We hardcode the full-screen values here. */
     view.left     = 0;
     view.right    = 40;
     view.top      = 0;
@@ -525,58 +503,63 @@ static void render_level(void)
     view.data_off = 0u;
     view.data_seg = 0xa000u;
 
-    /* Clear the planes buffer before rendering. */
-    {
-        u32 j;
-        for (j = 0UL; j < (4UL * 0x10000UL); j++) {
-            g_planes[j] = 0u;
-        }
+    for (j = 0UL; j < (4UL * LEVEL_PLANE_SIZE); j++) {
+        g_planes[j] = 0u;
     }
 
-    /* Background grid */
     bg_render_grid(g_planes, atlas, map);
-
-    /* Entity layers */
     entity_draw_layer_c(g_planes, bum, dg, bank, bank_base_lin, &view);
     entity_draw_layer_a(g_planes, bum, dg, bank, bank_base_lin, &view);
     entity_draw_layer_b(g_planes, bum, dg, bank, bank_base_lin, &view);
-
-    /* Player 1: starting position, standing frame (move_anim=0) */
     entity_draw_p1(g_planes, dg,
                    (u16)p1_start_x, (u16)p1_start_y, 0u,
                    bank, bank_base_lin, &view);
-
-    /* Player 2: absent on level 1 (p2_cell == -1; guard in entity_draw_p2) */
     entity_draw_p2(g_planes, dg,
                    0u, 0u, 0u,  /* pixel_x/y/move_anim irrelevant (P2 absent) */
                    0u,          /* frame_base */
                    (s8)-1,      /* p2_cell = -1 → no draw */
                    bank, bank_base_lin, &view);
 
-    /* Pack page-0 (plane offsets 0..7999) into g_page0 for video_blit_planar.
-       Layout: plane p at g_page0[p * 8000 .. p*8000+8000). */
+    /* Pack page-0 (plane offsets 0..7999) into g_page0, then blit the flat g_planes
+       work buffer to VGA.  plane p at g_page0[p*8000 ..]. */
     for (p = 0u; p < 4u; p++) {
         for (i = 0u; i < 8000u; i++) {
-            g_page0[(u16)(p * 8000u) + i] = g_planes[(u32)p * 0x10000UL + (u32)i];
+            g_page0[(u16)(p * 8000u) + i] = g_planes[(u32)p * LEVEL_PLANE_SIZE + (u32)i];
         }
     }
-
-    /* Upload the level palette, then blit planes to VGA hardware.
-       RECONSTRUCTION FIDELITY: the engine loads the palette at level init via
-       load_palette_byteswapped() + load_palette() from cur_level_ptr (the decoded
-       .DEC, see level_packed_palette / host_video.c).  In the playable build we run
-       that faithful path (apply_level_palette → load_palette → DAC slots {0..7,
-       0x10..0x17}, the BGI AC mapping).  The differential harness (non-playable)
-       has no DAC/BGI model and apply_level_palette is a no-op stub, so it keeps the
-       direct video_set_palette6 upload; its frame compare uses the captured palette,
-       not this DAC write. */
-#ifdef BUMPY_PLAYABLE
-    apply_level_palette();
-#else
     video_set_palette6((const u8 *)(g_pav_buf + 51u));
-#endif
     video_blit_planar(g_page0);
+#endif
 }
+
+#ifdef BUMPY_PLAYABLE
+/* level_render_bg — paint the level background tile grid into the a000 display page.
+ * Called from setup_fullscreen_view (game_stubs.c) — i.e. inside
+ * spawn_and_draw_level_entities at GAME-ENTRY — mirroring the engine, where
+ * setup_fullscreen_view (1000:483c) drives the tile-grid render (redraw_level_background_
+ * tiles) before the per-cell entity scan.  The entity layers (spawn), the players +
+ * level palette (game-loop entry, game.c) paint over this.  RECONSTRUCTION FIDELITY:
+ * the recon renders the tiles via the semantic bg_render_grid rather than the original's
+ * self-modifying BGI tile-run chain (docs/reconstruction-fidelity.md). */
+void level_render_bg(void)
+{
+    extern u8 __far *cur_level_ptr;   /* game.c — set by load_current_level_data */
+    const u8 __huge *atlas = (const u8 __huge *)g_pav_buf + 6u;
+    /* The engine's redraw_level_background_tiles (1000:2a0a) reads each run_code as
+       *(cur_level_ptr + cell_x*0x27 + (cell_y>>1)*3 + 0x20).  So the grid base is the
+       per-level block pointer cur_level_ptr (= g_dec_buf+2+index*0x32c, set in
+       load_current_level_data) — NOT a raw g_dec_buf+2.  bg_render_grid adds the +0x20
+       itself, matching the decomp.  (Reading from g_dec_buf directly would also miss the
+       per-level index for non-first levels.) */
+    const u8 __far  *map   = cur_level_ptr;
+
+    if (g_pav_buf == (u8 __huge *)0 || map == (const u8 __far *)0) {
+        return;   /* no level loaded yet → nothing to paint */
+    }
+    host_vga_clear_display();
+    bg_render_grid(g_planes, atlas, map);
+}
+#endif
 
 #ifdef BUMPY_PLAYABLE
 /* ── level_packed_palette (host accessor for cur_level_ptr) ─────────────────────
@@ -594,8 +577,8 @@ static void render_level(void)
  *   cur_level_ptr = g_dec_buf + 2 + level_index*0x32c.
  * Verified offline: g_dec_buf decode of D{1,2,3,9}.DEC at +2 decodes byte-for-byte
  * to local/build/render/bum/world{n}.pal.json (the emulator-captured gameplay
- * palette).  The host renders level-block 0 of D{current_level} (render_level →
- * bg_render_grid(map=g_dec_buf)), so level_index is 0 → cur_level_ptr = g_dec_buf+2.
+ * palette).  current_level_index is set per round from the worldmap node reached
+ * (game.c), so the accessor must follow cur_level_ptr, not assume block 0.
  *
  * RECONSTRUCTION FIDELITY: the engine's cur_level_ptr is a far ptr into its own
  * DGROUP level archive; the host's equivalent is g_dec_buf (the decoded .DEC).  The
@@ -604,10 +587,26 @@ static void render_level(void)
  * DAC); corrected here.  BUMPY_PLAYABLE only. */
 const u8 __far *level_packed_palette(void)
 {
-    if (g_dec_buf == (u8 __far *)0) {
+    extern u8 __far *cur_level_ptr;   /* game.c — set by load_current_level_data */
+    /* Faithful form (fixed 2026-07-02): the engine's load_palette_byteswapped
+       (1000:063b) reads the 16 palette words via *(cur_level_ptr + i*2), and
+       load_current_level_data sets cur_level_ptr = base + current_level_index*0x32c
+       — so the palette MUST come from the current level's block, not block 0.
+       (The previous g_dec_buf+2 form silently loaded block 0's palette for every
+       level: wrong colors / near-black bg on any level at block index > 0.)
+
+       The old deferral rationale ("shared with the overworld palette, which runs
+       before cur_level_ptr is set") was wrong: this accessor's ONLY caller is
+       host_video.c load_palette, reached from (a) apply_level_palette in the round
+       loop — always AFTER load_current_level_data — and (b) init_display_97f1 at
+       boot, where cur_level_ptr is still NULL and the NULL guard below no-ops
+       exactly as it did for the old g_dec_buf==NULL case.  The overworld/world-map
+       palette flows through host_bgi_stage_image_palette + fun_7bca_flip instead
+       and never touches this accessor. */
+    if (cur_level_ptr == (u8 __far *)0) {
         return (const u8 __far *)0;
     }
-    return (const u8 __far *)(g_dec_buf + 2u);   /* cur_level_ptr, level_index 0 */
+    return (const u8 __far *)cur_level_ptr;
 }
 #endif /* BUMPY_PLAYABLE */
 
@@ -808,7 +807,8 @@ void copyprotect_challenge(void)
 
         /* Draw the chosen platform sprite. */
         play_iris_wipe_transition();
-        load_palette();
+        load_palette(0u, 0u);   /* engine passes a src far ptr; the host body ignores
+                                   it and sources cur_level_ptr (host_video.c) */
         p1d = p1_sprite;
         *(u16 __far *)(p1d + 4) = sprite_id_tbl[index];  /* frame */
         *(u16 __far *)(p1d + 0) = 0x90u;                 /* x = 144 */
@@ -915,9 +915,21 @@ void start_level(u8 world, u8 level)
     }
 #endif /* BUMPY_COPY_PROTECTION */
 
-    /* ── 2. Move-descriptor / anim-coord table ptrs (STUBBED) ─────────────
-       Original: read ptrs from code-seg table at 0x10c8..0x10cb / 0x10ec..0x10ef.
-       Not needed for the initial render; deferred (RECONSTRUCTION FIDELITY #4/#5). */
+    /* ── 2. Move-descriptor / anim-coord table ptrs ──────────────────────
+       Original (decomp 2180-2184): reads per-level far ptrs from the DGROUP
+       lookup tables at 0x10c8 (move-desc) / 0x10ec (anim-coord), indexed by
+       current_level.  Reconstructed: the original's DGROUP tables + the lists
+       they point to are extracted verbatim into worldmap_data.c (g_worldmap_blob,
+       relocated by init_worldmap_data at boot); these accessors return the
+       relocated far ptrs.  RECONSTRUCTION FIDELITY #4/#5 now IMPLEMENTED. */
+    {
+        extern u8 __far *worldmap_move_descriptor(u8 level);          /* worldmap_data.c */
+        extern void worldmap_anim_coord(u8 level, u16 *off, u16 *seg);/* worldmap_data.c */
+        extern u16 anim_coord_table_ptr;                              /* screens.c       */
+        extern u16 anim_coord_table_seg;                              /* screens.c       */
+        move_descriptor_table = worldmap_move_descriptor(current_level);
+        worldmap_anim_coord(current_level, &anim_coord_table_ptr, &anim_coord_table_seg);
+    }
 
     /* ── 3. Player start position ─────────────────────────────────────────
        Original decomp lines 2187-2192. */
@@ -928,9 +940,17 @@ void start_level(u8 world, u8 level)
         p1_start_x = 0x6fu;
     }
 
-    /* ── 4. Clear move-descriptor list (STUBBED) ──────────────────────────
-       Original: walks sentinel-terminated list at move_descriptor_table,
-       clears entries until -1.  Not needed for render; deferred. */
+    /* ── 4. Clear move-descriptor list ────────────────────────────────────
+       Original (decomp 2193-2196): walk the sentinel-terminated list at
+       move_descriptor_table (9-byte stride) from index 1, zeroing each record's
+       [0] flag byte, until the record whose [0] == 0xff (terminator). */
+    {
+        u8 clear_idx = 1u;
+        while (move_descriptor_table[(u16)clear_idx * 9u] != 0xffu) {
+            move_descriptor_table[(u16)clear_idx * 9u] = 0u;
+            clear_idx = clear_idx + 1u;
+        }
+    }
 
     /* ── 5. set_resource_table + digit-patch (STUBBED) ────────────────────
        Original calls set_resource_table(0x90, 0x203b) and patches DAT bytes.
@@ -974,8 +994,67 @@ void start_level(u8 world, u8 level)
        ADDED: render pipeline not in original start_level; added here to
        exercise the validated bg_render_grid + entity_draw_* path. */
     level_populate_dg();
+#ifdef BUMPY_PLAYABLE
+    /* ── Re-wire p1_sprite / p2_sprite to the now-allocated DG shadow ──────────────
+       FIDELITY DEVIATION (required by the heap-DG deviation): the engine's
+       init_sprite_structs (1000:33c5) runs ONCE at game_loop start and sets
+       p1_sprite/p2_sprite to the STATIC DGROUP sprite objs (always valid).  The
+       reconstruction's DG shadow (g_entity_dg) is HEAP-allocated here in start_level —
+       AFTER game_loop's lone init_sprite_structs call (which saw level_get_entity_dg()
+       == NULL and skipped the p1_sprite/p2_sprite wiring).  So in the playable build
+       p1_sprite stayed NULL: draw_p1_sprite wrote x/y/frame to a NULL descriptor while
+       hr_blit_obj read the (stale) DG obj at DG_P1_OBJ → the P1/world-map Bumpy sprite
+       blitted a stale frame at (0,0) instead of frame 0x21 at the start node.  Re-invoke
+       init_sprite_structs now that the DG exists so p1_sprite = g_entity_dg + DG_P1_OBJ
+       (the obj draw_p1_sprite writes AND hr_blit_obj reads).  Idempotent (re-wires the
+       anim/P2 tables to the same records).  docs/reconstruction-fidelity.md. */
+    {
+        extern void init_sprite_structs(void);   /* view_setup.c */
+        init_sprite_structs();
+    }
+#endif /* BUMPY_PLAYABLE */
     render_level();
 }
+
+#ifdef BUMPY_PLAYABLE
+/* ── level_preload_session_sprites — SESSION-INIT sprite-bank bring-up (playable) ──
+   Load + transform the main sprite bank (BUMSPJEU.BIN) and wire the DG shadow /
+   p1_sprite / host render context ONCE at boot, BEFORE the front-end menu, so the
+   title / main-menu / highscore / menu-select screens that blit sprite-glyph TEXT
+   (letters, digits, the code-entry cursor) have the glyph bank available.
+
+   ROOT CAUSE this fixes: the engine loads this bank at SESSION INIT (init_title_graphics
+   -> process_sprites), not per level.  The recon deferred the load to start_level because
+   session init was stubbed, so at the menu hr_dg / hr_bank were NULL and every menu-context
+   sprite-glyph blit hit hr_blit_obj's `if (hr_dg == 0) return;` NOP -> the Hall-of-Fame
+   table + the menu-select ("password"/level-code) screen drew as blank/placeholder glyphs.
+   Bringing the load back to boot matches the engine.  Every level buffer is ==0-guarded, so
+   start_level REUSES these (no double-alloc / no extra peak memory); the static helpers +
+   init_sprite_structs are idempotent.
+
+   RECONSTRUCTION FIDELITY: mirrors start_level steps 9-10 (bank load/transform + DG populate
+   + init_sprite_structs + host_render_bind) MINUS any level content; the engine's
+   process_sprites stays a NOP (the palette_mode-2 VGA table transform is done by
+   sprite_bank_load_transform).  docs/reconstruction-fidelity.md. */
+void level_preload_session_sprites(void)
+{
+    u32 bank_base_lin;
+
+    if (level_alloc_buffers() != 0) {
+        return;                 /* OOM: leave menu glyphs as NOP (no worse than before) */
+    }
+    if (level_load_bank("BUMSPJEU.BIN") > 0UL) {
+        sprite_bank_load_transform((u8 __far *)g_bank_buf, 2u);
+    }
+    level_populate_dg();
+    {
+        extern void init_sprite_structs(void);   /* view_setup.c — p1_sprite = g_entity_dg+0x792e */
+        init_sprite_structs();
+    }
+    bank_base_lin = (u32)((u32)FP_SEG(g_bank_buf) << 4u) + (u32)FP_OFF(g_bank_buf);
+    host_render_bind(g_bank_buf, bank_base_lin, (const u8 __far *)g_entity_dg);
+}
+#endif /* BUMPY_PLAYABLE */
 
 #endif /* } !BUMPY_COPYPROT_HARNESS — end start_level + render */
 
@@ -1032,20 +1111,62 @@ u8 __far *level_get_entity_dg(void)
 /* ── load_current_level_data (1000:32b0) — per-round level (re)load ──────────────
  * Engine logic (relocated from src/host/host_boot.c — not host platform glue).
  *
- * Engine body: copies the current level's 0x96-byte header from the in-memory level
- * archive (cur_level_ptr) into the tilemap buffer.  HOST STAND-IN: the playable
- * build never populates that in-memory archive (start_level decodes from files
- * directly), so we reload by calling start_level(current_level, current_level),
- * which re-runs the full INT 21h file-load pipeline for the current level.
+ * Engine body (1000:32b0): pointer setup + copy the current level's 0x96-byte header
+ * from the in-memory level archive into the tilemap buffer.  That is exactly what
+ * this function now does — 1:1 with the engine.
  *
- * DEVIATION (DONE_WITH_CONCERNS): start_level does MORE than the engine's 32b0 (it
- * also reloads the sprite bank + re-renders the level to VGA), and game_loop already
- * calls start_level at the top of each round, so it runs twice per round.  Harmless
- * (start_level is idempotent — same static buffers, no recursion) but wasteful.
- * TODO (future faithful pass): implement the real 1000:32b0 lightweight 0x96-byte
- * header copy and drop this start_level call.  See docs/reconstruction-fidelity.md. */
+ * 2026-07-02 FIX (removes a DONE_WITH_CONCERNS deviation): this used to re-run the
+ * FULL start_level(current_level, current_level) here (3 file reads + op12 decodes +
+ * an ~87 KB sprite-bank reload) on EVERY round entry and respawn, on the belief that
+ * the overworld intro "decodes through the SAME shared window and OVERWRITES the
+ * level's g_pav/g_dec/g_bum buffers".  Traced and refuted: g_pav/g_dec/g_bum are
+ * private once-allocated LEVEL_FAR_ALLOC buffers written only by start_level's
+ * copy-out; the overworld's vec_decode writes its own scratch + fullscreen_buf and
+ * shares only the g_op12_arena scratch — AFTER the level data was already copied
+ * out.  What each round genuinely needs is (a) this pointer setup + header copy and
+ * (b) the bg repaint to VGA — which reset_game_state's very next call provides
+ * (spawn_and_draw_level_entities → setup_fullscreen_view →
+ * redraw_level_background_tiles).  The old 2026-06-30 "no-op here → garbage/speckle"
+ * experiment removed the POINTER SETUP too, which is what actually broke.
+ * Dropping the re-decode also stops start_level's step-4 move-descriptor flag clear
+ * from wiping collected-entry progress on every death (a behavior deviation — the
+ * engine's per-round 32b0 never touches that list) and removes a multi-second
+ * respawn stall. */
 void load_current_level_data(void)
 {
-    start_level(current_level, current_level);
+    /* Working tilemap: the engine copies the level header here so gameplay can mutate it
+       (anim.c writes tilemap[cell]) without corrupting the pristine source. */
+    static u8       g_tilemap_buf[0xc2];
+    u16             i;
+    extern u8 __far *cur_level_ptr;   /* game.c — DGROUP level block cursor      */
+    extern u8 __far *level_src_ptr;   /* game.c 0x75d0 — level header source      */
+    extern u8 __far *tilemap;         /* game.c 0xa0d8 — working tilemap far ptr   */
+    extern u8        current_level_index;  /* game.c — engine _current_level_index (block) */
+
+    /* Faithful 1000:32b0 pointer setup.  Without it
+       tilemap / level_src_ptr / cur_level_ptr stay NULL, so spawn_and_draw_level_entities
+       reads a garbage entity grid (→ in-level SPECKLE) and garbage p2_cell/p2_move_state
+       (→ the post-keypress P2 move-state dispatch executes wild memory → INT 6 crash on
+       any key).  The recon's decoded g_bum_buf already holds the level header at the
+       engine's archive offsets (entity_draw_layer_c reads bum[0x60+cell]); g_dec_buf+2 is
+       the level block.  Copy the 0x96-byte header into the mutable working tilemap;
+       level_src_ptr points at the pristine g_bum_buf source.
+
+       1:1 with the engine's load_current_level_data (1000:32b0):
+         level_src_ptr = DAT_6bf2 + current_level_index*0xc2;
+         cur_level_ptr = DAT_6bd2 + current_level_index*0x32c;
+         tilemap = 0x203b:a0e4; copy the 0x96-byte header from level_src_ptr -> tilemap.
+       DEVIATION (the only one): the engine's DAT_6bd2/DAT_6bf2 already point at block 0,
+       whereas the recon's decoded g_dec_buf/g_bum_buf carry a 2-byte prefix — so the
+       recon adds +2 here (and ONLY here).  The +current_level_index*stride is verbatim;
+       current_level_index is the engine's _current_level_index (0 in the single-level
+       scope, so equal to block 0 for now).  All consumers read via cur_level_ptr/
+       level_src_ptr/tilemap, so the +2 lives in exactly one place. */
+    cur_level_ptr = (u8 __far *)g_dec_buf + 2 + (u16)current_level_index * 0x32cu;
+    level_src_ptr = (u8 __far *)g_bum_buf + 2 + (u16)current_level_index * 0xc2u;
+    for (i = 0u; i < 0x96u; i++) {
+        g_tilemap_buf[i] = level_src_ptr[i];   /* engine: tilemap = copy of level_src_ptr */
+    }
+    tilemap = (u8 __far *)g_tilemap_buf;
 }
 #endif /* BUMPY_PLAYABLE */

@@ -36,8 +36,16 @@
    to keep them out of DGROUP.  The logical content is identical.
 */
 #define LEVEL_PAV_BUF_SIZE  0x7806u   /* PAV decoded atlas size */
-#define LEVEL_DEC_BUF_SIZE  0x2000u   /* DEC decoded map size (conservative) */
-#define LEVEL_BUM_BUF_SIZE  0x0400u   /* BUM decoded object/spawn size */
+#define LEVEL_DEC_BUF_SIZE  0x2f96u   /* DEC decoded size — ENGINE value (start_level
+                                         1000:2d14 dec_len, DGROUP word @0x00a0 =
+                                         2 + 15*0x32c).  Was 0x2000 "conservative":
+                                         blocks 10+ truncated → broken bg on nodes
+                                         11-15 (fixed 2026-07-03). */
+#define LEVEL_BUM_BUF_SIZE  0x0b60u   /* BUM decoded size — ENGINE value (bum_len,
+                                         DGROUP word @0x00e6 = 2 + 15*0xc2).  Was
+                                         0x400: blocks 5+ read heap garbage past the
+                                         copy-out → node 6 partial / node 7 broken
+                                         entity layers (fixed 2026-07-03). */
 #define LEVEL_BANK_BUF_SIZE 0x15c20u  /* BUMSPJEU.BIN sprite bank (~87 KB) */
 
 /* ── Level resource file load sizes (raw file sizes, ≤ 0x8000 = OP12_ARENA_SIZE) */
@@ -88,8 +96,8 @@
 extern u8 current_level;    /* DGROUP:0x79b2 — current level index (1-based) */
 extern u8 copyprotect_flag; /* DGROUP:?  — copy-protection state: 0=ok, -1=fail */
 
-extern u8 p1_start_x;       /* DGROUP:? — p1 start pixel X                */
-extern u8 p1_start_y;       /* DGROUP:? — p1 start pixel Y                */
+extern u16 p1_start_x;      /* DGROUP 0x791c — p1 start pixel X (WORD: 1000:2d83/2d97) */
+extern u16 p1_start_y;      /* DGROUP 0x791e — p1 start pixel Y (WORD: 1000:2d80)      */
 extern u8 current_entity_index; /* DGROUP:? — next entity slot index       */
 
 /* ── API ─────────────────────────────────────────────────────────────────── */

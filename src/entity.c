@@ -69,8 +69,12 @@
    use 0x40 to match the work buffer size in anim_ctest.c. */
 #define OBJ_SIZE      0x40u
 
-/* PLANE_SIZE must match sprite_blit.c's PLANE_SIZE */
+/* PLANE_SIZE must match sprite_blit.c's PLANE_SIZE / HOST_PLANE_SIZE (HOST_FB_16K). */
+#ifdef HOST_FB_16K
+#define ENTITY_PLANE_SIZE  0x4000UL
+#else
 #define ENTITY_PLANE_SIZE  0x10000UL
+#endif
 
 /* -----------------------------------------------------------------------
    Code-embedded NOP view descriptor — mirrors the engine reality.
@@ -87,10 +91,21 @@
    values > 1, so the host reconstruction's NOP guards fire exactly as the
    engine's guards do.  The composite result is therefore unchanged.
    ----------------------------------------------------------------------- */
+/* RECONSTRUCTION FIDELITY (nop_view guard values, corrected 2026-07-02): the static
+ * image's stale [0x8d4]/[0x8e0] pointers land on machine code, giving word00=0xc3fb /
+ * word0e=0x85b3.  The dispatcher guards are SIGNED (`cmp bp,1; jg` — byte-verified in
+ * the binary), so those negative values would actually fall THROUGH to the handler,
+ * not NOP — yet the captured pixel output shows no visible effect at the static
+ * render moment (the un-decompiled overlay body presumably rejects the garbage
+ * descriptor internally, e.g. via its clip fields).  This harness view models the
+ * observed no-effect explicitly with 0x7fff (rejected by the signed guard), instead
+ * of relying on the old unsigned misreading of 0xc3fb/0x85b3; after the guard was
+ * corrected to signed, the old values dispatched into the NULL source and crashed
+ * the ctests.  Pixel-validated equivalence is unchanged. */
 static const bgi_view_desc nop_view = {
-    0xc3fbu,  /* word00  = 0xc3fb (machine code at draw_view site; >1 → mode-10 NOP) */
+    0x7fffu,  /* word00: (s16)>=2 → mode-10 guard rejects (engine stale value 0xc3fb) */
     { 0u, 0u, 0u, 0u, 0u, 0u },
-    0x85b3u,  /* word0e  = 0x85b3 (machine code at erase_view site; >1 → mode-01 NOP) */
+    0x7fffu,  /* word0e: (s16)>=2 → mode-01 guard rejects (engine stale value 0x85b3) */
     0u,       /* dest_off */
     0u,       /* dest_seg */
     { 0u, 0u, 0u, 0u },
@@ -438,6 +453,33 @@ void entity_draw_p1(u8 __huge *planes, const u8 __far *dg,
 
     entity_blit_object(planes, obj, bank, bank_base_lin, view);
 }
+
+#ifdef BUMPY_PLAYABLE
+/* ── entity_draw_screen_sprite — host menu/screen-sprite blit ──────────────────────
+   Like entity_draw_p1, but takes the frame-table far ptr EXPLICITLY instead of reading
+   it from the DGROUP descriptor at obj+6/+8.  The engine's run_main_menu sets the
+   p1_sprite obj +6/+8 to the cursor table (DAT_6c2c = FLECHE.BIN) and blits frame 0;
+   the host has no DGROUP sprite descriptor bound pre-level (hr_dg NULL -> hr_blit_obj
+   NOPs), so the menu cursor is drawn here from the dedicated cursor bank into the
+   framebuffer.  Builds a local obj and runs the validated entity_blit_object pipeline.
+   RECONSTRUCTION FIDELITY: host-platform screen-sprite leaf (docs/reconstruction-fidelity.md). */
+void entity_draw_screen_sprite(u8 __huge *planes, u16 pixel_x, u16 pixel_y, u16 frame,
+                               u16 ftbl_off, u16 ftbl_seg,
+                               u8 __huge *bank, u32 bank_base_lin,
+                               const sprite_view *view)
+{
+    u8 obj[OBJ_SIZE];
+
+    memset(obj, 0, sizeof(obj));
+    ent_wr16(obj, OBJ_FTBL_OFF, ftbl_off);
+    ent_wr16(obj, OBJ_FTBL_SEG, ftbl_seg);
+    ent_wr16(obj, OBJ_X,         pixel_x);
+    ent_wr16(obj, OBJ_Y,         pixel_y);
+    ent_wr16(obj, OBJ_FRAME_IDX, frame);
+    obj[OBJ_FLAGS] = OBJ_VISIBLE;
+    entity_blit_object(planes, obj, bank, bank_base_lin, view);
+}
+#endif /* BUMPY_PLAYABLE */
 
 /* -----------------------------------------------------------------------
    entity_draw_layer_a — static placement port of the layer-A loop inside

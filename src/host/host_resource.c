@@ -30,7 +30,9 @@
 #include "../bumpy.h"
 #include "../dosio.h"
 #include "../vec.h"
-#include <dos.h>        /* MK_FP, FP_SEG */
+#include "../sprite.h"  /* sprite_bank_load_transform (cursor bank) */
+#include "host.h"       /* host_cursor_bind */
+#include <dos.h>        /* MK_FP, FP_SEG, FP_OFF */
 #include <malloc.h>     /* halloc */
 #include <string.h>     /* _fmemcpy */
 
@@ -75,14 +77,21 @@ extern u8 __huge *host_framebuffer;   /* host_render.c — 4 × 64 KB plane imag
 extern u16 menu_opt2_img_off[3];
 extern u16 menu_opt2_img_seg[3];
 
-/* The framebuffer is 4 × 0x10000 (256 KB) but only ~16 KB of each 64 KB plane is used:
- * page 0 at [0..0x1f40] and page 1 at [0x2000..0x3f40], so [0x4000..0x10000) (48 KB) of
- * plane 0 is permanently unused.  fullscreen_buf lives there — a paragraph- (and here
- * 0x4000-byte / segment-) aligned window inside plane 0, NO extra heap allocation.  The
- * 8 KB of conventional memory left over the framebuffer cannot fit a separate 34 KB
- * halloc, so reusing the slack is what makes both fit.  clear_viewport is bounded to the
- * display extent [0..0x4000) per plane so it never touches this window, and the
- * compose/present paths only read/write [0..0x3f40], so fullscreen_buf is never clobbered. */
+/* fullscreen_buf placement (host_screens_buf_init below) depends on the framebuffer size:
+ *
+ *  - HOST_FB_16K (the shipping playable build): the framebuffer is 4 × 0x4000 (64 KB) — each
+ *    plane holds only page0 [0..0x1f40] + page1 [0x2000..0x3f40] with no slack, so
+ *    fullscreen_buf is its own separate halloc.  This is affordable because shrinking the
+ *    framebuffer from 256 KB to 64 KB freed ~192 KB (see host.h HOST_PLANE_SIZE), which is
+ *    also what lets level_alloc_buffers' ~167 KB of buffers fit under 640 KB.
+ *
+ *  - Default stride (HOST_FB_16K undefined): the framebuffer is 4 × 0x10000 (256 KB) but only
+ *    ~16 KB of each 64 KB plane is used (page0 [0..0x1f40], page1 [0x2000..0x3f40]), so
+ *    [0x4000..0x10000) of plane 0 is unused; fullscreen_buf lives there — a 0x4000-byte /
+ *    segment-aligned window inside plane 0, NO extra heap.  clear_viewport is bounded to the
+ *    display extent [0..0x4000) per plane so it never touches this window, and the
+ *    compose/present paths only read/write [0..0x3f40], so fullscreen_buf is never clobbered.
+ *    HR_FSBUF_PLANE0_OFF_PARA names that window (used only on this path). */
 #define HR_FSBUF_PLANE0_OFF_PARA 0x400u   /* 0x4000 bytes into plane 0 (in paragraphs) */
 
 /* The sprite-bank read target.  init_title_graphics does
@@ -142,6 +151,20 @@ void host_screens_buf_init(void)
      * framebuffer base.  SEGMENT-ALIGNED (offset 0): DOS INT 21h/3Fh wraps/truncates a
      * read whose buffer offset + length crosses the 64 KB segment boundary; a 0x8800-byte
      * read at offset 0 stays within plane 0's 64 KB span (ends at 0xc800 < 0x10000). */
+#ifdef HOST_FB_16K
+    /* HOST_FB_16K: the framebuffer is only 16 KB/plane, so plane 0 has NO slack above
+     * page0/page1 to host fullscreen_buf — the +0x4000 offset would land in plane 1.
+     * Allocate it as its own segment-aligned 0x8800-byte huge block instead.  This costs
+     * ~34 KB of heap, but shrinking the framebuffer to 64 KB freed ~192 KB, so the net
+     * still lets level_alloc_buffers fit (see host.h HOST_PLANE_SIZE). */
+    {
+        u8 __huge *p = (u8 __huge *)halloc(HR_FSBUF_BYTES, 1u);
+        if (p != (u8 __huge *)0) {
+            fullscreen_buf     = 0u;
+            fullscreen_buf_seg = (u16)((u32)((void __far *)p) >> 16);
+        }
+    }
+#else
     if (host_framebuffer != (u8 __huge *)0) {
         u16 base_seg = (u16)((u32)((void __far *)host_framebuffer) >> 16);
         fullscreen_buf     = 0u;
@@ -155,9 +178,47 @@ void host_screens_buf_init(void)
             fullscreen_buf_seg = (u16)((u32)((void __far *)p) >> 16);
         }
     }
+#endif
     /* Load the option-2 difficulty-label strips (EASY/MEDIUM/HARD) the main menu
      * cycles — runs once at startup, before game_loop reaches run_main_menu. */
     host_load_menu_strips();
+    /* Load the BGI text font (DDFNT2.CAR) — see host_load_font below. */
+    host_load_font();
+}
+
+/* ── host_load_font — load DDFNT2.CAR (the BGI text font object) ─────────────────
+ * Engine: load_graphics_resources (1000:0a2c) does open_resource(4,4) on the
+ * 0x0090 table base set by init_game_session_state — entry 0x00b8 = DDFNT2.CAR —
+ * reads it into the buffer at DGROUP 0x75da/0x75dc and binds it as the BGI
+ * "current object" (the font far ptr at DGROUP 0x68a2) via 1000:97df -> 1ab9:1330.
+ * Font object: {byte first_char, byte last_char, byte px_height, byte row_count,
+ * byte spacing, byte pad, BE u16 glyph_off[last-first], glyphs...} — the glyph
+ * renderer is host_render.c hr_text_draw_char.  Game data, loaded from the user's
+ * own files at runtime (never committed); absent file → NULL ptr → text NOPs. */
+#define HR_FONT_BYTES 2048u   /* DDFNT2.CAR is 1987 bytes (its vec_res size field) */
+static u8 __far hr_font_buf[HR_FONT_BYTES];
+static int hr_font_loaded = 0;
+
+void host_load_font(void)
+{
+    int h;
+
+    h = dosio_open_read("DDFNT2.CAR");
+    if (h >= 0) {
+        int n = dosio_read(h, (u8 __far *)hr_font_buf, (u16)sizeof(hr_font_buf));
+        (void)dosio_close(h);
+        if (n > 8) {
+            hr_font_loaded = 1;
+        }
+    }
+}
+
+const u8 __far *host_font_ptr(void)
+{
+    if (hr_font_loaded == 0) {
+        return (const u8 __far *)0;
+    }
+    return (const u8 __far *)hr_font_buf;
 }
 
 /* Select the active resource-table base from the engine's DGROUP table offset, so
@@ -252,6 +313,42 @@ void vec_decode(u16 buf_off, u16 buf_seg, u32 size, u16 arg, u16 flag)
         _fmemcpy((u8 __far *)MK_FP(buf_seg, (u16)(buf_off + VEC_HDR_BYTES)),
                  (u8 __far *)hr_planar, VEC_PLANAR);
     }
+}
+
+/* ── host_load_cursor_bank — load + transform FLECHE.BIN (the menu cursor arrow) ────
+ *   The engine loads this as resource 9 -> DAT_6c2c via load_graphics_resources at
+ *   session init, then process_sprites relocates+transforms it.  The host resource path
+ *   DRAINS the engine's sprite-bank reads (process_sprites was a NOP), so we load the
+ *   cursor bank explicitly here, run sprite_bank_load_transform (which now relocates the
+ *   frame-offset table to far ptrs + de-interleaves frame 0), and register it with
+ *   host_render so run_main_menu's host_blit_cursor can blit frame 0.
+ *
+ *   FLECHE.BIN is ~2.2 KB (a 512-slot table with one 16×16 frame); backed by a static
+ *   __far buffer (NOT halloc) because conventional memory is nearly exhausted by
+ *   host_fb_init's 256 KB framebuffer (see main.c) — a static FAR_DATA block has no
+ *   allocation to fail.  RECONSTRUCTION FIDELITY: host-platform resource leaf. */
+static u8 __far hr_cursor_bank_buf[0x900];   /* 2304 B ≥ FLECHE.BIN (2188 B) */
+
+void host_load_cursor_bank(void)
+{
+    int fd;
+    int n;
+    u32 base_lin;
+
+    fd = dosio_open_read("FLECHE.BIN");
+    if (fd < 0) {
+        return;                         /* missing → cursor stays absent (NOP) */
+    }
+    n = dosio_read(fd, (u8 __far *)hr_cursor_bank_buf, (u16)sizeof(hr_cursor_bank_buf));
+    dosio_close(fd);
+    if (n <= 0) {
+        return;
+    }
+    /* relocate frame-offset table to far ptrs + de-interleave frame 0 (palette_mode 2) */
+    sprite_bank_load_transform((u8 __far *)hr_cursor_bank_buf, 2u);
+    base_lin = ((u32)FP_SEG(hr_cursor_bank_buf) << 4) + (u32)FP_OFF(hr_cursor_bank_buf);
+    host_cursor_bind((u8 __huge *)hr_cursor_bank_buf, base_lin,
+                     FP_OFF(hr_cursor_bank_buf), FP_SEG(hr_cursor_bank_buf));
 }
 
 #endif /* BUMPY_PLAYABLE */

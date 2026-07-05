@@ -128,12 +128,26 @@ static void __interrupt __far host_int8_isr(void)
     outp(PIC_PORT, PIC_EOI);
 }
 
+/* ── io_delay (1000:7f90): I/O bus-settle delay between port writes ─────────
+ * The engine's pit_set_counter0 (1000:7f9a) calls io_delay() after EACH OUT.
+ * The original io_delay is a `jmp $+2`-style settle (decompiles to an empty
+ * body); it is a no-op on the host/DOSBox PIT but is reproduced here for
+ * structural faithfulness to the OUT/io_delay sequence. */
+static void io_delay(void)
+{
+}
+
 /* ── pit_program: write a 16-bit divisor to PIT channel 0 ─────────────────── */
+/* Mirrors pit_set_counter0 (1000:7f9a): out 0x43,0x36 / io_delay / out 0x40,lo
+ * / io_delay / out 0x40,hi / io_delay. */
 static void pit_program(unsigned divisor)
 {
     outp(PIT_CMD_PORT, PIT_CMD_CH0_MODE3);   /* cmd: ch0, lo/hi, mode 3 */
+    io_delay();
     outp(PIT_DATA_PORT, (unsigned char)( divisor        & 0xFFu));  /* lo byte */
+    io_delay();
     outp(PIT_DATA_PORT, (unsigned char)((divisor >> 8u) & 0xFFu));  /* hi byte */
+    io_delay();
 }
 
 /* ── install_interrupt_handler ─────────────────────────────────────────────────

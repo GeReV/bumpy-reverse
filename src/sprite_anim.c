@@ -38,6 +38,15 @@ void sprite_prepare_frame(u8 __far *obj, u8 __huge *bank, u32 bank_base_lin)
 
     frame_lin = ((u32)obj_rd16(obj + 0x0e) << 4) + obj_rd16(obj + 0x0c);
     if (frame_lin == 0) {
+        /* RECONSTRUCTION FIDELITY (null-frame path, audit 2026-06-28): the engine
+           (prepare_sprite_frames@1cec:2ded, lines 54-60) sets obj+0x0a=0 and then
+           FALLS THROUGH, copying the frame header from frame[-2..-0xc] at the
+           near-null address (iVar14==0 → reads *(0xfffe)... within-segment garbage).
+           That path is never taken at runtime (a live sprite's frame-table entry is
+           always a valid far ptr).  Replicating the fall-through here would compute
+           fb = 0 - bank_base_lin (u32 underflow) and read far out of bounds of the
+           host's flat bank[], crashing — so we early-return instead: a deliberate,
+           safe deviation on a dead path. */
         obj_wr16(obj + 0x0a, 0);
         return;
     }

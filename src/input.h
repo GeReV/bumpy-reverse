@@ -52,5 +52,6 @@ void input_state_clear(void);
 void poll_input(void);
 u16  read_input_action(u16 handler_idx);
 void poll_joystick_state(void);
+u16 read_joystick_axes(u16 player_sel);   /* 1000:7861 — packed X/Y, 0xffff=none */
 
 #endif /* INPUT_H_INCLUDED */

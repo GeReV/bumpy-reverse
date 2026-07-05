@@ -1,3 +1,6 @@
+#ifndef BUMPY_H
+#include <conio.h>   /* inp/outp — game-port 0x201 + PIT in read_joystick_axes */
+#endif
 #include "input.h"
 #ifdef BUMPY_PLAYABLE
 #include "host/host.h"   /* host_keyboard_isr_install */
@@ -50,6 +53,23 @@ u8           input_state;                    /* 203b:8244 */
 u8           g_key_state_table[0x80];         /* 203b:4d42 (direct; see note) */
 u8 __far    *g_joystick_handler_table[16];   /* 203b:4cf2 (zeroed by init) */
 u8           g_keyboard_isr_installed;        /* 203b:4dc4 */
+
+/* ── joystick-read DGROUP state (read_joystick_axes / poll_joystick_state) ─────── */
+u8  g_p1_joystick_present;   /* 203b:4dca  0=untested,1=present,0xff=absent */
+u8  g_p2_joystick_present;   /* 203b:4dcb */
+s16 g_joy_pit_counter;       /* 203b:4d32  PIT ch0 decay tick count */
+s16 g_joy_x_raw;             /* 203b:4dc6  raw X decay count (signed) */
+s16 g_joy_y_raw;             /* 203b:4dc8  raw Y decay count (signed) */
+u8  g_p1_joystick_state;     /* 203b:4d34  resolved P1 state byte */
+u8  g_p2_joystick_state;     /* 203b:4d35  resolved P2 state byte */
+u8  g_p1_joy_x_min_thresh;   /* 203b:4d36  calib thresholds (calibrate_joystick 1000:77d9; 0 in this slice) */
+u8  g_p1_joy_y_min_thresh;   /* 203b:4d37 */
+u8  g_p1_joy_x_max_thresh;   /* 203b:4d38 */
+u8  g_p1_joy_y_max_thresh;   /* 203b:4d39 */
+u8  g_p2_joy_x_min_thresh;   /* 203b:4d3a */
+u8  g_p2_joy_y_min_thresh;   /* 203b:4d3b */
+u8  g_p2_joy_x_max_thresh;   /* 203b:4d3c */
+u8  g_p2_joy_y_max_thresh;   /* 203b:4d3d */
 
 /* INT 9 keyboard ISR vector saved by install_keyboard_isr (1000:7a6d/7a6f). */
 static u16   g_saved_kbd_isr_off;
@@ -153,21 +173,278 @@ void input_state_clear(void)
 }
 
 
+/* ── joystick read + state — RECONSTRUCTED from local/decomp (audit 2026-06-28).
+ * read_joystick_axes (1000:7861) + poll_joystick_state (1000:773c) replace the
+ * keyboard-only poll stub.  DEAD in this slice: the synthesized handler script
+ * has no phase-1 opcode so read_input_action never calls poll_joystick_state; and
+ * with no joystick read_joystick_axes returns 0xffff (single cheap 0x201 probe).
+ * CARVE-OUT: calibrate_joystick (1000:77d9) — which fills the 0x4d36..0x4d3d
+ * thresholds — is not reconstructed, so the thresholds stay 0 (BSS); only relevant
+ * if a real joystick + phase-1 script are present, which this slice never has. ── */
+
 /*
- * poll_joystick_state — joystick-phase accumulator (STUB for this slice).
+ * read_joystick_axes — 1000:7861
  *
- * RECONSTRUCTION FIDELITY: the engine's joystick read produces an action byte
- * (returned in CH and OR'd into the accumulator's low byte by read_input_action's
- * phase-1 loop).  This slice is keyboard-only and has no joystick hardware
- * capture, so this faithful-signature stub contributes 0.  The synthesized
- * handler script (host test) starts its bytecode with a phase-1 delimiter, so the
- * joystick loop body never runs and the stub's value is never consulted.
+ * Low-level game-port (0x201) analog joystick read: times each axis one-shot's
+ * capacitor decay against PIT channel-0 (port 0x40) for the selected player and
+ * returns the packed X/Y position (high byte = X raw>>1, low byte = Y raw>>1),
+ * or 0xffff on timeout / joystick-not-present.
+ *
+ * Player selected via the AL register selector (the engine's __cdecl16near reads
+ * in_AL; modelled here as the forwarded AX from the joystick callers, only bit0 is
+ * consumed): bit0=0 -> P1 (axis mask 0x102 = X=bit0, Y=bit1), bit0=1 -> P2 (0x408).
+ *
+ * Presence handshake: a present-flag of 0 means "untested" -> read port 0x201 once;
+ * if the player's two axis bits are already low (a stick is wired) set the flag to 1
+ * and return 0xffff (no reading this call).  A flag of 0xff (set by calibrate_joystick
+ * on a failed read) means "no joystick" -> immediate 0xffff.  Only flag==1 proceeds.
+ *
+ * RECONSTRUCTION FIDELITY:
+ *  - Interrupt mask: the engine brackets the whole body in PUSHF;CLI (1000:7861-7863)
+ *    ... POPF (1000:7951), masking interrupts across the PIT capacitor-decay timing
+ *    loop so a tick IRQ cannot corrupt the count.  The Ghidra C decomp (source of
+ *    truth) does not surface this; it is documented here and omitted from the active
+ *    code (as the project omits asm-level scaffolding such as the stack-check
+ *    prologue).  A real-hardware build wanting tick-accurate readings must restore a
+ *    disable()/enable() (flag-preserving) bracket; this matters only when the
+ *    joystick path actually runs (poll_joystick_state is still a stub in this slice).
+ *  - Dead recursive call: the newly-present path ends `return 0xffff`.  The binary
+ *    reaches that return through a tautological CMP AX,0xffff;JZ, leaving a recursive
+ *    self-CALL at 1000:7983 as unreachable dead code (Ghidra: "Removing unreachable
+ *    block 0x00017983").  The decomp and this port both omit it.
+ *  - Port I/O is the engine's IN/OUT, modelled with conio inp()/outp() exactly as
+ *    sound.c does (input.c gains a `#ifndef BUMPY_H #include <conio.h> #endif`).
+ *  - Variable roles mirror the decomp 1:1 (port_val and y_mask are deliberately
+ *    reused for both a port value and a mask byte, as in the original);
+ *    Ghidra's bVar1 is named high_mask here.  CONCAT11(hi,lo) packing is explicit.
  */
-static u8 g_joystick_phase_out;   /* mirrors the engine's CH output register */
+u16 read_joystick_axes(u16 player_sel)   /* in_AL: bit0 selects P1(0)/P2(1) */
+{
+    u8  port_val;
+    u8  y_mask;
+    u8  high_mask;          /* Ghidra bVar1 */
+    u16 axis_mask;
+    u16 y_val;
+    s16 prev_timeout;
+    s16 timeout;
+    s16 retry_count;
+
+    if ((player_sel & 1) == 0) {
+        axis_mask = 0x102;
+        if (g_p1_joystick_present != 1) {
+            if (g_p1_joystick_present != 0) {
+                return 0xffff;                    /* 0xff -> no joystick */
+            }
+            port_val = (u8)inp(0x201);            /* untested: probe once */
+            if ((port_val & 3) != 0) {
+                return 0xffff;
+            }
+            g_p1_joystick_present = 1;
+            return 0xffff;
+        }
+    }
+    else {
+        axis_mask = 0x408;
+        if (g_p2_joystick_present != 1) {
+            if (g_p2_joystick_present != 0) {
+                return 0xffff;
+            }
+            port_val = (u8)inp(0x201);
+            if ((port_val & 0xc) != 0) {
+                return 0xffff;
+            }
+            g_p2_joystick_present = 1;
+            return 0xffff;
+        }
+    }
+
+    /* Wait for the selected player's X then Y axis lines to settle low (their RC
+       one-shots already discharged), guarded by a down-counting watchdog. */
+    timeout = 0;
+    do {
+        do {
+            prev_timeout = timeout;
+            port_val = (u8)inp(0x201);
+            timeout = prev_timeout + -1;
+        } while (timeout != 0 && ((u8)axis_mask & port_val) != 0);
+        y_mask = (u8)(axis_mask >> 8);
+        retry_count = 0;
+    } while ((timeout != 0) &&
+            (retry_count = prev_timeout + -2, timeout = retry_count,
+            retry_count != 0 && (y_mask & port_val) != 0));
+
+    if (retry_count != 0) {
+        outp(0x201, port_val);                    /* strobe: re-trigger one-shots */
+        port_val = (u8)inp(0x201);
+        if (((y_mask & port_val) == 0) && (((u8)axis_mask & port_val) == 0)) {
+            /* Program PIT ch0 (latch mode 0x06) and align to a fresh tick edge. */
+            outp(0x43, 6);
+            timeout = 100;
+            do {
+                timeout = timeout + -1;
+            } while (timeout != 0);
+            do {
+                port_val = (u8)inp(0x40);
+                (void)inp(0x40);
+            } while ((port_val & 0x10) == 0);
+            do {
+                port_val = (u8)inp(0x40);
+                (void)inp(0x40);
+            } while ((port_val & 0x10) != 0);
+        }
+        g_joy_pit_counter = 0;
+        timeout = 1000;
+        do {
+            do {
+                port_val = (u8)inp(0x40);
+                (void)inp(0x40);
+            } while ((port_val & 0x10) == 0);
+            g_joy_pit_counter = g_joy_pit_counter + 1;
+            y_mask    = (u8)inp(0x201);
+            port_val  = (u8)axis_mask;             /* low mask byte (BL=0x02 → port bit1 = Y line) */
+            high_mask = (u8)(axis_mask >> 8);      /* high mask byte (BH=0x01 → port bit0 = X line) */
+            if (port_val == 0) {
+LAB_1000_78ff:
+                if ((high_mask & y_mask) == 0) {
+                    axis_mask = axis_mask & 0xff;
+                    g_joy_x_raw = g_joy_pit_counter;
+joined_r0x0001792a:
+                    if (port_val == 0) {
+                        axis_mask = (u16)g_joy_x_raw;
+                        if (g_joy_x_raw < 0) {
+                            axis_mask = 0;
+                        }
+                        y_val = (u16)g_joy_y_raw;
+                        if (g_joy_y_raw < 0) {
+                            y_val = 0;
+                        }
+                        /* CONCAT11(X raw>>1, Y raw>>1). */
+                        return (u16)(((u16)(u8)(axis_mask >> 1) << 8) |
+                                     (u8)(y_val >> 1));
+                    }
+                }
+            }
+            else {
+                if ((port_val & y_mask) == 0) {
+                    axis_mask = (u16)high_mask << 8;
+                    g_joy_y_raw = g_joy_pit_counter;
+                    port_val = high_mask;
+                    goto joined_r0x0001792a;
+                }
+                if (high_mask != 0) {
+                    goto LAB_1000_78ff;
+                }
+            }
+            do {
+                port_val = (u8)inp(0x40);
+                (void)inp(0x40);
+            } while ((port_val & 0x10) != 0);
+            timeout = timeout + -1;
+        } while (timeout != 0);
+    }
+    return 0xffff;
+}
+
+/*
+ * poll_joystick_state — 1000:773c
+ *
+ * Read the joystick for the selected player (in_AX bit0: 0 = player 1, 1 = player 2):
+ * fetch the packed axis position from read_joystick_axes() (HIGH byte = X raw>>1,
+ * LOW byte = Y raw>>1 — see that function's header; 0xffff/-1 == no joystick / read
+ * timed out), gate the axes against the per-player calibration thresholds to build
+ * the direction bits, OR in the two fire-button bits read from game port 0x201, and
+ * store the resulting state byte to g_p1_joystick_state / g_p2_joystick_state.
+ *
+ * State byte: 1=up, 2=down, 4=left, 8=right, 0x10=button1, 0x20=button2 (the
+ * dispatch semantics player.c:3818 documents, validated by the int8 gate — the low
+ * byte (Y axis) drives bits 1/2 and the high byte (X axis) drives bits 4/8).
+ * NOTE (Ghidra-inherited misnomers, kept for symbol parity): the g_p*_joy_x_*
+ * thresholds (4d36/4d38, 4d3a/4d3c) actually gate the LOW byte (hardware Y), and
+ * the g_p*_joy_y_* thresholds gate the HIGH byte (hardware X); calibrate_joystick
+ * fills them from the matching bytes, so the gating is self-consistent.
+ *
+ * RECONSTRUCTION FIDELITY (register I/O; consistent with the existing module note):
+ *  - in_AX (player select, bit0) is a stale-register input in the engine — the caller
+ *    read_input_action passes it implicitly; for the keyboard path it is effectively 0
+ *    (= player 1).  Modelled by the file-static g_joy_poll_ax (default 0); a two-player
+ *    joystick path would set it (and the matching read_joystick_axes AL) before calling.
+ *  - the engine leaves the resulting state byte in CH for read_input_action's phase-1
+ *    loop to OR into its accumulator.  That CH output is modelled by g_joystick_phase_out
+ *    (the same static read_input_action already consumes); it mirrors the value stored to
+ *    g_p{1,2}_joystick_state, and stays 0 when read_joystick_axes returns -1 (dir_bits=0).
+ *  - port read uses inp(0x201) (see the conio.h guard at the top of the file).
+ *
+ * Stack-check prologue omitted (non-semantic Borland CRT guard, per the module note).
+ * The threshold globals (203b:4d36..4d3d) are calibrated by calibrate_joystick
+ * (1000:77d9); in this keyboard-only slice they stay 0 and this whole body is never
+ * reached (read_input_action's synthesized script skips phase 1) — reconstructed
+ * faithfully for structural fidelity.
+ */
+static u8 g_joystick_phase_out;   /* models the engine's CH output register (read by read_input_action) */
+static u8 g_joy_poll_ax;          /* models the in_AX register (bit0 = player select); 0 = player 1 */
 
 void poll_joystick_state(void)
 {
-    g_joystick_phase_out = 0;
+    u8  x_or_buttons;
+    s16 axes;
+    u8  y_axis;
+    u8  dir_bits;
+
+    axes = read_joystick_axes(g_joy_poll_ax);
+    dir_bits = 0;
+    g_joystick_phase_out = 0;                 /* CH model: dir_bits == 0 when no read */
+    if (axes != -1) {
+        x_or_buttons = (u8)axes;              /* low byte  = Y axis (Ghidra-named var kept) */
+        y_axis = (u8)((u16)axes >> 8);        /* high byte = X axis (Ghidra-named var kept) */
+        if ((g_joy_poll_ax & 1) == 0) {
+            /* ── Player 1 ── */
+            if (y_axis < g_p1_joy_y_min_thresh) {
+                dir_bits = 4;                 /* left  (X axis low)  */
+            }
+            else if (g_p1_joy_y_max_thresh <= y_axis) {
+                dir_bits = 8;                 /* right (X axis high) */
+            }
+            if (x_or_buttons < g_p1_joy_x_min_thresh) {   /* 203b:4d36 (Ghidra: g_joy_calib_thresholds) */
+                dir_bits = dir_bits | 1;      /* up   (Y axis low)   */
+            }
+            else if (g_p1_joy_x_max_thresh <= x_or_buttons) {
+                dir_bits = dir_bits | 2;      /* down (Y axis high)  */
+            }
+            x_or_buttons = (u8)inp(0x201);    /* game-port: bit4=P1 btn1, bit5=P1 btn2 */
+            if ((~x_or_buttons & 0x10) != 0) {
+                dir_bits = dir_bits | 0x10;
+            }
+            g_p1_joystick_state = dir_bits;
+            if ((~x_or_buttons & 0x20) != 0) {
+                g_p1_joystick_state = dir_bits | 0x20;
+            }
+            g_joystick_phase_out = g_p1_joystick_state;   /* CH model */
+        }
+        else {
+            /* ── Player 2 ── */
+            if (y_axis < g_p2_joy_y_min_thresh) {
+                dir_bits = 4;                 /* left  (X axis low)  */
+            }
+            else if (g_p2_joy_y_max_thresh <= y_axis) {
+                dir_bits = 8;                 /* right (X axis high) */
+            }
+            if (x_or_buttons < g_p2_joy_x_min_thresh) {
+                dir_bits = dir_bits | 1;      /* up   (Y axis low)   */
+            }
+            else if (g_p2_joy_x_max_thresh <= x_or_buttons) {
+                dir_bits = dir_bits | 2;      /* down (Y axis high)  */
+            }
+            x_or_buttons = (u8)inp(0x201);    /* game-port: bit6=P2 btn1, bit7=P2 btn2 */
+            if ((~x_or_buttons & 0x40) != 0) {
+                dir_bits = dir_bits | 0x10;
+            }
+            g_p2_joystick_state = dir_bits;
+            if ((~x_or_buttons & 0x80) != 0) {
+                g_p2_joystick_state = dir_bits | 0x20;
+            }
+            g_joystick_phase_out = g_p2_joystick_state;   /* CH model */
+        }
+    }
 }
 
 
@@ -264,11 +541,14 @@ void poll_input(void)
 }
 
 #ifdef BUMPY_PLAYABLE
-/* ── wait_keypress (1000:1de1 area) ─────────────────────────────────────────────
+/* ── wait_keypress (1000:328f) ──────────────────────────────────────────────────
  * Engine logic (relocated from src/host/host_input.c — not host platform glue):
  * clear input_state, then spin calling poll_input() until input_state becomes
  * nonzero.  The game gates on the next resolved action key (menus, pause, title
- * sequence debounce) through this.  Faithful to the engine body's structure; the
+ * sequence debounce) through this.  (Address corrected from the earlier "1de1 area"
+ * citation, which pointed inside poll_input; the real wait_keypress is 1000:328f.)
+ * Faithful to the engine body's structure (minus the Borland stack-check prologue,
+ * a non-semantic compiler guard omitted throughout the reconstruction); the
  * tight spin is correct because IRQ1 is delivered asynchronously, so the INT9 ISR
  * sets the table entry and poll_input() eventually returns a nonzero action.
  * Built only into the playable image (game_stubs.c stubs it for the default). */

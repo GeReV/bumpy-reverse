@@ -47,7 +47,12 @@ static u16 sprite_bitrev_block(u8 lo, u8 hi)
 }
 
 /* Transform one frame in place: pix points at the pixel data; the 12-byte header
-   is at pix[-12..-1].  Mirrors sprite_frame_transform (1cec:0c77). */
+   is at pix[-12..-1].  Mirrors sprite_frame_transform (1cec:0c77).
+   RECONSTRUCTION FIDELITY (palette_mode source, audit 2026-06-28): the engine reads
+   palette_mode from DGROUP 0x541d, writes it to the CS:[0xded] shadow (iRam00010ded)
+   as a side-effect, then re-reads that shadow to branch CGA(0) vs EGA/VGA.  This port
+   takes palette_mode as a parameter and branches on it directly; the CS:[0xded] shadow
+   write is not modelled (nothing else in the reconstruction reads it). */
 static void sprite_frame_transform(u8 __far *pix, u8 palette_mode)
 {
     u8  b0, b1;
@@ -118,6 +123,34 @@ void sprite_bank_load_transform(u8 __far *bank, u8 palette_mode)
             break;                 /* 0 entry terminates the table */
         }
         pix = bank_ptr(bank, 0x800UL + off);
+#ifdef BUMPY_PLAYABLE
+        /* ── sprite_bank_relocate_frames (1cec:0c34) — TABLE RELOCATION ─────────────
+           The engine's process_sprites rewrites each big-endian frame-OFFSET table
+           entry IN PLACE as the normalized FAR PTR to the frame pixels (ES:0x800+off),
+           producing the in-memory bank form (bank_inmem.bin) the validated blitter
+           consumes: sprite_prepare_frame reads obj+6/+8 -> table[idx] as a LE far ptr
+           (frame_lin = seg<<4 + off) and recovers the frame via frame_lin - bank_base_lin.
+           Without this step the table stays big-endian and entity_draw_* reads garbage
+           frame pointers — no entity sprite renders.  (The frame-DATA transform below is
+           validated byte-exact by BSPRITE/validate_sprites, but that harness diffs only
+           the data region [0x800,eof); the table relocation was never covered, so the
+           live playable build silently lacked it.)
+
+           Exercised only by the playable host (default build's render leaves are stubbed,
+           so its bank is never blitted) → #ifdef BUMPY_PLAYABLE keeps default BUMPY.EXE
+           byte-unchanged.  NORMALIZATION DEVIATION: the engine stores off in [0x800,0x810)
+           (seg = ES + off>>4); we reuse bank_ptr's (lin&0xf)+0x10 split — identical LINEAR
+           (the only thing sprite_prepare_frame uses), different paragraph normalization.
+           RECONSTRUCTION FIDELITY: docs/reconstruction-fidelity.md. */
+        {
+            u16 poff = FP_OFF(pix);
+            u16 pseg = FP_SEG(pix);
+            e[0] = (u8)(poff & 0xffu);
+            e[1] = (u8)(poff >> 8);
+            e[2] = (u8)(pseg & 0xffu);
+            e[3] = (u8)(pseg >> 8);
+        }
+#endif /* BUMPY_PLAYABLE */
         sprite_frame_transform(pix, palette_mode);
     }
 }

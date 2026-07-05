@@ -91,7 +91,13 @@ typedef struct {
 #define BGI_PAGE_A200_OFF  0x2000UL  /* VGA byte offset for a200:0000 */
 #define BGI_PAGE_A000_OFF  0x0000UL  /* VGA byte offset for a000:0000 */
 #define BGI_PAGE_SIZE      0x1F40UL  /* 200 rows × 40 bytes = 8000 B per plane */
-#define BGI_PLANE_SIZE     0x10000UL /* bytes per plane in host work buffer */
+/* bytes per plane in host work buffer — must match HOST_PLANE_SIZE.  HOST_FB_16K
+   (playable EXE) → 16 KB/plane; default build + ctests → full 64 KB (byte-unchanged). */
+#ifdef HOST_FB_16K
+#define BGI_PLANE_SIZE     0x4000UL
+#else
+#define BGI_PLANE_SIZE     0x10000UL
+#endif
 #define BGI_ROWS           200u      /* display rows */
 #define BGI_ROW_BYTES      40u       /* VGA row stride (320px ÷ 8 bits) */
 

@@ -70,54 +70,93 @@
 /* ── init_display_97a4 (1000:97a4) ─────────────────────────────────────────────
  * Set VGA video mode 0x0D (320×200×16, 4-plane EGA/VGA) via BIOS int 10h.
  * AH=0x00, AL=0x0D → mode set; clears display + resets CRTC.
- * Faithful reconstruction of the engine's BIOS mode-set call (Ghidra: 97a4). */
+ *
+ * RECONSTRUCTION FIDELITY — ATTRIBUTION CORRECTED (audit 2026-06-28):
+ * 1000:97a4 (FUN_1000_97a4) is NOT a BIOS mode-set — it is a near-thunk to
+ * detect_video_adapter (202c:0000), an adapter PROBE (int 10h/int 21h + the
+ * DAT_203b_689e capability flags) that stores an adapter/mode code (0x8000/0/1/4)
+ * at ram 0x26c4c, selecting the CGA vs EGA/VGA branch.  In the real engine the
+ * VGA mode-0x0D set is done by the BGI driver's initgraph, and the probe/driver
+ * init establishes palette_mode (DGROUP 0x541d) — runtime capture: 2 (EGA/VGA).
+ * The host folds the platform mode-0x0D set + the palette_mode=2 outcome into
+ * this boot slot as a NECESSITY (there is no live BIOS/BGI initgraph to do it);
+ * the probe itself is a no-op on the host.  (palette_mode was previously set —
+ * to 14! — by the misnomered set_palette_mode/97c5, which is really the BGI
+ * set-text-colour op; see set_text_color below.)  NOTE: this INT 10h mode set
+ * resets the CRTC start address to 0 — the boot page parity is programmed
+ * AFTER it, by init_display_97f1 (host_crtc_set_start). */
 void init_display_97a4(void)
 {
     union REGS r;
     r.h.ah = 0x00u;
     r.h.al = 0x0Du;
     int86(0x10, &r, &r);
+    palette_mode = 2u;   /* the VGA-adapter outcome the BGI driver init records */
 }
 
-/* ── init_crtc_window (1000:97xx — CRTC Offset + Start programming) ────────────
- * Programs the CRTC Start Address registers (0x0C/0x0D) for the given page and
- * stores the page-layout parameters.  Called during video init to establish the
- * two-page layout; 'a' and 'b' are the page offsets (word-address units), 'c'
- * and 'd' are ancillary CRTC parameters (retained for signature faithfulness).
- *
- * RECONSTRUCTION FIDELITY: the original call at 97f1 passes four parameters
- * whose exact meaning is unresolved (no clean decomp at this address).  The host
- * uses (a=page0_crtc_addr, b=page1_crtc_addr, c=unused, d=unused) to program
- * the start address to page 0 at init time.  Deviation noted. */
+/* ── init_crtc_window (1000:9821 → overlay 1ab9:1422 — CLIP-WINDOW STORE) ──────
+ * GROUNDED (2026-07-03, runtime-relocated overlay disasm): 1000:9821 thunks to
+ * 1ab9:1422, which merely stores its four args into the BGI clip-window record
+ * (DGROUP 0x6936/0x6938/0x693a/0x693c = x0,y0,x1,y1).  It does NOT touch the
+ * CRTC.  A prior host body programmed the CRTC Start Address here — that was an
+ * invention, and FATAL for the boot page parity: init_game_session_state calls
+ * this with (0, 0, 0x13f, 199) AFTER init_display_97f1, so the invented
+ * `start = arg b = 0` write clobbered the 0x2000 boot-parity start and inverted
+ * `displayed == page[table[0]]` for the whole session (the §8.1 menu-arrow
+ * hidden-page bug).  Host: the clip window is not modelled (the reconstructed
+ * blitters clip against the fixed 0x14×0x19 screen themselves) → faithful
+ * store-only leaf, folded to a NOP.  RECONSTRUCTION FIDELITY note recorded. */
 void init_crtc_window(u16 a, u16 b, u16 c, u16 d)
 {
-    u16 start = a;   /* select page 0 CRTC start address at init */
-    (void)b; (void)c; (void)d;
+    (void)a; (void)b; (void)c; (void)d;   /* engine: DGROUP 0x6936..0x693c := a,b,c,d */
+}
 
-    /* Write CRTC Start Address HI (index 0x0C) then LO (index 0x0D).
-     * RECONSTRUCTION FIDELITY — UNGUARDED CRTC WRITE (DELIBERATE):
-     * The HI/LO pair is written as two non-atomic outp calls with no
-     * interrupt guard (_disable/_enable).  This is intentional: the CRTC
-     * latches the start address only at vertical retrace, so the corruption
-     * window is benign in practice.  The original engine's CRTC programming
-     * at this site is unresolved, and almost certainly uses the same unguarded
-     * pair — adding a guard the original lacks would be LESS faithful.  Revisit
-     * only if the original's CRTC sequence is recovered and shown to guard. */
+/* ── host_crtc_set_start — program the CRTC Start Address (boot page parity) ───
+ * BOOT PAGE PARITY (2026-07-02, relocated here 2026-07-03): display starts on
+ * PAGE 1 (a200, CRTC 0x2000) — the invariant is `displayed page ==
+ * page[sprite_table[0]]` (the UI slot the set_sprite_table_ptr(0)…(1) brackets
+ * draw to, and the mode-11 sync's SOURCE).  Booting the display on page 0
+ * inverts the invariant: the menu cursor draws on the sync's DESTINATION page
+ * and every UI draw lands on the hidden page.  Each present flips the CRTC
+ * start and the page table together, so the parity set here is preserved for
+ * the whole session.  (The original's boot CRTC value was never directly
+ * captured — its BGI driver init populates the page table AND the CRTC start
+ * out of the corpus; 0x2000 is functionally forced by the engine's own
+ * menu/gameplay coherence.  See docs/reconstruction-fidelity.md.)
+ *
+ * RECONSTRUCTION FIDELITY — UNGUARDED CRTC WRITE (DELIBERATE): the HI/LO pair
+ * is two non-atomic outp calls with no interrupt guard; the CRTC latches the
+ * start address only at vertical retrace, so the window is benign. */
+static void host_crtc_set_start(u16 start)
+{
     outp(CRTC_INDEX, CRTC_START_HI);
     outp(CRTC_DATA,  (u8)((start >> 8u) & 0xFFu));
     outp(CRTC_INDEX, CRTC_START_LO);
     outp(CRTC_DATA,  (u8)(start & 0xFFu));
 }
 
-/* ── set_palette_mode (palette mode dispatcher) ────────────────────────────────
- * Records palette_mode (the gameplay dispatch index: 0=CGA, 2=EGA/VGA) and the
- * secondary flag.  Called from the boot sequence to establish the session palette
- * branch; the gameplay (the BGI palette pipeline + blitters) reads palette_mode.
- * 'mode' is the low byte of the u16 palette_mode global (DGROUP 0x541d). */
-void set_palette_mode(u8 mode, u8 flag)
+/* ── set_text_color (1000:97c5 → overlay 1ab9:1311 — BGI SET TEXT COLOUR) ──────
+ * GROUNDED (2026-07-03, unpacked-EXE + runtime-relocated overlay disasm): the
+ * 1000:97c5 thunk loads AX=fg, DX=bg from its two stack args and far-calls
+ * 1ab9:1311, which dispatches [DGROUP 0x6946 + palette_mode*2] → the pm-2
+ * handler 1ab9:14ef: expand fg into the 4-plane mask block at DGROUP 0x68a6
+ * (plane p byte = 0xff iff (fg>>p)&1) and bg into 0x68ae likewise.  The glyph
+ * blitter (1ab9:1607) paints every glyph cell OPAQUELY from these expansions.
+ * Its single engine caller is init_game_session_state (1000:02f5):
+ * set_text_color(0x0e, 0x01) — fg = colour 14 (medium grey in the level
+ * palettes), bg = colour 1 — the session-wide text colours (pause/world-map
+ * score, GAME OVER, highscores).
+ *
+ * MISNOMER CORRECTED: this function was previously named `set_palette_mode`
+ * and its host body wrote `palette_mode = mode` (= 14!) — 97c5 never touches
+ * palette_mode (DGROUP 0x541d; runtime capture shows 2, written by the BGI
+ * driver init — see init_display_97a4).  That mismodel is what made the host
+ * glyph blitter assume white (15) — near-BLACK in the world-1 level palette —
+ * for the pause-overlay score (§8.2).  Host: store the colours for the
+ * host_text_* glyph path (host_render.c). */
+void set_text_color(u8 fg, u8 bg)
 {
-    (void)flag;
-    palette_mode = (u16)mode;
+    host_text_set_color(fg, bg);
 }
 
 /* level_packed_palette (level.c, BUMPY_PLAYABLE): far ptr to the level's PACKED
@@ -242,41 +281,41 @@ static void host_set_bgi_attribute_palette(void)
 
 void init_display_97f1(void)
 {
-    init_crtc_window(CRTC_PAGE0_ADDR, CRTC_PAGE1_ADDR, 0u, 0u);
+    /* Engine 1000:97f1 → overlay 1ab9:137b bgi_draw_sequence (runtime-relocated
+     * disasm, 2026-07-03): text pos = (10,10) [op 1441]; clip window
+     * (0,0,0x13f,0xc7) [1422]; active page = 0 [1409]; text line height = 8
+     * [1458: DGROUP 0x693e]; TEXT COLOUR fg=0x0f bg=0 [1311 → pm-2 expansion
+     * 14ef: fg planes → DGROUP 0x68a6, bg → 0x68ae].  Host models the text pos +
+     * colour ops (the clip window / active page / line height have no host
+     * consumers — see init_crtc_window / set_display_page notes). */
+    host_text_set_pos(10u, 10u);
+    set_text_color(0x0fu, 0x00u);
+    /* Host boot additions (RECONSTRUCTION FIDELITY — see each helper's note):
+     * CRTC boot page parity + the BGI attribute-controller mapping + DAC init,
+     * the observable effects of the BGI driver init that is absent from the
+     * corpus. */
+    host_crtc_set_start(CRTC_PAGE1_ADDR);
     host_set_bgi_attribute_palette();
     apply_level_palette();
 }
 
-/* ── set_display_page (CRTC page flip) ─────────────────────────────────────────
- * Programs the CRTC Start Address to select the given display page (0 or 1).
- * The VGA then displays that page at the next vertical retrace.
- * page 0 → CRTC addr 0x0000 (VGA byte offset 0x0000, A000:0000)
- * page 1 → CRTC addr 0x2000 (VGA byte offset 0x2000, A200:0000)
- *
- * PURE-LOGIC UNIT CHECK (no DOS runtime needed):
- *   page=0  → start = 0x0000, HI=0x00, LO=0x00
- *   page=1  → start = 0x2000, HI=0x20, LO=0x00
- *   page=2  → wraps to page 0 (bit 0 == 0), start = 0x0000
- * This is verified by inspection; no executable unit test is possible without DOS. */
+/* ── set_display_page — engine set_active_display_page (1000:9814) ──────────────
+ * This is BGI setactivepage, NOT setvisualpage.  GROUNDED: 1000:9814 → 1ab9:1409
+ * merely clamps the index (≤1) and stores it in DGROUP[0x6940]; it does NOT touch
+ * the CRTC.  And [0x6940] is the BGI library's active-page state, which is dead for
+ * the gameplay draw path — the gameplay draw page is cur_sprite_data, selected
+ * separately (set_sprite_table_ptr).  Per the runtime oracle the engine never
+ * reprograms the CRTC start address during gameplay (single page a000); the display
+ * is fixed at page0 by init_crtc_window.  So this is a faithful index-store with NO
+ * CRTC write — the prior host body programmed the CRTC start address (a page flip),
+ * which is unfaithful (1ab9:1409 does no such thing) and would move the display off
+ * the drawn a000 page now that present_frame no longer overrides it.
+ * RECONSTRUCTION FIDELITY: recorded in docs/reconstruction-fidelity.md. */
+u8 host_bgi_active_page = 0u;   /* mirrors DGROUP[0x6940] — inert for gameplay draw */
+
 void set_display_page(u8 page)
 {
-    u16 start;
-
-    if (page & 1u) {
-        start = CRTC_PAGE1_ADDR;  /* page 1: A200:0000 */
-    } else {
-        start = CRTC_PAGE0_ADDR;  /* page 0: A000:0000 */
-    }
-    /* RECONSTRUCTION FIDELITY — UNGUARDED CRTC WRITE (DELIBERATE):
-     * Same rationale as init_crtc_window above: the HI/LO pair is written
-     * without an interrupt guard because the original engine's page-flip code
-     * is unresolved and almost certainly does the same; the CRTC latches start
-     * address at vretrace so the tear window is benign.  Do not add a guard
-     * the original lacks.  Revisit if the original's CRTC sequence is recovered. */
-    outp(CRTC_INDEX, CRTC_START_HI);
-    outp(CRTC_DATA,  (u8)((start >> 8u) & 0xFFu));
-    outp(CRTC_INDEX, CRTC_START_LO);
-    outp(CRTC_DATA,  (u8)(start & 0xFFu));
+    host_bgi_active_page = (u8)(page & 1u);   /* setactivepage: store index, no CRTC */
 }
 
 /* ── clear_viewport ─────────────────────────────────────────────────────────────
@@ -326,104 +365,39 @@ void clear_viewport(void)
     outp(SEQ_DATA,  0x0Fu);
 }
 
-/* ── present_frame double-buffer state ─────────────────────────────────────────
- * s_display_page — the VGA page CURRENTLY being scanned out by the CRTC.
- * Initialised to 0 (CRTC starts at page 0 after init_display_97f1).
- * present_frame always writes into the OTHER page, then flips. */
-static u8 s_display_page = 0u;
-
-/* ── present_frame (BUMPY_PLAYABLE real body) ───────────────────────────────────
- * Flicker-free double-buffer present:
+/* ── present_frame (BUMPY_PLAYABLE real body) — the engine's REAL page flip ─────
+ * present_frame is the engine's frame-present hook (1000:7bdd → bgi_present_dispatch
+ * 1ab9:0351; pm=2 handler 1ab9:0379 → 1ab9:06c1).  The 06c1 primitive, recovered
+ * from the runtime-relocated overlay bytes (2026-07-02 investigation):
  *
- *   1. Select the off-screen VGA page (the page NOT currently displayed).
- *   2. Copy host_framebuffer (4-plane flat RAM image) into that page, one plane
- *      at a time via the Sequencer Map Mask register.
- *   3. Wait for vertical retrace (poll Input Status #1 port 0x3DA bit 3) so the
- *      subsequent CRTC flip lands inside the vblank interval — no visible tearing.
- *   4. Flip the CRTC start address to the newly-written page.
- *   5. Update s_display_page for the next call.
+ *   cli ; dx=3d4 ; al=0x0c ; out ; inc dx ; in al,dx
+ *   xor al,0x20 ; out dx,al          ; CRTC start high 0x00 <-> 0x20 (page flip)
+ *   sti ; shl bx,2
+ *   mov ax,[si+2] ; xchg [bx+si+2],ax ; mov [si+2],ax   ; swap sprite_table[0]<->[1]
  *
- * VGA page layout (mode 0x0D, 320×200×16):
- *   page 0 → VGA byte offset 0x0000 → segment A000:0000 → CRTC addr 0x0000
- *   page 1 → VGA byte offset 0x2000 → segment A200:0000 → CRTC addr 0x2000
- * VGA_PLANE_BYTES = 0x1F40 (320×200÷8 = 8000 bytes) per plane per page.
+ * Each present = CRTC start flip (display page 0x0000 <-> 0x2000) + a swap of the
+ * two sprite_table_base entries, retargeting every subsequent draw through the
+ * cur-sprite pointer.  A PRIOR revision made this a NOP based on crtc_page.md — a
+ * MISREAD: the single observed CRTC value 0xDF00 is 0xFF ^ 0x20 (the Unicorn VGA
+ * model returns 0xFF on the CRTC read), i.e. the flip primitive fired on EVERY
+ * present; and "w0=1 always sources a000" ignored the per-present table swap.  The
+ * NOP broke the engine invariant "a present separates draw from save-under":
+ * level_intro_screen / level entry draw Bumpy BEFORE the first render_p1_view and
+ * rely on the flip+swap so the first save reads the clean opposite page — with the
+ * NOP that save captured the drawn marker, permanently baking a Bumpy ghost at the
+ * overworld start node and poisoning the walk/entry save-unders (trails).
  *
- * host_framebuffer layout: plane p at [p * HOST_PLANE_SIZE], page 0 content
- * at plane offset +0x0000, page 1 content at plane offset +0x2000.
- * The blitters always compose into page 0 of the host buffer (+0x0000 per plane).
- *
- * RECONSTRUCTION FIDELITY — DOUBLE-BUFFER MECHANISM (CHOSEN DEVIATION):
- * The original engine's display page-flip mechanism was left *unresolved* by the
- * project (the Unicorn VGA model cannot observe CRTC start-address transitions).
- * This host double-buffer (off-screen copy into the non-displayed VGA page, vblank
- * sync via Input Status #1 port 0x3DA bit 3, then CRTC flip via set_display_page)
- * is a *host-chosen mechanism* that is standard and correct for VGA mode 0x0D.
- * The deviation is in mechanism only — the on-screen pixels are identical to the
- * original (verified by the frame-compare gate, Task 11).  Recorded in
- * docs/reconstruction-fidelity.md ("playable host: present_frame double-buffer").
- *
- * VBLANK SYNC NOTE:
- * We poll for the VRETRACE bit (bit 3 of Input Status #1 at 0x3DA) going HIGH,
- * meaning we wait until the start of the vblank interval, then write the CRTC
- * start address.  The CRTC latches the new start address at the NEXT vblank, so
- * the flip is tear-free.  We first wait for the bit to go LOW (end of any ongoing
- * retrace) to avoid a spurious early exit, then wait for it to go HIGH.
- * No infinite-loop guard is needed: at 60 Hz vblank arrives within ~16 ms;
- * a stuck bit would indicate broken hardware, not a program bug.
- *
- * RUNTIME-VERIFICATION DEFERRAL:
- * The playable build cannot boot until Task 9.  This task's verification is:
- * (a) wmake play links BUMPYP.EXE with zero -wx warnings; (b) wmake BUMPY
- * (default build) is byte-unchanged; (c) validate_integration.sh passes.
- * Pixel correctness is deferred to Task 9 (boot) + Task 11 (frame gate). */
+ * Host: the engine's exact port writes against DOSBox's real VGA +
+ * host_page_table_swap() (host_render.c).  Both pages hold the composed screen
+ * (init_fullscreen_view_desc's mode-11 sync), so alternating draws stay seamless. */
 void present_frame(u8 page)
 {
-    u8  plane;
-    u8  offscreen;        /* the page we will write into (not displayed) */
-    u16 vga_seg;
-    u8 __far *vga_dst;
-    u8 __huge *src;
-    u32 plane_offset;
-
-    (void)page; /* page parameter honored via the double-buffer; engine's arg unused */
-
-    if (host_framebuffer == (u8 __huge *)0) {
-        return;   /* framebuffer not allocated yet — faithful NOP */
-    }
-
-    /* Step 1: select the off-screen (non-displayed) VGA page. */
-    offscreen = (u8)((s_display_page == 0u) ? 1u : 0u);
-    vga_seg   = (u16)((offscreen == 0u) ? VGA_SEG_PAGE0 : VGA_SEG_PAGE1);
-    vga_dst   = (u8 __far *)MK_FP(vga_seg, 0u);
-
-    /* Step 2: copy all 4 planes from host_framebuffer (page-0 region, +0x0000
-     * per plane) into the off-screen VGA page. */
-    for (plane = 0u; plane < 4u; plane++) {
-        /* Select write plane via Sequencer Map Mask. */
-        outp(SEQ_INDEX, SEQ_MAP_MASK);
-        outp(SEQ_DATA,  (u8)(1u << plane));
-
-        /* Copy VGA_PLANE_BYTES from plane p, page-0 region of host_framebuffer. */
-        plane_offset = (u32)plane * HOST_PLANE_SIZE;
-        src = host_framebuffer + plane_offset;   /* +0x0000 = page 0 content */
-        _fmemcpy(vga_dst, (u8 __far *)src, VGA_PLANE_BYTES);
-    }
-
-    /* Restore map mask to all planes (normal write mode). */
-    outp(SEQ_INDEX, SEQ_MAP_MASK);
-    outp(SEQ_DATA,  0x0Fu);
-
-    /* Step 3: wait for vertical retrace so the CRTC flip lands in vblank.
-     * First drain any ongoing retrace (wait for bit to go LOW), then wait
-     * for the next retrace start (bit goes HIGH). */
-    while ( (inp(VGA_INPUT_STATUS1) & VGA_VRETRACE_BIT) != 0u) { }
-    while ( (inp(VGA_INPUT_STATUS1) & VGA_VRETRACE_BIT) == 0u) { }
-
-    /* Step 4: flip CRTC start address to the newly-written page. */
-    set_display_page(offscreen);
-
-    /* Step 5: record which page is now displayed. */
-    s_display_page = offscreen;
+    u8 v;
+    (void)page;                    /* engine's constant descriptor-index arg */
+    outp(0x3d4u, 0x0cu);           /* CRTC index: start address high         */
+    v = (u8)inp(0x3d5u);
+    outp(0x3d5u, (u8)(v ^ 0x20u)); /* display page 0x0000 <-> 0x2000         */
+    host_page_table_swap();        /* 1ab9:06c1 tail: table[0] <-> table[1]  */
 }
 
 #endif /* BUMPY_PLAYABLE */

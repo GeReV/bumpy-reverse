@@ -135,6 +135,7 @@ u8 __far *anim_b_clear_view;    /* DGROUP 0x8bc */
 
 /* ── blit descriptor far ptr (draw fns pass this to blit_sprite) ───────────────*/
 u8 __far *p1_sprite;            /* DGROUP 0x8884 */
+u8 __far *hud_icon_sprite_ptr;  /* far ptr → HUD icon-row blit obj at g_entity_dg+0x7986 (draw_icon_row) */
 
 /* ── step-state scalars / working ptrs ─────────────────────────────────────────*/
 u8 __far *g_anim_stream_ptr;    /* DGROUP 0xa0be/0xa0c0 — working stream ptr (A)   */

@@ -28,8 +28,10 @@
 extern s16 p1_pixel_x;
 extern s16 p1_pixel_y;
 
-/* P1 current animation-frame value written by the move step (DGROUP 0x824a). */
-extern u8  p1_move_anim;
+/* P1 current animation-frame value written by the move step (DGROUP 0x824a).
+   WORD: the engine stores/reads 16-bit (1000:1417 / 1000:1cc9); the idle-bounce
+   modes 0x3d/0x3f use object-bank frames 0x1d1..0x1d7. */
+extern u16 p1_move_anim;
 
 /* Current movement/physics state-machine mode (DGROUP 0x792c). */
 extern u8  game_mode;
@@ -193,27 +195,39 @@ void move_right_step_resolve_alt(void);    /* 1000:2776 — resolve right cell (
 void p1_resolve_walk_left_contact(void);   /* 1000:1fbe — leftward walk-contact resolve (modes 0x1a/0x34/0x36/0x38/0x3a) */
 void p1_resolve_walk_right_contact(void);  /* 1000:207d — rightward walk-contact resolve (modes 0x1b/0x35/0x37/0x39/0x3b) */
 
-/* ── Contact/collision DATA tables (DEFINED in player.c, dumped-real) ──────────
- * Each is indexed by p1_contact_code (0..0x3f); only entries 0..0x13 are non-zero
- * in the engine.  Dumped byte-exact from BUMPY_unpacked.exe (DGROUP base 0x11440).
- * Declared as fixed-size [0x40] so the host ctest can index any contact code. */
-extern u8   contact_transition_tbl[0x40];     /* 203b:0x42f6 — gamemode_26 right -> next mode */
-extern u8   contact_transition_tbl_b[0x40];   /* 203b:0x42d6 — gamemode_25 left  -> next mode */
-extern u8   contact_action_tbl_left[0x40];    /* 203b:0x4256 — move_left  -> resolved mode */
-extern u8   collision_mode_table_right[0x40]; /* 203b:0x4276 — move_right -> resolved mode */
-extern u8   collision_mode_table_left[0x40];  /* 203b:0x4296 — move_left_step_resolve */
-extern u8   collision_mode_table_right_alt[0x40]; /* 203b:0x42b6 — move_right_step_resolve_alt */
-extern u8   left_walk_contact_tbl_34[0x40];   /* 203b:0x4316 — p1_resolve_walk_left_contact */
-extern u8   right_walk_contact_tbl_35[0x40];  /* 203b:0x4336 — p1_resolve_walk_right_contact */
-extern u8   left_walk_contact_tbl_38[0x40];   /* 203b:0x4356 — p1_resolve_walk_left_contact */
-extern u8   right_walk_contact_tbl_39[0x40];  /* 203b:0x4376 — p1_resolve_walk_right_contact */
+/* ── Contact/collision resolver-table bank (DEFINED in player.c, dumped-real) ───
+ * The engine's ten mode-resolver tables are a CONTIGUOUS 0x20-strided bank in
+ * DGROUP starting at 0x4256, indexed by an UNMASKED tilemap byte (p1_contact_code
+ * = tilemap[cell+0x30], 0x00..0xff).  A code >= 0x20 reads past its own 32-byte
+ * table into the next one — the engine does `*(byte*)(code + <base>)` with no
+ * bound — and real levels reach such codes.  So the tables MUST be one contiguous
+ * dump [0x4256,0x4476); each name aliases into the bank at its DGROUP offset, and
+ * `name[code]` reproduces the engine's flat read for any code 0x00..0xff.
+ * (See the long note in player.c.  All uses are `name[idx]`, so the macro aliases
+ * are transparent to callers and the ctest.) */
+extern u8   g_contact_resolver_bank[0x220];   /* DGROUP [0x4256,0x4476) */
+#define contact_action_tbl_left          (g_contact_resolver_bank + 0x000) /* 203b:0x4256 move_left */
+#define collision_mode_table_right       (g_contact_resolver_bank + 0x020) /* 203b:0x4276 move_right */
+#define collision_mode_table_left        (g_contact_resolver_bank + 0x040) /* 203b:0x4296 move_left_step_resolve */
+#define collision_mode_table_right_alt   (g_contact_resolver_bank + 0x060) /* 203b:0x42b6 move_right_step_resolve_alt */
+#define contact_transition_tbl_b         (g_contact_resolver_bank + 0x080) /* 203b:0x42d6 gamemode_25 left -> next mode */
+#define contact_transition_tbl           (g_contact_resolver_bank + 0x0a0) /* 203b:0x42f6 gamemode_26 right -> next mode */
+#define left_walk_contact_tbl_34         (g_contact_resolver_bank + 0x0c0) /* 203b:0x4316 p1_resolve_walk_left_contact */
+#define right_walk_contact_tbl_35        (g_contact_resolver_bank + 0x0e0) /* 203b:0x4336 p1_resolve_walk_right_contact */
+#define left_walk_contact_tbl_38         (g_contact_resolver_bank + 0x100) /* 203b:0x4356 p1_resolve_walk_left_contact */
+#define right_walk_contact_tbl_39        (g_contact_resolver_bank + 0x120) /* 203b:0x4376 p1_resolve_walk_right_contact */
 
-/* Action LUTs (DEFINED in player.c, dumped-real).  Indexed by p1_pending_action /
-   game_mode / tile value; exec_move_action consumes the mapped action code. */
-extern u8   action_tbl_left[0x30];            /* 203b:0x36ee — p1_move_left[pending]  */
-extern u8   action_tbl_right[0x30];           /* 203b:0x371e — p1_move_right[pending] */
-extern u8   action_tbl_default[0x40];         /* 203b:0x377e — p1_handle_move_input[game_mode] */
-extern u8   down_action_lut[0x30];            /* 203b:0x374e — tile->down-action LUT (move_down) */
+/* Move-action LUT bank (DEFINED in player.c, dumped-real).  action_tbl_left/right
+   and down_action_lut are flat-indexed by UNMASKED tilemap bytes (p1_pending_action
+   / tile-below) that can exceed 0x30, so — like the contact bank — the tables must
+   be one contiguous dump [0x36ee,0x384e); each name aliases into it so name[idx]
+   reproduces the engine's `*(byte*)(idx + base)` read for any byte.  action_tbl_default
+   is indexed by game_mode (< 0x40, never overflows) but lives inside the bank. */
+extern u8   g_action_lut_bank[0x160];         /* DGROUP [0x36ee,0x384e) */
+#define action_tbl_left     (g_action_lut_bank + 0x000) /* 203b:0x36ee p1_move_left[pending]  */
+#define action_tbl_right    (g_action_lut_bank + 0x030) /* 203b:0x371e p1_move_right[pending] */
+#define down_action_lut     (g_action_lut_bank + 0x060) /* 203b:0x374e move_down[tile-below]  */
+#define action_tbl_default  (g_action_lut_bank + 0x090) /* 203b:0x377e p1_handle_move_input[game_mode] */
 
 /* ══ TASK 3 (Phase 2) — THE TWO LANDING / COLLISION LEAVES (now DEFINED) ═══════
  * land_on_tile_below and check_tile_below_ladder_or_land sit one layer beyond the
@@ -228,9 +242,9 @@ void check_tile_below_ladder_or_land(void);   /* 1000:29a6 — ladder/land probe
 /* Landing-leaf DGROUP globals + dumped-real DATA tables (DEFINED in player.c). */
 extern u8 anim_target_cell;       /* DGROUP 0x856f — cell-8 view/anim relocation target */
 extern u8 p1_latched_action;      /* latched action index into the land-sound tables */
-extern u8 land_mode_fx_tbl[0x60]; /* DGROUP 0x76a — [mode,fx] per tile (land_on_tile_below) */
-extern u8 land_sound_tbl_opl[0x30]; /* DGROUP 0x266e — landing sound (OPL/charger device) */
-extern u8 land_sound_tbl_std[0x30]; /* DGROUP 0x269e — landing sound (other devices)      */
+extern u8 land_mode_fx_tbl[0x200]; /* DGROUP 0x76a — [mode,fx] per tile (land_on_tile_below) */
+extern u8 land_sound_tbl_opl[0x100]; /* DGROUP 0x266e — landing sound (OPL/charger device) */
+extern u8 land_sound_tbl_std[0x100]; /* DGROUP 0x269e — landing sound (other devices)      */
 
 /* FX/anim-channel allocator — OUT OF SCOPE (→ Phase 5/6), kept an extern stub.
  * The two move-step delegates the landing leaves reach (p1_exec_pending_action /
@@ -261,6 +275,25 @@ extern void FUN_1000_4437(void);                 /* 1000:4437  idx 0x1d..0x20 */
 extern void advance_physics_freeze(void);        /* 1000:22d2  idx 0x2e */
 extern void FUN_1000_1e3d(void);                 /* 1000:1e3d  idx 0x30 */
 
+/* P1 movement / input-dispatch subsystem leaves — RECONSTRUCTED in player.c
+ * (audit 2026-06-28; dispatch-knot completion).  See per-function headers. */
+char p1_cell_solid(u8 cell);
+s8 p1_cell_below_solid(u8 cell);
+void p1_advance_move_anim(u8 frame_count, const u16 __far *frame_table);
+void p1_begin_move_anim(u8 mode);
+void p1_commit_left(void);
+void p1_commit_right(void);
+void p1_try_move_up(void);
+void p1_try_move_down(void);
+void p1_try_move_left(void);
+void p1_try_move_right(void);
+void p1_settle_idle(void);
+void p1_input_dispatch_bit01(void);
+void p1_input_dispatch_bit02(void);
+void p1_input_dispatch_bit04(void);
+void p1_input_dispatch_bit04b(void);
+void FUN_1000_43ef(void);
+
 /* ══ PHASE 2, TASK 4 — JUMP / FALL / BOUNCE MOVE-STEP SUBSTATES ════════════════
  *
  * The per-step micro-handlers the T1 capture's jump/fall/bounce scenarios reach
@@ -279,16 +312,16 @@ extern u8 g_anim_channel_idx;     /* 0x856c — anim-channel index probed by mov
 extern u8 level_complete_flag;    /* 0xa1b1 — cleared by move_step_landed on the '[' tile */
 
 /* Pending/contact/sound LUTs (DEFINED dumped-real in player.c). */
-extern u8 tile_followup_action_lut[0x30]; /* 0x4396 */
-extern u8 pending_anim_lut_3cda[0x30];    /* 0x3cda */
-extern u8 pending_anim_lut_3caa[0x30];    /* 0x3caa */
-extern u8 pending_anim_lut_3c7a[0x30];    /* 0x3c7a (move_step_first_variant) */
-extern u8 pending_anim_lut_3d0a[0x30];    /* 0x3d0a */
-extern u8 contact_action_lut_35be[0x30];  /* 0x35be (move_step_first_variant) */
-extern u8 pending_action_lut_36be[0x30];  /* 0x36be */
-extern u8 contact_sound_lut_35de[0x30];   /* 0x35de */
-extern u8 move_sound_lut_opl_25ae[0x30];  /* 0x25ae */
-extern u8 move_sound_lut_std_25de[0x30];  /* 0x25de */
+extern u8 tile_followup_action_lut[0x100]; /* 0x4396 */
+extern u8 pending_anim_lut_3cda[0x100];    /* 0x3cda */
+extern u8 pending_anim_lut_3caa[0x100];    /* 0x3caa */
+extern u8 pending_anim_lut_3c7a[0x100];    /* 0x3c7a (move_step_first_variant) */
+extern u8 pending_anim_lut_3d0a[0x100];    /* 0x3d0a */
+extern u8 contact_action_lut_35be[0x100];  /* 0x35be (move_step_first_variant) */
+extern u8 pending_action_lut_36be[0x100];  /* 0x36be */
+extern u8 contact_sound_lut_35de[0x100];   /* 0x35de */
+extern u8 move_sound_lut_opl_25ae[0x100];  /* 0x25ae */
+extern u8 move_sound_lut_std_25de[0x100];  /* 0x25de */
 
 /* settle handler + tile leaf (run_physics_settle's cross-module DGROUP bytes
    session_continue_flag / frame_abort_flag / settle_countdown live in game.c). */
@@ -352,12 +385,12 @@ void p1_apply_contact_action_tbl_367e(void);        /* 1000:68fe (mode 0x1a) */
 void p1_apply_contact_action_tbl_369e(void);        /* 1000:693a (mode 0x1b) */
 
 /* DGROUP contact LUTs/tables (DEFINED dumped-real in player.c). */
-extern u8 contact_action_lut_35fe[0x30];   /* 0x35fe */
-extern u8 contact_action_lut_361e[0x30];   /* 0x361e */
-extern u8 contact_action_lut_363e[0x30];   /* 0x363e */
-extern u8 contact_action_lut_365e[0x30];   /* 0x365e */
-extern u8 contact_action_lut_367e[0x30];   /* 0x367e */
-extern u8 contact_action_lut_369e[0x30];   /* 0x369e */
+extern u8 contact_action_lut_35fe[0x100];   /* 0x35fe */
+extern u8 contact_action_lut_361e[0x100];   /* 0x361e */
+extern u8 contact_action_lut_363e[0x100];   /* 0x363e */
+extern u8 contact_action_lut_365e[0x100];   /* 0x365e */
+extern u8 contact_action_lut_367e[0x100];   /* 0x367e */
+extern u8 contact_action_lut_369e[0x100];   /* 0x369e */
 extern u8 contact_sound_lut_opl_272e[0x30];/* 0x272e */
 extern u8 contact_sound_lut_std_274e[0x30];/* 0x274e */
 extern u8 contact_tiledef_tbl[256 * 4];    /* 0x3256/0x3258 (action*4 -> far ptr) */

@@ -171,13 +171,16 @@ extern s16 p1_pixel_y;            /* player.c 0x9292 */
  *    - p2_ai_select_move_random (1000:4fd3) — RECONSTRUCTED below (T4): picks a fresh
  *      random move-state (5..8) via rand()/prng_step.
  *    - the per-state move-state handler at handler-table 0x870 (the `(*tbl[state])()`
- *      indirect call in p2_tile_move_check) — STILL a stubbed dispatch helper
- *      (p2_dispatch_move_state_handler) here, since that table's BYTES are engine
- *      level-data not reached on any captured P2 path (→ deferred; not in the T4 AI
- *      decision scope).  RECONSTRUCTION FIDELITY: modelled as a stub so the indirect
- *      call site in p2_tile_move_check is preserved 1:1 without inventing the table.
+ *      indirect call in p2_tile_move_check) — dispatched via the helper
+ *      p2_dispatch_move_state_handler (game_stubs.c).  GROUNDED (2026-07-03): the
+ *      0x870 table is STATIC DGROUP data in the image (file 0x11440+0x870), NEAR
+ *      code ptrs — [1..4] = p2_pick_move_priority_a/b/c + p2_ai_dispatch_move
+ *      (all reconstructed below), [5..9] = p2_pick_move_priority_a, [0]/[10] = the
+ *      empty fn 1000:7111; no runtime writer exists.  The default build keeps the
+ *      helper a link-only no-op stub (harness parity); the playable build carries
+ *      the real C fn-ptr mirror of the table (see game_stubs.c).
  * ════════════════════════════════════════════════════════════════════════════ */
-void p2_dispatch_move_state_handler(void);/* DGROUP 0x870[move_state] — stub, deferred */
+void p2_dispatch_move_state_handler(void);/* DGROUP 0x870[move_state] — game_stubs.c */
 
 /* P2 cell-direction move handlers — the targets of the DGROUP-0x85c near-ptr handler
    table that p2_run_move_state_handler dispatches through (ported 1:1 below, T4). */
@@ -364,7 +367,7 @@ void p2_tile_move_check(void)
                      p2_dir_blocked_2 + p2_dir_blocked_3) == 4) {
                 p2_ai_select_move_random();               /* 1000:4fd3 (T4) */
             } else {
-                p2_dispatch_move_state_handler();         /* (*0x870[state])() deferred */
+                p2_dispatch_move_state_handler();         /* (*0x870[state])() — game_stubs.c */
             }
         }
     }

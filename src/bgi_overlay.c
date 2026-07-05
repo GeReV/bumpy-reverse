@@ -7,9 +7,12 @@
      restore_bg_view   (1000:80bc → 1ab9:0d77)  — bg-tile erase
      render_player_view (1000:93b8 → 1ab9:1028 → 1ab9:0db0)  — planar copy
 
-   Both are NOPs in the layer-A/B context (code-embedded view descriptors,
-   word[0] or word[0x0e] > 1 → NOP guard trips).  Reconstructed faithfully
-   per the disasm in local/build/present_model.md §3.
+   Both dispatch guards are SIGNED in the original (asm CMP/JG): the handler
+   runs iff the descriptor's guard word (word[0] / word[0x0e]) is < 2 as a
+   signed int.  Reconstructed faithfully per the disasm in
+   local/build/present_model.md §3.  (An earlier note claimed these were
+   "always NOP" in the layer-A/B context via an unsigned compare; that premise
+   was wrong — see the signed-guard note at each call site.)
 
    Host-build notes: __far / __huge are shimmed away for gcc (composite_ctest.c
    defines them away before including any src/ file).  All plane arithmetic uses
@@ -24,6 +27,13 @@
 #define BGI_OVL_ROW_BYTES     BGI_ROW_BYTES     /* 40 */
 #define BGI_OVL_PAGE_A200_OFF BGI_PAGE_A200_OFF /* 0x2000UL */
 #define BGI_OVL_PAGE_A000_OFF BGI_PAGE_A000_OFF /* 0x0000UL */
+
+#ifdef BUMPY_PLAYABLE
+/* DGROUP write-mode flags (0x541f / 0x5420) that the BGI mode-01/mode-10
+   dispatchers set before calling their handler; defined in host/host_bgi.c. */
+extern u8 bgi_write_mode_flag_a;
+extern u8 bgi_write_mode_flag_b;
+#endif
 
 /* -----------------------------------------------------------------------
    render_player_view_full_copy — sub-handler 0 (1ab9:0de0)
@@ -120,13 +130,24 @@ void restore_bg_view(u8 __huge *planes,
     u32 dest_page_off;
     u8  plane;
 
-    /* bgi_set_mode_01 (1ab9:0d77) guard: if view->word0e > 1 → NOP.
-       In layer-A/B context: erase_view at 0x114b:0x74a0 starts with machine
-       code; word0e (view+0x0e) = 0x85b3 > 1 → always NOP. */
+    /* bgi_set_mode_01 (1ab9:0d77) guard is SIGNED in the original
+       (asm `CMP BP,1` / `JG`; decomp `if (*(int*)(AX+0xe) < 2)`): do the work iff
+       (s16)word0e < 2.  An earlier reconstruction used an UNSIGNED compare
+       (word0e > 1u), which diverges for high-bit word0e values — e.g. the
+       0x85b3 the default-build layer-A/B descriptor reads from code is < 2 when
+       signed, so the original dispatches there rather than NOPing.  In the
+       playable build word0e is a real 0/1, so signed and unsigned agree. */
     word0e = view->word0e;
-    if (word0e > 1u) {
+    if ((s16)word0e >= 2) {
         return;
     }
+
+#ifdef BUMPY_PLAYABLE
+    /* bgi_set_mode_01 sets these DGROUP write-mode flags (0x541f/0x5420) before
+       dispatching to the mode-01 handler; host_bgi tracks them. */
+    bgi_write_mode_flag_a = 0u;
+    bgi_write_mode_flag_b = 1u;
+#endif
 
     /* Dest page selection: table[word0e]
          word0e == 0 → a200:0000 (plane offset 0x2000)
@@ -217,9 +238,10 @@ void restore_bg_view(u8 __huge *planes,
      1,2 → NOP (ret in the engine)
      3,4,5,6 → STUBBED (masked copy variants) — UNVALIDATED
 
-   EFFECTIVE IN HARNESS: NOP for all layer-A/B calls because the code-embedded
-   draw_view at 0x114b:0x751e starts with 0xc3fb (sti; ret), so word00 = 0xc3fb
-   > 1 → guard trips immediately.
+   Guard is SIGNED (see the call-site note): the handler runs iff (s16)word00 < 2.
+   In the playable build word00 is a real 0/1; the default-build layer-A/B
+   descriptor reads 0xc3fb from code, which is < 2 signed (the original would
+   dispatch — the earlier "always NOP" claim used an unsigned compare).
    ----------------------------------------------------------------------- */
 void render_player_view(u8 __huge *planes,
                         const u8 __huge *vga_src,
@@ -231,13 +253,23 @@ void render_player_view(u8 __huge *planes,
     u16 dest_seg;
     u16 dest_off;
 
-    /* bgi_set_mode_10 (1ab9:1028) guard: if view->word00 > 1 → NOP.
-       In layer-A/B context: draw_view at 0x114b:0x751e starts with 0xc3fb
-       (sti; ret) → word00 = 0xc3fb > 1 → always NOP. */
+    /* bgi_set_mode_10 (1ab9:1028) guard is SIGNED (asm `CMP BP,1` / `JG`;
+       decomp `if (*(int*)AX < 2)`): run the handler iff (s16)word00 < 2.  Earlier
+       reconstruction used an unsigned compare (word00 > 1u), which NOPs for
+       high-bit word00 (e.g. the 0xc3fb the default-build descriptor reads from
+       code is < 2 signed → the original dispatches).  In the playable build
+       word00 is a real 0/1, so signed and unsigned agree. */
     word00 = view->word00;
-    if (word00 > 1u) {
+    if ((s16)word00 >= 2) {
         return;
     }
+
+#ifdef BUMPY_PLAYABLE
+    /* bgi_set_mode_10 sets these DGROUP write-mode flags (0x541f/0x5420) before
+       dispatching to the mode-10 handler (note: 1/0, opposite of mode-01). */
+    bgi_write_mode_flag_a = 1u;
+    bgi_write_mode_flag_b = 0u;
+#endif
 
     /* Source page selection: pointer table[word00]
          word00 == 0 → a200:0000 (VGA plane offset 0x2000, sprite scratch)

@@ -26,7 +26,7 @@ BUMPY_OBJS = main.obj game.obj game_stubs.obj &
              vec.obj op12.obj video.obj &
              sprite.obj sprite_anim.obj sprite_chain.obj sprite_blit.obj &
              bg_render.obj entity.obj bgi_overlay.obj &
-             dosio.obj prng.obj globals.obj &
+             dosio.obj prng.obj globals.obj worldmap_data.obj anim_data.obj &
              bvec_buf1.obj bvec_buf2.obj
 
 .EXTENSIONS:
@@ -75,6 +75,7 @@ PLAY_OBJS = &
     $(PLAYDIR)/sprite_blit.obj &
     $(PLAYDIR)/bg_render.obj $(PLAYDIR)/entity.obj $(PLAYDIR)/bgi_overlay.obj &
     $(PLAYDIR)/dosio.obj $(PLAYDIR)/prng.obj $(PLAYDIR)/globals.obj &
+    $(PLAYDIR)/move_scripts.obj $(PLAYDIR)/worldmap_data.obj $(PLAYDIR)/anim_data.obj &
     $(PLAYDIR)/bvec_buf1.obj $(PLAYDIR)/bvec_buf2.obj
 
 # Stack size: the Watcom default DOS stack is 2 KB (-k not given), too small for the
@@ -86,80 +87,86 @@ PLAY_OBJS = &
 PLAY_STACK = 0x4000
 
 play: .SYMBOLIC $(PLAY_OBJS)
-	mkdir -p $(OUTDIR) && $(LINK) $(LFLAGS) -k$(PLAY_STACK) -fe=$(PLAY) $(PLAY_OBJS)
+	mkdir -p $(OUTDIR) && $(LINK) $(LFLAGS) -k$(PLAY_STACK) -fm=$(PLAYDIR)/BUMPYP.map -fe=$(PLAY) $(PLAY_OBJS)
 
 # host TUs — compile WITH -dBUMPY_PLAYABLE from host/ subdir.
 $(PLAYDIR)/host_video.obj: host/host_video.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/host_video.obj host/host_video.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/host_video.obj host/host_video.c
 $(PLAYDIR)/host_render.obj: host/host_render.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/host_render.obj host/host_render.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/host_render.obj host/host_render.c
 $(PLAYDIR)/host_timer.obj: host/host_timer.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/host_timer.obj host/host_timer.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/host_timer.obj host/host_timer.c
 $(PLAYDIR)/host_input.obj: host/host_input.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/host_input.obj host/host_input.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/host_input.obj host/host_input.c
 $(PLAYDIR)/view_setup.obj: view_setup.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/view_setup.obj view_setup.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/view_setup.obj view_setup.c
 $(PLAYDIR)/host_boot.obj: host/host_boot.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/host_boot.obj host/host_boot.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/host_boot.obj host/host_boot.c
 $(PLAYDIR)/host_resource.obj: host/host_resource.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/host_resource.obj host/host_resource.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/host_resource.obj host/host_resource.c
 $(PLAYDIR)/host_bgi.obj: host/host_bgi.c host/host_bgi.h
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/host_bgi.obj host/host_bgi.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/host_bgi.obj host/host_bgi.c
 
 # Shared TUs — compile WITH -dBUMPY_PLAYABLE into play/ (default BUMPY objs unaffected).
 $(PLAYDIR)/main.obj: main.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/main.obj main.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/main.obj main.c
 $(PLAYDIR)/game.obj: game.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/game.obj game.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/game.obj game.c
 $(PLAYDIR)/game_stubs.obj: game_stubs.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/game_stubs.obj game_stubs.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/game_stubs.obj game_stubs.c
 $(PLAYDIR)/level.obj: level.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/level.obj level.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/level.obj level.c
 $(PLAYDIR)/input.obj: input.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/input.obj input.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/input.obj input.c
 $(PLAYDIR)/player.obj: player.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/player.obj player.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/player.obj player.c
 $(PLAYDIR)/player2.obj: player2.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/player2.obj player2.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/player2.obj player2.c
 $(PLAYDIR)/items.obj: items.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/items.obj items.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/items.obj items.c
 $(PLAYDIR)/anim.obj: anim.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/anim.obj anim.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/anim.obj anim.c
 $(PLAYDIR)/spawn.obj: spawn.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/spawn.obj spawn.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/spawn.obj spawn.c
 $(PLAYDIR)/sound.obj: sound.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/sound.obj sound.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/sound.obj sound.c
 $(PLAYDIR)/screens.obj: screens.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/screens.obj screens.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/screens.obj screens.c
 $(PLAYDIR)/config_screens.obj: config_screens.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/config_screens.obj config_screens.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/config_screens.obj config_screens.c
 $(PLAYDIR)/vec.obj: vec.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/vec.obj vec.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/vec.obj vec.c
 $(PLAYDIR)/op12.obj: op12.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/op12.obj op12.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/op12.obj op12.c
 $(PLAYDIR)/video.obj: video.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/video.obj video.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/video.obj video.c
 $(PLAYDIR)/sprite.obj: sprite.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/sprite.obj sprite.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/sprite.obj sprite.c
 $(PLAYDIR)/sprite_anim.obj: sprite_anim.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/sprite_anim.obj sprite_anim.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/sprite_anim.obj sprite_anim.c
 $(PLAYDIR)/sprite_chain.obj: sprite_chain.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/sprite_chain.obj sprite_chain.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/sprite_chain.obj sprite_chain.c
 $(PLAYDIR)/sprite_blit.obj: sprite_blit.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/sprite_blit.obj sprite_blit.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/sprite_blit.obj sprite_blit.c
 $(PLAYDIR)/bg_render.obj: bg_render.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/bg_render.obj bg_render.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/bg_render.obj bg_render.c
 $(PLAYDIR)/entity.obj: entity.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/entity.obj entity.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/entity.obj entity.c
 $(PLAYDIR)/bgi_overlay.obj: bgi_overlay.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/bgi_overlay.obj bgi_overlay.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/bgi_overlay.obj bgi_overlay.c
 $(PLAYDIR)/dosio.obj: dosio.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/dosio.obj dosio.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/dosio.obj dosio.c
 $(PLAYDIR)/prng.obj: prng.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/prng.obj prng.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/prng.obj prng.c
 $(PLAYDIR)/globals.obj: globals.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/globals.obj globals.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/globals.obj globals.c
+$(PLAYDIR)/move_scripts.obj: move_scripts.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/move_scripts.obj move_scripts.c
+$(PLAYDIR)/worldmap_data.obj: worldmap_data.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/worldmap_data.obj worldmap_data.c
+$(PLAYDIR)/anim_data.obj: anim_data.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/anim_data.obj anim_data.c
 $(PLAYDIR)/bvec_buf1.obj: bvec_buf1.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/bvec_buf1.obj bvec_buf1.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/bvec_buf1.obj bvec_buf1.c
 $(PLAYDIR)/bvec_buf2.obj: bvec_buf2.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -fo=$(PLAYDIR)/bvec_buf2.obj bvec_buf2.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/bvec_buf2.obj bvec_buf2.c
