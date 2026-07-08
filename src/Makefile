@@ -1,4 +1,24 @@
-# Open Watcom 16-bit DOS build. Run from src/ after sourcing ow-env.sh.
+# Open Watcom 16-bit DOS build.
+#
+# SELF-BOOTSTRAPPING: this makefile points wcc/wcl/wlink at the vendored Open Watcom
+# toolchain itself, so you do NOT need to source ow-env.sh first.  Run wmake from the
+# src/ directory (the toolchain path below is relative to src/):
+#
+#     ../local/toolchain/open-watcom/binl64/wmake play      # or: ./build.sh play
+#
+# If wmake is already on your PATH (e.g. you sourced ow-env.sh) just `wmake play` works
+# too — the %WATCOM/%INCLUDE/%PATH assignments below are harmless when already set.
+#
+# WROOT is repo-relative (not hard-coded to a home dir) so the tree stays relocatable.
+# The `%NAME = value` form sets an ENVIRONMENT variable that the child wcc/wcl/wlink
+# processes inherit (that is how they find their headers, libraries and each other).
+WROOT    = ../local/toolchain/open-watcom
+%WATCOM  = $(WROOT)
+%INCLUDE = $(WROOT)/h
+%EDPATH  = $(WROOT)/eddat
+%WIPFC   = $(WROOT)/wipfc
+%PATH    = $(WROOT)/binl64:$(WROOT)/binl:$(%PATH)
+
 CC      = wcc
 CFLAGS  = -ml -bt=dos -zq -wx
 LINK    = wcl
