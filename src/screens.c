@@ -2146,7 +2146,23 @@ void level_intro_screen(void)
             img[(u16)palette_idx + 0x23] = pal[palette_idx];
         }
     }
+#ifdef BUMPY_PLAYABLE
+    /* Draw the overworld-entry iris on the DISPLAYED slot (0), like every other iris
+     * (run_main_menu / show_menu_select_screen bracket theirs with fun_9410(0)).  Without
+     * this the iris inherited the gameplay draw slot (1 = hidden) from run_main_menu's
+     * trailing fun_9410(1), so whether the wipe was visible depended on the host page-flip
+     * parity (host_render.c host_fb_init re-anchors the CRTC display to slot 0 per level so
+     * this is now deterministic).  Restore slot 1 immediately after so the composition +
+     * overworld walk below (and the mode-11 view-sync at init_fullscreen_view_desc) run on
+     * the gameplay draw page exactly as before — the view-sync freeze fix is untouched.
+     * Host-only: the default build's fun_9410 is a NOP, and the page model is host-specific;
+     * gated so the faithful decomp stays byte-identical.  RECONSTRUCTION FIDELITY noted. */
+    fun_9410_set_sprite_table(0);
     play_iris_wipe_transition();
+    fun_9410_set_sprite_table(1);
+#else
+    play_iris_wipe_transition();
+#endif
     d = render_descriptor_ptr;
     *(u16 __far *)(d + 0x02) = fullscreen_buf + 99;
     *(u16 __far *)(d + 0x04) = fullscreen_buf_seg;

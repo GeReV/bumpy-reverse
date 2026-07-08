@@ -304,16 +304,38 @@ void init_fullscreen_view_desc(u8 mode, u8 flag)
      * page flip) under the real flip model; corrected 2026-07-02 with the real
      * copy against the LIVE page table. */
     {
-        u16 src = host_page_off_of(mode);
-        u16 dst = host_page_off_of(flag);
-        if (src != dst) {
+        /* PARITY-HARDENED SOURCE — copy the JUST-COMPOSED page onto the other page
+           so BOTH VGA pages hold the clean screen (the engine's page[table[mode]] →
+           page[table[flag]] intent).
+           WHY NOT host_page_off_of(mode)/(flag): the host's draw-page index
+           (hr_cur_page_idx) is NOT kept in lockstep with the engine's descriptor page
+           convention.  At the (1,0) game/overworld-entry callers the screen is composed
+           on slot 0 (they bracket their draw with fun_9410_set_sprite_table(0)), but
+           mode=1 resolves to slot 1 — the OTHER, non-composed page — so a literal
+           host_page_off_of(mode) sourced the WRONG page (and host_page_off_of(flag=0)
+           targeted the draw page itself).  While the iris wipe was a NOP that page held
+           a near-identical previous bg, so the mis-source was invisible; once the
+           reconstructed GEOMETRIC iris (host_bgi_set_viewport) paints real BLACK there,
+           the sync propagated BLACK over the freshly-composed page → the overworld walk
+           "freezes on the frame-before-last" and the in-level save-under captures black
+           under the moving sprite → sprite flicker.
+           Sourcing the LIVE draw page (unambiguously "the just-composed screen") and
+           targeting its complement equals host_page_off_of(mode)/(flag) whenever host
+           page parity matches (the menu (0,1) sync — behaviour unchanged) and corrects
+           it when it doesn't (the (1,0) entries).  All three callers compose to the draw
+           page before this sync, so sourcing it is correct-by-construction.
+           DO NOT revert to host_page_off_of(mode): this regression has RECURRED several
+           times.  It kept getting reverted because it was masked by two confounds — the
+           world-2 background bug (PAV read truncation, fixed 2026-07-07) and a headless
+           input-injection "phantom freeze" — both now removed.  RECONSTRUCTION FIDELITY:
+           docs/reconstruction-fidelity.md. */
+        u16 src = host_draw_page_off();
+        u16 dst = (u16)(src ^ 0x2000u);
+        {
             /* VGA LATCH COPY (write mode 1): one read loads all 4 planes into the
                latches, one write stores them — the mode the hardware provides for
                exactly this page-to-page copy (the overlay's own copy is a rep-movs
-               latch loop).  The first host implementation moved each byte through
-               host_vga_read4/put4 (~8 port ops per byte, ~64k per sync) — slow
-               enough that the menu's per-frame sync opened a visible cursor-less
-               window (arrow flicker) and lagged input. */
+               latch loop). */
             const u8 __far *sp = (const u8 __far *)MK_FP(VGA_SEG_PAGE0, src);
             u8 __far       *dp = (u8 __far *)MK_FP(VGA_SEG_PAGE0, dst);
             u16 off;

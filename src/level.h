@@ -48,8 +48,10 @@
                                          entity layers (fixed 2026-07-03). */
 #define LEVEL_BANK_BUF_SIZE 0x15c20u  /* BUMSPJEU.BIN sprite bank (~87 KB) */
 
-/* ── Level resource file load sizes (raw file sizes, ≤ 0x8000 = OP12_ARENA_SIZE) */
-#define LEVEL_PAV_FILE_MAX  0x3c00u   /* D1.PAV = 15071 B; 16384 covers it  */
+/* ── Level resource file load sizes (raw file sizes, ≤ 0x8000 = OP12_ARENA_SIZE)
+   NOTE: PAV/DEC/BUM are streamed straight into g_op12_arena (bounded by
+   OP12_ARENA_SIZE); there is no per-type staging cap.  The former
+   LEVEL_PAV_FILE_MAX (0x3c00) truncated any PAV larger than D1 — see level.c. */
 #define LEVEL_DEC_FILE_MAX  0x1a00u   /* D1.DEC = 6436 B                    */
 #define LEVEL_BUM_FILE_MAX  0x0400u   /* D1.BUM = 686 B                     */
 #define LEVEL_BANK_FILE_MAX 0x4000u   /* BUMSPJEU.BIN chunks (stream-loaded) */

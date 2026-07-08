@@ -148,6 +148,7 @@ static void hr_cur_view(sprite_view *view)
  *   it.  Idempotent (allocates once). */
 void host_fb_init(void)
 {
+    static u8 hr_fb_reanchor_arm = 0u;   /* 0 on the boot call, 1 on every level-load re-entry */
 #ifndef HOST_FB_16K
     if (host_framebuffer == (u8 __huge *)0) {
         host_framebuffer = (u8 __huge *)halloc(4UL * HOST_PLANE_SIZE, 1);
@@ -169,6 +170,27 @@ void host_fb_init(void)
     hr_cur_page_idx = 1u;
     host_cur_sprite_data_off = host_sprite_table_off[1];
     host_cur_sprite_data_seg = host_sprite_table_seg[1];
+
+    /* Re-anchor the CRTC DISPLAY to slot 0 (page1 = A200, CRTC start 0x2000) to match the
+     * page TABLE reset just performed, so §8.1's `displayed == page[table[0]]` holds
+     * DETERMINISTICALLY after a level load.  The table reset above returns the pages to boot
+     * parity (S=0), but the CRTC start is NOT otherwise re-programmed per level
+     * (init_crtc_window is a no-CRTC clip-window store) — it floats on the menu's accumulated
+     * present-flip parity.  Left unanchored, that parity determines whether the overworld-entry
+     * iris (level_intro_screen, bracketed to slot 0 below) draws to the displayed or the hidden
+     * page — visible after some menu paths, hidden after others (e.g. after entering a password,
+     * whose extra run_main_menu present loop flips the parity).  Re-anchoring here restores the
+     * draw/display lockstep the whole UI page convention assumes.  SKIP the first (boot) call:
+     * main.c calls host_fb_init BEFORE the platform sets video mode 0x0D, and the boot CRTC
+     * parity is programmed separately (host_crtc_set_start); only the per-LEVEL re-entries need
+     * it.  RECONSTRUCTION FIDELITY: docs/reconstruction-fidelity.md. */
+    if (hr_fb_reanchor_arm) {
+        outp(CRTC_INDEX, CRTC_START_HI);
+        outp(CRTC_DATA,  0x20u);   /* start-high bit5 set → CRTC start 0x2000 = page1 = table[0] */
+        outp(CRTC_INDEX, CRTC_START_LO);
+        outp(CRTC_DATA,  0x00u);
+    }
+    hr_fb_reanchor_arm = 1u;
 }
 
 /* host_dgroup_seg — the loaded image's actual DGROUP segment.  Any C global lives in
@@ -203,7 +225,13 @@ void host_set_draw_page(u8 index)
  * Open Watcom's optimizer (verified via wdis: no read instruction emitted) — which
  * leaves the VGA latches stale, so transparent (bit-mask 0) pixels keep garbage instead
  * of the background → opaque sprites.  Storing the read into a file-scope VOLATILE makes
- * the read an observable side effect the optimizer must keep. */
+ * the read an observable side effect the optimizer must keep.
+ *
+ * NOTE: the per-plane STORE loop below does NOT need the same treatment — the `outp()`
+ * (Map-Mask select) calls between the four `*vp = vN` writes are external calls the
+ * optimizer must assume may read that memory, so it cannot dead-store-eliminate the
+ * writes.  Verified via wdis on the Watcom playable build: all four plane stores are
+ * emitted (`vp` non-volatile vs volatile produces byte-identical object code). */
 static volatile u8 hr_vga_latch_sink;
 
 void host_vga_rmw4(u16 off, u8 v0, u8 v1, u8 v2, u8 v3, u8 bm)

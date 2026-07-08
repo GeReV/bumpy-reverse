@@ -161,11 +161,17 @@ u8 current_entity_index = 1u;
 
 #ifndef BUMPY_COPYPROT_HARNESS   /* { heavy level pipeline — excluded from the host harness */
 
-/* ── Level-file read buffer (small; __far to avoid DGROUP pressure) ───────────
-   Raw file bytes for PAV/DEC/BUM.  OP12_ARENA_SIZE = 0x8000; all three files
-   fit (max is PAV at 15071 B < 0x3c00).  We reuse a single static buffer
-   across the three loads. */
-static u8 __far g_filebuf[LEVEL_PAV_FILE_MAX];
+/* Level resource files (PAV/DEC/BUM) are streamed directly into g_op12_arena and
+   decoded in place — matching the engine's open_resource + read_chunked into the
+   decode arena (level.c header note).  A previous reconstruction staged the raw
+   bytes through a fixed g_filebuf[0x3c00] and then copied into
+   the arena; that cap (15360 B, sized for D1.PAV only) SILENTLY TRUNCATED every
+   larger resource file — D2.PAV 19937, D3 16196, D4 20631, D5 24072, D6 19132,
+   D7 16526, D9 25475 — so the op12 decode ran on a short input and produced a
+   partially-zero atlas (planes 2/3 lost past the truncation point → black
+   silhouettes rendered as orange idx3/idx7).  Reading straight into the arena
+   (bounded by OP12_ARENA_SIZE = 0x8000, which covers the largest file) removes
+   both the staging buffer and the truncation. */
 
 /* ── Dynamically-allocated level buffers ─────────────────────────────────────
    The large buffers (planes 256 KB, bank 87 KB, dg shadow 41 KB, PAV 30 KB)
@@ -265,11 +271,12 @@ static int level_alloc_buffers(void)
 /* ────────────────────────────────────────────────────────────────────────────
    level_decode_file — load and op4+op12 decode one level resource file.
 
-   Reads the file at `path` into g_filebuf (must be <= LEVEL_PAV_FILE_MAX bytes),
-   then mirrors vec.c's inner-record-stream decode: stream the raw bytes into
-   g_op12_arena, parse the 12-byte big-endian record header faithfully, and run
-   op12_vec_run on the arena.  After return, g_op12_arena[0..] holds the decoded
-   image; the caller copies the portion it needs into a persistent buffer.
+   Streams the raw file at `path` directly into g_op12_arena (bounded by
+   OP12_ARENA_SIZE = 0x8000, which covers every level resource), then mirrors
+   vec.c's inner-record-stream decode: parse the 12-byte big-endian record header
+   faithfully and run op12_vec_run on the arena in place.  After return,
+   g_op12_arena[0..] holds the decoded image; the caller copies the portion it
+   needs into a persistent buffer.
 
    RECONSTRUCTION FIDELITY: this replaces the engine's vec_decode (which the
    clean Phase-0 API exposes only as the lower-level op12_vec_run + the
@@ -286,35 +293,31 @@ static u16 level_decode_file(const char *path)
     int n;
     u16 nb;
     u16 w0;
-    u16 i;
 
     fd = dosio_open_read(path);
     if (fd < 0) {
         return 0u;
     }
-    n = dosio_read(fd, (u8 __far *)g_filebuf, LEVEL_PAV_FILE_MAX);
+    n = dosio_read(fd, (u8 __far *)g_op12_arena, OP12_ARENA_SIZE);
     dosio_close(fd);
     if (n <= 0) {
         return 0u;
     }
     nb = (u16)n;
 
-    /* The decoded image must fit the shared arena. */
+    /* The raw record must fit the shared arena (the read above already bounds it). */
     if (nb > OP12_ARENA_SIZE) {
         return 0u;
     }
     if (nb < 12u) {
         return 0u;
     }
-    w0 = level_be16((const u8 __far *)g_filebuf, 0u);
+    w0 = level_be16((const u8 __far *)g_op12_arena, 0u);
     (void)w0;  /* parsed for fidelity; op12_vec_run consumes the full record */
 
-    /* Stream raw bytes into the arena, then run the inner record loop.  op12_vec_run
-       (op4 outer record + op12 inner record) is byte-exact vs the Python op12_port and
-       the engine's runtime decode (verified D1.{PAV,DEC,BUM}). */
-    for (i = 0u; i < nb; i++) {
-        g_op12_arena[i] = g_filebuf[i];
-    }
+    /* Raw bytes are already in the arena (streamed directly, no truncating stage).
+       op12_vec_run (op4 outer record + op12 inner record) decodes in place and is
+       byte-exact vs the Python op12_port and the engine's runtime decode. */
     op12_vec_run(g_op12_arena, VEC_DECODE_MAX, nb);
 
     return nb;
