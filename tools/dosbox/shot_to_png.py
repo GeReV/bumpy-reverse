@@ -37,9 +37,13 @@ def gfx_ac(v: int) -> int:
     return v if v < 8 else 0x10 + (v - 8)
 
 
-def main() -> None:
-    src, out = sys.argv[1], sys.argv[2]
-    data = open(src, "rb").read()
+def decode_rgb(data: bytes) -> list[bytearray]:
+    """Decode a BUMPYSHOT dump to a list of H rows, each W*3 bytes of packed RGB.
+
+    Shared by this module's PNG writer and by other tools (e.g. tools/validate_ega.sh's
+    comparator) that need the same DAC[AC[pixel]] resolution without going through a
+    PNG round-trip. See the module docstring for why the AC stage is required.
+    """
     planes = [data[p * PLANE:(p + 1) * PLANE] for p in range(4)]
     pal_off = 4 * PLANE
     pal = [
@@ -66,6 +70,14 @@ def main() -> None:
                 idx |= ((planes[p][byte_i] >> bit) & 1) << p
             row += bytes(pal[ac[idx]])
         rows.append(row)
+    return rows
+
+
+def main() -> None:
+    src, out = sys.argv[1], sys.argv[2]
+    data = open(src, "rb").read()
+    planes = [data[p * PLANE:(p + 1) * PLANE] for p in range(4)]
+    rows = decode_rgb(data)
     # minimal PNG (RGB, no filter)
     raw = b"".join(b"\x00" + bytes(r) for r in rows)
 
