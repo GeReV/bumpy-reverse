@@ -81,6 +81,13 @@ void init_highscore_default_table(void);
  *  passwords (ACCESS/BUTTON/ISLAND/PRETTY/WINNER/ZOMBIE/LOVELY/SYSTEM).  Same
  *  loader-relocated-far-ptr constraint as the HOF table; playable build only. */
 void init_password_table(void);
+
+/* init_ega_palette_patch_tables — populate dgroup_pal_patch_63a/72e/64a/71e (DGROUP
+ *  0x63a/0x72e/0x64a/0x71e) with the real EGA->VGA AC palette-patch bytes the
+ *  palette_mode==1 title/menu builders copy into the decoded image.  Same
+ *  loader-relocated-static-data constraint as init_password_table; playable build only
+ *  (inert under the default boot's palette_mode==2). */
+void init_ega_palette_patch_tables(void);
 #endif
 
 /* formatted_number_buf: the ASCII scratch the number formatters (draw_number 0x816 /

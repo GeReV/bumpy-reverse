@@ -827,6 +827,35 @@ u8 dgroup_pal_patch_72e[16];   /* DGROUP 0x72e  (show_title_and_init)      */
 u8 dgroup_pal_patch_64a[16];   /* DGROUP 0x64a  (run_main_menu)            */
 u8 dgroup_pal_patch_71e[16];   /* DGROUP 0x71e  (show_menu_select_screen)  */
 
+#ifdef BUMPY_PLAYABLE
+/* init_ega_palette_patch_tables — populate the four dgroup_pal_patch_* tables above with
+ *  the real EGA->VGA AC palette bytes.
+ *  RECONSTRUCTION FIDELITY: these 16-byte tables are the binary's DGROUP 0x63a/0x72e/
+ *  0x64a/0x71e (extracted, not invented); the original loads them as static initialised
+ *  data.  Same loader-relocated-static-data constraint as init_password_table /
+ *  init_highscore_default_table — the playable build fills the tables at startup; the
+ *  default BUMPY.EXE keeps the zero-init storage (this path is inert there anyway, since
+ *  the boot palette_mode is 2, not 1). */
+void init_ega_palette_patch_tables(void)
+{
+    static const u8 s_63a[16] = { 0x00u,0x00u,0x00u,0x04u,0x06u,0x0cu,0x0cu,0x0bu,
+                                  0x09u,0x04u,0x06u,0x0cu,0x0eu,0x0eu,0x0fu,0x0fu };
+    static const u8 s_72e[16] = { 0x00u,0x00u,0x00u,0x04u,0x06u,0x0cu,0x0cu,0x0bu,
+                                  0x09u,0x04u,0x06u,0x0cu,0x0eu,0x0eu,0x0fu,0x0fu };
+    static const u8 s_64a[16] = { 0x00u,0x00u,0x00u,0x00u,0x00u,0x00u,0x00u,0x02u,
+                                  0x0au,0x04u,0x06u,0x06u,0x0cu,0x0eu,0x0fu,0x0fu };
+    static const u8 s_71e[16] = { 0x00u,0x01u,0x08u,0x08u,0x07u,0x0bu,0x0bu,0x09u,
+                                  0x01u,0x09u,0x04u,0x04u,0x06u,0x0cu,0x0cu,0x01u };
+    u8 i;
+    for (i = 0u; i < 16u; i++) {
+        dgroup_pal_patch_63a[i] = s_63a[i];
+        dgroup_pal_patch_72e[i] = s_72e[i];
+        dgroup_pal_patch_64a[i] = s_64a[i];
+        dgroup_pal_patch_71e[i] = s_71e[i];
+    }
+}
+#endif /* BUMPY_PLAYABLE */
+
 /* helper: patch the decoded image's embedded palette (img+0x23, 16 bytes) from a DGROUP
  *  source table when palette_mode==1 (the 1:1 of the `if (palette_mode==1){...}` block in
  *  each title/menu builder).  Kept inline-equivalent; not a separate engine function. */
@@ -2102,9 +2131,15 @@ void show_level_intro_screen(void)
 
 /* the per-level border-image length table + palette table level_intro_screen reads
  *  (DGROUP 0x974 length, 0x6e6 palette ptr — both indexed by current_level).  Owned
- *  here; harness-seeded.  Under the boot palette_mode==2 the palette path is skipped. */
+ *  here; harness-seeded.  Under the boot palette_mode==2 the palette path is skipped.
+ *
+ *  DESCOPE (Task 2, EGA palette-patch data): level_palette_ptr_table is NOT populated by
+ *  any existing init.  Filling it needs the per-level palette far-pointer SOURCE table
+ *  RE'd separately (locate via xrefs to the level_intro_screen load site) — out of scope
+ *  here; do not invent pointers.  Deferred; the level-intro EGA palette is secondary to
+ *  the title/menu EGA path this task fills (dgroup_pal_patch_* / copyprot_palette_src). */
 u16 level_img_len_table[16 * 5];    /* DGROUP 0x974 (stride 10 = 5 words/level)         */
-u16 level_palette_ptr_table[16 * 2];/* DGROUP 0x6e6 (stride 4 = far ptr/level)          */
+u16 level_palette_ptr_table[16 * 2];/* DGROUP 0x6e6 (stride 4 = far ptr/level) — DEFERRED */
 
 /* ════════════════════════════════════════════════════════════════════════════
  *  level_intro_screen — 1000:3852

@@ -124,6 +124,11 @@ int main(void)
     init_password_table();       /* screens.c — fill password_table (DGROUP 0x135c) with the 8
                                     level passwords (ACCESS/BUTTON/…/SYSTEM) so the "ENTER YOUR
                                     PASSWORD" screen validates codes (else every code -> ERROR). */
+    init_ega_palette_patch_tables();/* screens.c — fill dgroup_pal_patch_63a/72e/64a/71e
+                                    (DGROUP 0x63a/0x72e/0x64a/0x71e) with the real EGA->VGA AC
+                                    palette-patch bytes so the palette_mode==1 title/menu
+                                    builders patch the decoded image with real data; inert
+                                    under the default boot's palette_mode==2. */
     level_preload_session_sprites();/* level.c — load+transform the main sprite bank
                                     (BUMSPJEU.BIN) + wire the DG shadow / p1_sprite / host
                                     render context at SESSION INIT (as the engine does), so the
