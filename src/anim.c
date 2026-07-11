@@ -124,7 +124,7 @@ u8 __far *anim_b_grid_tbl;      /* DGROUP 0x343e/0x3440 */
 u8 __far *anim_posA_tbl;        /* DGROUP 0xf4/0xf6     */
 u8 __far *anim_posB_tbl;        /* DGROUP 0x3f4/0x3f6   */
 
-/* ── view descriptors (the draw/erase BGI-overlay save-under / restore passes) ──*/
+/* ── view descriptors (the draw/erase gfx-overlay save-under / restore passes) ──*/
 u8 __far *anim_a_erase_view;    /* DGROUP 0x8d4 */
 u8 __far *anim_a_draw_view;     /* DGROUP 0x8e0 */
 u8 __far *anim_a_clear_view;    /* DGROUP 0x8c0 */
@@ -326,7 +326,7 @@ void step_anim_channels_b(void)
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
- *  Present/blit LEAF stubs — the BGI-overlay render-core call sites of the four
+ *  Present/blit LEAF stubs — the graphics-overlay render-core call sites of the four
  *  draw/erase wrappers below.  These are FAITHFUL-SIGNATURE no-ops that preserve
  *  each call site 1:1 WITHOUT re-driving the Phase-0 work-buffer render core.
  *
@@ -385,7 +385,7 @@ void anim_render_leaf_80ac(u8 __far *view)     { (void)view; return; }
  *
  *  Iterates the channel-A slot table until the 0xFF terminator.  For each ACTIVE
  *  (non-0, non-0xFF) slot it builds two view descriptors and the p1_sprite blit
- *  descriptor, then calls the BGI-overlay leaves:
+ *  descriptor, then calls the graphics-overlay leaves:
  *
  *    cell = slot[1];  uVar4 = gridA[cell*4+0] (x);  uVar5 = gridA[cell*4+2] (y).
  *    ERASE view (0x8d4): [+0x1c]=0, |=0x600 if (cell&1); [+0x14]=[+6]=x;

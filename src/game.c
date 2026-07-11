@@ -183,7 +183,7 @@ void init_game_session_state(void)
 
 #ifndef BUMPY_PLAYABLE
     /* Set VGA mode 0x0D (320x200x16 EGA planar). DEVIATION: see header note —
-       the original's mode set lives in the BGI driver initgraph (absent from the
+       the original's mode set lives in the graphics-overlay init (absent from the
        corpus); surfaced here so the boot harness has an observable mode set.
        PLAYABLE build: the mode set is folded into init_display_97a4 above —
        repeating it HERE would reset the CRTC start address to 0 AFTER

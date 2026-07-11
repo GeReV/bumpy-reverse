@@ -95,7 +95,7 @@
    load_graphics_resources) — loaded at RUNTIME (`host_load_font`, never committed).
    `show_text_screen` renders the real "GAME OVER" (DGROUP 0x1327 via the 0x11ae far
    ptr).  Fg color = 0x0F white with a FIDELITY note (engine fg expansion is set at
-   runtime through a BGI color op; not statically traceable).
+   runtime through a graphics-overlay color op; not statically traceable).
 
 ## 2. RECOGNITION PATTERNS — likely causes of similar bugs still lurking
 
@@ -127,7 +127,7 @@ symptom appears, check these in order:
 6. **"Obviously regular" data rebuilt instead of extracted** — the layer-A frame
    table looked linear but wasn't (88/197 permuted).  RULE: never synthesize a table
    the engine READS; extract it verbatim and byte-compare (assert in the generator).
-7. **Descriptor semantics dropped** — BGI view descriptors carry flag words (+0x1c
+7. **Descriptor semantics dropped** — graphics-overlay view descriptors carry flag words (+0x1c
    half-tile bits, +0x26 Y offset) and PAGE INDICES (word00/word0e → sprite table).
    Any leaf that consumes a descriptor must parse ALL fields the engine parser
    (1ab9:03c5..045b) consumes.  If a new erase/copy leaf misdraws by 8 px or one
@@ -216,7 +216,7 @@ HEADLESS VERIFY RECIPE (works; calibrate after every relink):
 - Video model: real VGA, mode 0x0D, two pages (a000:0000 / a200:0000 == a000:2000).
   Present = CRTC flip + table swap (§1.2.1).  Blitters write VGA via
   `host_vga_rmw4/put4/read4` (absolute a000-window offsets; caller folds the page).
-- The self-modifying BGI overlay (seg 1ab9) does not decompile — recover semantics by
+- The self-modifying graphics overlay (seg 1ab9) does not decompile — recover semantics by
   disassembling the RUNTIME-RELOCATED bytes (e.g. from `local/build/render/
   op12_cpu_mem.bin` or the unpacked EXE at the overlay file offsets).
 - Engine anim streams end in a DOUBLED final byte (`…32 32 ff`) — the device for
@@ -334,9 +334,9 @@ host_text_draw_string + the DDFNT2.CAR parse, added round 4):
     python script and eyeball the row bits vs what the blitter reads.
 (b) COLOR: the round-4 note assumed fg = white 0x0F (planes = mask each).  The real
     game shows MEDIUM GRAY → the engine's fg expansion (DGROUP 0x68a6 words, set via
-    the BGI color op 1ab9:14ef) selects a palette index ≠ 15.  Find the setcolor
+    the graphics-overlay color op 1ab9:14ef) selects a palette index ≠ 15.  Find the setcolor
     call before draw_number in show_pause_screen/the world map (decompile
-    1000:49d7 + level_intro_screen callers; look for a small int pushed to a BGI
+    1000:49d7 + level_intro_screen callers; look for a small int pushed to a graphics-overlay
     color thunk) and use that index's plane expansion: plane p value = mask if
     (color>>p)&1 else 0.  "BLACK squares" = all four planes written 0 with full
     mask — i.e. the current code probably passes values 0 (check the rmw4 call:

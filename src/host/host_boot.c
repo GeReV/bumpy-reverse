@@ -12,7 +12,7 @@
  *  init_timer_resource_table (1000:7bad = gfx_overlay_thunk_adab):
  *    Engine body: calls gfx_set_current_pos() which stores register values
  *    AX/DX into gfx_cur_pos_x/gfx_cur_pos_y.  No state the playable host
- *    uses.  BENIGN NO-OP: BGI overlay not installed in the host build.
+ *    uses.  BENIGN NO-OP: graphics overlay not installed in the host build.
  *
  *  init_joystick_handlers (1000:7532):
  *    Engine body: zeros the 16-entry far-pointer handler table
@@ -75,12 +75,12 @@
 #include "../input.h"    /* g_joystick_handler_table   */
 #include <string.h>      /* memset */
 
-/* init_timer_resource_table 1000:7bad (gfx_overlay_thunk_adab) — BGI cur-pos
- * store.  BENIGN NO-OP: BGI overlay not installed in the host build.
+/* init_timer_resource_table 1000:7bad (gfx_overlay_thunk_adab) — graphics-overlay cur-pos
+ * store.  BENIGN NO-OP: graphics overlay not installed in the host build.
  *
  * NOTE (name↔body uncertainty): the function name implies timer + resource-table
- * init, but the Ghidra body at 1000:7bad is a BGI-overlay thunk.  The no-op is
- * correct for the host (BGI overlay absent), but the name↔body mapping is
+ * init, but the Ghidra body at 1000:7bad is a graphics-overlay thunk.  The no-op is
+ * correct for the host (graphics overlay absent), but the name↔body mapping is
  * uncertain — this may be a mislabel.  Do NOT treat the no-op as cementing a
  * verified name↔body match. */
 void init_timer_resource_table(u16 off, u16 seg)

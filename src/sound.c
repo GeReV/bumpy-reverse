@@ -1296,7 +1296,7 @@ void record_status_and_strobe_speaker(void)
  *  async per-PIT-tick frequency sweep — driven by hardware interrupts mutating the frame
  *  out from under the foreground game loop — is NOT host-replayable as a deterministic
  *  differential.  They are therefore BEHAVIOR-FAITHFUL reconstructions kept for
- *  documentation, the same precedent as the self-modifying-BGI-overlay blitters
+ *  documentation, the same precedent as the self-modifying-graphics-overlay blitters
  *  (sprite_blit / bg_render): faithful to what the binary does, validated by inspection
  *  against the asm rather than by a runtime gate.  See docs/reconstruction-fidelity.md.
  *

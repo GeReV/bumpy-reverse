@@ -924,7 +924,7 @@ void host_compose_bg_view(u8 __far *view)
  *   work-buffer body; the engine's HUD/text path is out of scope for the keystone
  *   gameplay compose.  Kept a faithful NOP so the screens.c / anim.c call sites
  *   stay byte-faithful (same convention as the default build's game_stubs leaves).
- *   The BGI text leaves (gfx_set_text_pos_9837 / gfx_draw_string_9804) live in
+ *   The graphics-overlay text leaves (gfx_set_text_pos_9837 / gfx_draw_string_9804) live in
  *   screens.c — NOPs in the default build, routed to host_text_* below when playable. */
 void anim_render_leaf_80ac(u8 __far *view)        { (void)view; }
 
@@ -974,8 +974,8 @@ void host_blit_cursor(u16 x, u16 y)
                               hr_cursor_bank, hr_cursor_base_lin, &view);
 }
 
-/* ── BGI text rendering (the 1000:9837 / 1000:9804 leaves' host bodies) ────────────
- *   Engine model (BGI overlay, disassembled from the unpacked image — these routines
+/* ── gfx text rendering (the 1000:9837 / 1000:9804 leaves' host bodies) ────────────
+ *   Engine model (graphics overlay, disassembled from the unpacked image — these routines
  *   are the self-modifying overlay segment 1ab9 and have no Ghidra decomp):
  *     1ab9:1441  SET TEXT POSITION — stores x/y into DGROUP 0x6942/0x6944.
  *     1ab9:13ec  DRAW STRING       — walks the NUL-terminated far string, per char
@@ -1000,7 +1000,7 @@ void host_blit_cursor(u16 x, u16 y)
  *                plane p = 0xff iff (colour>>p)&1 — set session-wide by
  *                init_game_session_state's set_text_color(14, 1) (1000:02f1).
  *   The font object is game data: DDFNT2.CAR, loaded by load_graphics_resources
- *   (1000:0a2c; open_resource(4) on the 0x0090 table base) and bound as the BGI
+ *   (1000:0a2c; open_resource(4) on the 0x0090 table base) and bound as the graphics-overlay
  *   "current object" via 1000:97df -> 1ab9:132b (font ptr -> DGROUP 0x68a2).  The host
  *   loads the same file (host_resource.c host_load_font) — never embedded in src.
  *

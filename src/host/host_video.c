@@ -76,12 +76,12 @@
  * detect_video_adapter (202c:0000), an adapter PROBE (int 10h/int 21h + the
  * DAT_203b_689e capability flags) that stores an adapter/mode code (0x8000/0/1/4)
  * at ram 0x26c4c, selecting the CGA vs EGA/VGA branch.  In the real engine the
- * VGA mode-0x0D set is done by the BGI driver's initgraph, and the probe/driver
+ * VGA mode-0x0D set is done by the graphics overlay's init, and the probe/driver
  * init establishes palette_mode (DGROUP 0x541d) — runtime capture: 2 (EGA/VGA).
  * The host folds the platform mode-0x0D set + the palette_mode=2 outcome into
- * this boot slot as a NECESSITY (there is no live BIOS/BGI initgraph to do it);
+ * this boot slot as a NECESSITY (there is no live BIOS/graphics-overlay init to do it);
  * the probe itself is a no-op on the host.  (palette_mode was previously set —
- * to 14! — by the misnomered set_palette_mode/97c5, which is really the BGI
+ * to 14! — by the misnomered set_palette_mode/97c5, which is really the graphics-overlay
  * set-text-colour op; see set_text_color below.)  NOTE: this INT 10h mode set
  * resets the CRTC start address to 0 — the boot page parity is programmed
  * AFTER it, by init_display_97f1 (host_crtc_set_start). */
@@ -91,12 +91,12 @@ void init_display_97a4(void)
     r.h.ah = 0x00u;
     r.h.al = 0x0Du;
     int86(0x10, &r, &r);
-    palette_mode = 2u;   /* the VGA-adapter outcome the BGI driver init records */
+    palette_mode = 2u;   /* the VGA-adapter outcome the graphics-overlay init records */
 }
 
 /* ── init_crtc_window (1000:9821 → overlay 1ab9:1422 — CLIP-WINDOW STORE) ──────
  * GROUNDED (2026-07-03, runtime-relocated overlay disasm): 1000:9821 thunks to
- * 1ab9:1422, which merely stores its four args into the BGI clip-window record
+ * 1ab9:1422, which merely stores its four args into the graphics-overlay clip-window record
  * (DGROUP 0x6936/0x6938/0x693a/0x693c = x0,y0,x1,y1).  It does NOT touch the
  * CRTC.  A prior host body programmed the CRTC Start Address here — that was an
  * invention, and FATAL for the boot page parity: init_game_session_state calls
@@ -120,7 +120,7 @@ void init_crtc_window(u16 a, u16 b, u16 c, u16 d)
  * and every UI draw lands on the hidden page.  Each present flips the CRTC
  * start and the page table together, so the parity set here is preserved for
  * the whole session.  (The original's boot CRTC value was never directly
- * captured — its BGI driver init populates the page table AND the CRTC start
+ * captured — its graphics-overlay init populates the page table AND the CRTC start
  * out of the corpus; 0x2000 is functionally forced by the engine's own
  * menu/gameplay coherence.  See docs/reconstruction-fidelity.md.)
  *
@@ -135,7 +135,7 @@ static void host_crtc_set_start(u16 start)
     outp(CRTC_DATA,  (u8)(start & 0xFFu));
 }
 
-/* ── set_text_color (1000:97c5 → overlay 1ab9:1311 — BGI SET TEXT COLOUR) ──────
+/* ── set_text_color (1000:97c5 → overlay 1ab9:1311 — GFX SET TEXT COLOUR) ──────
  * GROUNDED (2026-07-03, unpacked-EXE + runtime-relocated overlay disasm): the
  * 1000:97c5 thunk loads AX=fg, DX=bg from its two stack args and far-calls
  * 1ab9:1311, which dispatches [DGROUP 0x6946 + palette_mode*2] → the pm-2
@@ -149,8 +149,8 @@ static void host_crtc_set_start(u16 start)
  *
  * MISNOMER CORRECTED: this function was previously named `set_palette_mode`
  * and its host body wrote `palette_mode = mode` (= 14!) — 97c5 never touches
- * palette_mode (DGROUP 0x541d; runtime capture shows 2, written by the BGI
- * driver init — see init_display_97a4).  That mismodel is what made the host
+ * palette_mode (DGROUP 0x541d; runtime capture shows 2, written by the graphics-overlay
+ * init — see init_display_97a4).  That mismodel is what made the host
  * glyph blitter assume white (15) — near-BLACK in the world-1 level palette —
  * for the pause-overlay score (§8.2).  Host: store the colours for the
  * host_text_* glyph path (host_render.c). */
@@ -180,7 +180,7 @@ extern const u8 __far *level_packed_palette(void);
  * G=(w>>4)<<3, B=(w&0xff)<<3.)  The VGA DAC latches only the low 6 bits on upload
  * (host_gfx_upload_palette_to_dac → port 0x3c9), so e.g. packed word 0x0750 →
  * (R,G,B bytes) (0x38,0xa8,0x80) → DAC (56,40,0).  It then runs the palette tail,
- * REUSING the Task-1 BGI primitives: gfx_stage_image_palette(0x6c42,DS,0) →
+ * REUSING the Task-1 graphics-overlay primitives: gfx_stage_image_palette(0x6c42,DS,0) →
  * gfx_upload_palette_to_dac(0) → the vsync wait (1000:9864).  (Mode-1 is the EGA
  * fixed-palette patch path, not taken on the VGA boot.)
  *
@@ -196,7 +196,7 @@ extern const u8 __far *level_packed_palette(void);
  * docs/reconstruction-fidelity.md ("playable host: level-palette pipeline").
  *
  * DAC-LAYOUT NOTE (findings §3): host_gfx_upload_palette_to_dac writes DAC slots
- * {0..7, 0x10..0x17} — the slots the active BGI Attribute-Controller mapping
+ * {0..7, 0x10..0x17} — the slots the active overlay Attribute-Controller mapping
  * (host_set_gfx_attribute_palette: pixel i → DAC i<8?i:0x10+(i-8)) reads.  This is what
  * makes gameplay colours 8..15 correct; render_level's video_set_palette6 (DAC 0..15
  * contiguous) only covers the AC's low 8 slots.  See the audit + the report. */
@@ -229,7 +229,7 @@ void load_palette(u16 src_off, u16 src_seg)
         host_palette_staging[0x33u + (u16)i * 3u + 2u] = (u8)((u16)(w & 0xffu) << 3);
     }
 
-    /* Engine tail (1000:09e9): stage the staged palette into the per-page BGI slot,
+    /* Engine tail (1000:09e9): stage the staged palette into the per-page graphics-overlay slot,
      * upload it to the DAC, then wait for vertical retrace. */
     stage_fp = (u8 __far *)host_palette_staging;
     host_gfx_stage_image_palette(FP_OFF(stage_fp), FP_SEG(stage_fp), 0u);
@@ -260,14 +260,14 @@ void apply_level_palette(void)
  * RECONSTRUCTION FIDELITY: the original 97f1 body is not cleanly decompiled;
  * the host reconstructs its observable effect (CRTC window + DAC init). */
 /* host_set_gfx_attribute_palette — program the VGA Attribute Controller palette to the
- * BGI 16-colour mapping: pixel i -> DAC (i<8 ? i : 0x10+(i-8)).  The engine's BGI driver
+ * graphics-overlay 16-colour mapping: pixel i -> DAC (i<8 ? i : 0x10+(i-8)).  The engine's graphics overlay
  * set this up (its mode-init code is not in the Ghidra corpus); without it the BIOS
  * mode-0x0D default AC maps pixel 6->DAC 0x14 and pixels 8..15->DAC 0x38..0x3f, which the
  * decoded image's DAC palette (written to DAC 0..7 / 0x10..0x17 by vga_dac_upload_from_buffer)
  * never loads — so half the colours come out as the EGA default ramp.  Matching the AC to
  * vga_dac_upload_from_buffer's DAC targets makes pixel i resolve to image palette colour i.
- * RECONSTRUCTION FIDELITY: host BGI-init reconstruction (the original BGI handler is absent
- * from the corpus); recorded in docs/reconstruction-fidelity.md ("playable host: BGI palette"). */
+ * RECONSTRUCTION FIDELITY: host graphics-overlay-init reconstruction (the original graphics-overlay handler is absent
+ * from the corpus); recorded in docs/reconstruction-fidelity.md ("playable host: graphics-overlay palette"). */
 static void host_set_gfx_attribute_palette(void)
 {
     u8 i;
@@ -291,8 +291,8 @@ void init_display_97f1(void)
     host_text_set_pos(10u, 10u);
     set_text_color(0x0fu, 0x00u);
     /* Host boot additions (RECONSTRUCTION FIDELITY — see each helper's note):
-     * CRTC boot page parity + the BGI attribute-controller mapping + DAC init,
-     * the observable effects of the BGI driver init that is absent from the
+     * CRTC boot page parity + the overlay attribute-controller mapping + DAC init,
+     * the observable effects of the graphics-overlay init that is absent from the
      * corpus. */
     host_crtc_set_start(CRTC_PAGE1_ADDR);
     host_set_gfx_attribute_palette();
@@ -300,9 +300,9 @@ void init_display_97f1(void)
 }
 
 /* ── set_display_page — engine set_active_display_page (1000:9814) ──────────────
- * This is BGI setactivepage, NOT setvisualpage.  GROUNDED: 1000:9814 → 1ab9:1409
+ * This is graphics-overlay setactivepage, NOT setvisualpage.  GROUNDED: 1000:9814 → 1ab9:1409
  * merely clamps the index (≤1) and stores it in DGROUP[0x6940]; it does NOT touch
- * the CRTC.  And [0x6940] is the BGI library's active-page state, which is dead for
+ * the CRTC.  And [0x6940] is the graphics-overlay's active-page state, which is dead for
  * the gameplay draw path — the gameplay draw page is cur_sprite_data, selected
  * separately (set_sprite_table_ptr).  Per the runtime oracle the engine never
  * reprograms the CRTC start address during gameplay (single page a000); the display

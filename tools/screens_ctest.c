@@ -525,11 +525,11 @@ static const char *cmp_descriptors(const record_t *r, long *got, long *want)
  *  p1_sprite blit descriptor + blit_sprite (anim_blit_sprite_leaf).  Its observable,
  *  RECONSTRUCTED output is the p1_sprite descriptor (word[0]=col*0x10, word[1]=row y,
  *  word[2]=char+0x175).  The render_descriptor_ptr VIEW struct's EXIT bytes are NOT a
- *  faithful gate here: the engine's blit_sprite (a stubbed BGI overlay leaf) mutates the
+ *  faithful gate here: the engine's blit_sprite (a stubbed graphics-overlay leaf) mutates the
  *  view struct internally (e.g. +0x14 dest-x), so the captured EXIT view struct reflects
  *  the overlay's last blit, not anything the ported builder writes.  RECONSTRUCTION
  *  FIDELITY: gate the p1_sprite descriptor (the builder's real output); the view struct
- *  is the BGI overlay's and is left out of this fn's gate. */
+ *  is the graphics overlay's and is left out of this fn's gate. */
 static const char *cmp_p1sprite(const record_t *r, long *got, long *want)
 {
     /* Gate the glyph POSITION words — word[0] (+0x00/+0x01) dest x = col*0x10 and word[1]
@@ -668,7 +668,7 @@ static const char *cmp_ports(const record_t *r, long *got, long *want)
 /* ── (M) MENU CURSOR STATE-MACHINE COMPARATOR — the headline run_main_menu gate ─────
  *  Asserts (a) the screen-global SCRSNAP (menu_option2_setting / current_level /
  *  timing_flag_accumulator / input_state / palette_mode) == the EXIT snap; (b) the AX
- *  return BYTE (selected_item) == the captured ret_val's low byte (AH is the BGI-overlay
+ *  return BYTE (selected_item) == the captured ret_val's low byte (AH is the graphics-overlay
  *  trampoline's leftover, a non-game artifact); (c) the p1_sprite[+2] cursor word
  *  (cursor_index*0x10+0x70) == the captured descriptor — the cursor LOCAL observed via
  *  the blit descriptor.  Driven by the captured input script (replayed through poll_input
@@ -705,7 +705,7 @@ static const char *cmp_menu(const record_t *r, u16 ret, long *got, long *want)
 
 /* ── (D) DAC PORT-WRITE GATE — the reconstructed VGA-DAC driver ─────────────────────
  *  CARVE-OUT (engine fact, T1 + scenario-10): the captured iris/standalone DAC writes
- *  come from unmodelable BGI overlay code, NOT from any ported C path (forcing
+ *  come from unmodelable graphics overlay code, NOT from any ported C path (forcing
  *  palette_mode 0/1/2 + seeding the palette still yields 0 DAC writes from
  *  upload_vga_dac_palette).  So the upload_vga_dac_palette records carry 0 OUT; the port
  *  must likewise emit 0 (the 1:1 thunk under palette_mode==2 emits nothing) — gate that.
@@ -826,7 +826,7 @@ static void wrap_draw_number(void)
 static void wrap_draw_text_at(void)
 {
     const record_t *r = g_cur_rec;
-    /* draw_text_at(str_off, str_seg, x, y) — writes no modeled descriptor (the BGI text
+    /* draw_text_at(str_off, str_seg, x, y) — writes no modeled descriptor (the graphics-overlay text
      *  leaves are NOPs in the ctest build); the descriptor gate confirms it leaves the
      *  view/p1 descriptors untouched. */
     draw_text_at(r->args[0], r->args[1], r->args[2], r->args[3]);
@@ -976,7 +976,7 @@ static const ported_t PORTED[] = {
     { 0x0d9d, "show_level_intro_screen",'P', wrap_show_level_intro_screen },
     /* transition / palette (T4) — iris-wipe descriptor sweep (B) + the DAC port-write
      *  gate (D) on the reconstructed VGA-DAC driver (see cmp_dac).  CARVE-OUT: the
-     *  captured iris/standalone DAC writes are emitted by unmodelable BGI overlay code
+     *  captured iris/standalone DAC writes are emitted by unmodelable graphics overlay code
      *  (FUN_7b4a) — an engine fact (scenario-10 forced-mode upload emits 0 DAC); the
      *  reconstructed vga_dac_upload_from_buffer is gated standalone over a seeded palette. */
     { 0x3467, "play_iris_wipe_transition", 'B', wrap_play_iris_wipe },

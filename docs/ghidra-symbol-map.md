@@ -17,9 +17,9 @@ uncertain identities carry a `maybe_` prefix rather than an invented meaning (se
 | Segment | Range | Contents |
 |---------|-------|----------|
 | CODE_0 | `1000:0000`–`ab8f` | Main game + engine + the linked Borland C runtime |
-| CODE_1 | `1ab9:0000`–`16ef` | The Borland BGI graphics kernel (linked from `GRAPHICS.LIB`) |
+| CODE_1 | `1ab9:0000`–`16ef` | The graphics-overlay kernel (linked from `GRAPHICS.LIB`) |
 | CODE_2..9 | `1c28`/`1cd5`/`1cda`/`1ce5`/`1cec`/`202c`/`2036`/`203a` | Small overlays (heap, palette dispatch, relocation stubs) |
-| CODE_10 | `203b:0000`–`a28f` | DGROUP-adjacent code + the BGI command-vector tables |
+| CODE_10 | `203b:0000`–`a28f` | DGROUP-adjacent code + the graphics-overlay command-vector tables |
 | DATA | `203b:a290`+ | DGROUP data: game state, sound/MIDI tables, framebuffers, heap |
 
 Note: the game's DGROUP globals are addressed as `1000:<off>` in Ghidra (the code and data
@@ -61,7 +61,7 @@ Timer: `7e18` set_timer_slot_stack · `7e1f` set_timer_slot_reg · `7efe` wait_t
 DOS/BIOS wrappers: `7120` bios_int10_thunk · `7221` dos_getcurdir_wrap · `74b6`
 dos_select_disk_wrap · `74c3` dos_chdir_wrap · `74d4` noop_empty_74d4.
 
-### Overlay thunks (near→far trampolines into the BGI/overlay segments)
+### Overlay thunks (near→far trampolines into the graphics-overlay segments)
 `7b76`/`7b86`/`7b93`/`7ba7`/`7bad`/`7bbd`/`7bca`/`7bd7`/`7bea` gfx_overlay_thunk_* (→ `1ab9`) ·
 `809e` overlay_thunk_cd82 (→ `1cd5`) · `93a4` prng_seed_thunk · `93c8` gfx_set_mode_11_thunk ·
 `93e2`/`93f2`/`93fc`/`9406` palette_dispatch_*_thunk · `941a` prepare_sprite_frames_thunk ·
@@ -81,14 +81,14 @@ Stdio: `98dd` stdio_fill_read_buffer · `995b` stdio_read_buffered · `999a` std
 Misc: `ab83` borland_stack_overflow (the stack-check-fail handler called in every prologue) ·
 `0698` `maybe_`crt_return_one_stub (dead — zero xrefs).
 
-## BGI graphics kernel (`1ab9`, from GRAPHICS.LIB)
+## Graphics-overlay kernel (`1ab9`, from GRAPHICS.LIB)
 
 Device-command dispatchers (each indexes a per-display-mode fn-pointer table by `[0x541d]`,
 the mode index — confirmed against `local/borlandc/INCLUDE/GRAPHICS.H` + the in-binary VGA
 behavior of each vector target):
 
 `0179` gfx_init_viewport · `01c0` gfx_driver_nop · `01c1` gfx_device_clear_flag ·
-`01e1` gfx_putimage_dispatch (BGI cmd 21, `rep movsw` image copy) ·
+`01e1` gfx_putimage_dispatch (overlay cmd 21, `rep movsw` image copy) ·
 `01ff` gfx_cleardevice_dispatch (mode-0Dh reset) · `0232` gfx_device_reset_dispatch ·
 `02b1` gfx_palette_dispatch (VGA-DAC `OUT 0x3c8/0x3c9` upload) ·
 `0351` gfx_present_dispatch (called by `present_frame`) · `0384` gfx_device_inc_dispatch.
@@ -97,7 +97,7 @@ Text output: `12b0` gfx_char_width · `1311` gfx_text_render_dispatch · `1409` 
 `1422` gfx_set_clip_rect · `1441` gfx_set_text_position · `1458` gfx_set_text_attr. The text
 state lives in the DGROUP block `0x6936`–`0x6946` (`gfx_clip_x0/y0/x1/y1`, `gfx_text_mode`, …).
 
-### BGI command-vector tables (DGROUP, slot = `[0x541d]*2 + base`)
+### Graphics-overlay command-vector tables (DGROUP, slot = `[0x541d]*2 + base`)
 `0x4dda` cmdvec_init · `0x5435` cmdvec_putimage · `0x5441` cmdvec_palette ·
 `0x545d` cmdvec_cleardevice · `0x5469` cmdvec_device_reset · `0x5475` cmdvec_present ·
 `0x5481` cmdvec_setvisualpage. (Label binding is best-effort — the bases are computed offsets,
@@ -114,7 +114,7 @@ as functions (zero xrefs); named `data_not_code_*` and should be cleared to data
 The Phases 1-7 reconstruction had already named the large majority of DGROUP globals while
 building `src/`. The remaining unnamed labels were named where groundable — notably the sound
 block (`0x83cc` snd_voice_table, `0x9788`–`0x9798` snd_param_frame, `0x979a` snd_isr_state),
-the MIDI track tables, the far-heap internals, the saved keyboard ISR vector, and the BGI
+the MIDI track tables, the far-heap internals, the saved keyboard ISR vector, and the graphics-overlay
 clip/text state block. The genuinely un-nameable residue is left as `DAT_*`: framebuffer
 interiors (`0x7350`–`0x75bc`), CRT/stdio scratch, and the `switchdataD_*` jump tables.
 

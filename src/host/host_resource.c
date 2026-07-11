@@ -182,14 +182,14 @@ void host_screens_buf_init(void)
     /* Load the option-2 difficulty-label strips (EASY/MEDIUM/HARD) the main menu
      * cycles — runs once at startup, before game_loop reaches run_main_menu. */
     host_load_menu_strips();
-    /* Load the BGI text font (DDFNT2.CAR) — see host_load_font below. */
+    /* Load the graphics-overlay text font (DDFNT2.CAR) — see host_load_font below. */
     host_load_font();
 }
 
-/* ── host_load_font — load DDFNT2.CAR (the BGI text font object) ─────────────────
+/* ── host_load_font — load DDFNT2.CAR (the graphics-overlay text font object) ────
  * Engine: load_graphics_resources (1000:0a2c) does open_resource(4,4) on the
  * 0x0090 table base set by init_game_session_state — entry 0x00b8 = DDFNT2.CAR —
- * reads it into the buffer at DGROUP 0x75da/0x75dc and binds it as the BGI
+ * reads it into the buffer at DGROUP 0x75da/0x75dc and binds it as the graphics-overlay
  * "current object" (the font far ptr at DGROUP 0x68a2) via 1000:97df -> 1ab9:1330.
  * Font object: {byte first_char, byte last_char, byte px_height, byte row_count,
  * byte spacing, byte pad, BE u16 glyph_off[last-first], glyphs...} — the glyph

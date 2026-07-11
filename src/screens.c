@@ -158,14 +158,14 @@ void init_highscore_default_table(void)
  *    already reconstructed as a faithful-signature stub in anim.c
  *    (anim_render_leaf_80ac) — the SAME engine function (1000:80ac); draw_hud_composite
  *    calls it through that symbol so BUMPY.EXE links it once (anim.obj).  Likewise
- *    blit_sprite (1000:942a) is anim.c's anim_blit_sprite_leaf.  The BGI-overlay
+ *    blit_sprite (1000:942a) is anim.c's anim_blit_sprite_leaf.  The graphics-overlay
  *    text leaves draw_text_at forwards to — FUN_1000_9837 (1000:9837, a thunk to
  *    overlay 1ab9:1441 = SET TEXT POSITION) and FUN_1000_9804 (1000:9804, a thunk
  *    to 1ab9:13ec = DRAW STRING / draw_string_glyphs) — are self-modifying overlay
  *    code with no decomp; the default build keeps faithful-signature no-op stubs
  *    HERE, the playable build routes them to host_render.c's host text model.
  *    RECONSTRUCTION FIDELITY: these leaves preserve each call site 1:1 without
- *    re-driving the BGI overlay / Phase-0 render core; their observable output (the
+ *    re-driving the graphics overlay / Phase-0 render core; their observable output (the
  *    render_descriptor_ptr view struct + the p1_sprite blit descriptor) IS produced
  *    here and is the validated descriptor-level gate (tools/screens_ctest.c §B).
  *
@@ -221,7 +221,7 @@ void show_level_intro_screen(void);         /* 1000:0d9d (T5) */
 u16  draw_name_entry_cursor(u8 col, u8 row, u16 frame, char do_blit); /* 1000:5fdb */
 
 /* render/text leaves (see header block).  FUN_80ac / blit_sprite are anim.c's
-   faithful-signature stubs (the SAME engine fns); the BGI text leaves live here.
+   faithful-signature stubs (the SAME engine fns); the graphics-overlay text leaves live here.
    (2026-07-02 misnomer fix: these were previously named text_clip_leaf_9837(clip_w,
    clip_h) / draw_string_glyphs_9804(x,y) — WRONG semantics.  The overlay disasm:
    1000:9837 -> 1ab9:1441 = SET TEXT POSITION (stores x/y to DGROUP 0x6942/0x6944);
@@ -246,9 +246,9 @@ extern void host_text_draw_string(u16 str_off, u16 str_seg);
 void gfx_set_text_pos_9837(u16 x, u16 y)            { host_text_set_pos(x, y); }
 void gfx_draw_string_9804(u16 str_off, u16 str_seg) { host_text_draw_string(str_off, str_seg); }
 #else
-/* RECONSTRUCTION FIDELITY: BGI-overlay text leaves — faithful-signature no-op stubs
+/* RECONSTRUCTION FIDELITY: graphics-overlay text leaves — faithful-signature no-op stubs
    in the default build (self-modifying overlay; no clean decomp).  draw_text_at's
-   call sites are preserved 1:1; the text pixels are the BGI overlay's. */
+   call sites are preserved 1:1; the text pixels are the graphics overlay's. */
 void gfx_set_text_pos_9837(u16 x, u16 y)            { (void)x; (void)y; return; }
 void gfx_draw_string_9804(u16 str_off, u16 str_seg) { (void)str_off; (void)str_seg; return; }
 #endif
@@ -480,14 +480,14 @@ void draw_hud_composite(void)
  *    natural-load capture), so the descriptor builds run deterministically.
  *    vec_decode / process_sprites / set_resource_table — likewise faithful-signature
  *    stubs (the decode/sprite-table work is the engine's; its OUTPUT is seeded).
- *  STUBBED render-core / BGI-overlay leaves (RECONSTRUCTION FIDELITY — preserve each
+ *  STUBBED render-core / graphics-overlay leaves (RECONSTRUCTION FIDELITY — preserve each
  *  call site 1:1 without re-driving the Phase-0 render core; their observable output
  *  — the render_descriptor_ptr view struct + the p1_sprite blit descriptor — IS
  *  produced here and is the validated descriptor-level gate):
  *    restore_bg_view / present_frame / init_fullscreen_view_desc  (owned by
  *      gfx_overlay.c / game_stubs.c — extern, NOT redefined here);
  *    FUN_1000_7b93 / FUN_1000_7bca / FUN_1000_7b4a (the per-step view-blit) /
- *      FUN_1000_9410 (set_sprite_table_ptr trampoline) — BGI overlay leaves, stubbed;
+ *      FUN_1000_9410 (set_sprite_table_ptr trampoline) — graphics-overlay leaves, stubbed;
  *    blit_sprite (1000:942a) routed through anim.c's anim_blit_sprite_leaf (same
  *      engine fn, linked once in anim.obj — zero dup);
  *    wait_keypress / poll_input / FUN_1000_75a2 — input path (poll_input is input.c
@@ -503,7 +503,7 @@ void draw_hud_composite(void)
  *  MISNOMER CORRECTION (Task 2):  `wait_vretrace_thunk` (1000:9864, formerly mis-named
  *  upload_vga_dac_palette) is a 1:1 CALLF thunk to `wait_vretrace_dispatch` (2036:0000,
  *  formerly dispatch_by_palette_mode_2036), which indirect-calls the overlay handler at
- *  table `[palette_mode*2 + 0x6976]`.  That table is RUNTIME-POPULATED by the BGI driver
+ *  table `[palette_mode*2 + 0x6976]`.  That table is RUNTIME-POPULATED by the graphics-overlay
  *  init (all-zero in the static image); for the VGA boot (palette_mode==2) the handler is
  *  2036:0015 — a VERTICAL-RETRACE (vsync) WAIT (`mov dx,0x3da; in al,dx; test al,8`), NOT
  *  a DAC upload.  RECONSTRUCTION FIDELITY: the dispatch chain is collapsed into the vsync
@@ -525,7 +525,7 @@ void draw_hud_composite(void)
  *  faithfully-reconstructed, validated part, its render/present leaves stubbed.
  * ──────────────────────────────────────────────────────────────────────────────── */
 
-/* ── render / BGI-overlay leaves OWNED ELSEWHERE (extern — NOT defined here; resolve
+/* ── render / graphics-overlay leaves OWNED ELSEWHERE (extern — NOT defined here; resolve
  *    to gfx_overlay.obj / game_stubs.obj / input.obj at the BUMPY.EXE link; the host
  *    replay harness supplies its own host definitions) ──────────────────────────── */
 #ifndef BUMPY_PLAYABLE
@@ -535,7 +535,7 @@ extern void restore_bg_view(u8 __far *view, u16 seg);    /* gfx_overlay.c 1000:8
  * ─────────────────────────────────────────────────────────────────────────────
  * screens.c models the engine's restore_bg_view (1000:80bc) with its ENGINE-
  * FAITHFUL 2-arg far-pointer signature `(view, seg)` — the descriptor far ptr in
- * DX:AX, the runtime DGROUP seg in BX — and treats it as a STUBBED BGI-overlay
+ * DX:AX, the runtime DGROUP seg in BX — and treats it as a STUBBED graphics-overlay
  * render leaf (see the "STUBBED render-core" note above): the observable title
  * present is produced by the descriptor build + present_frame(1) that follow.
  *
@@ -579,7 +579,7 @@ extern void set_resource_table(u16 off, u16 seg);         /* game_stubs.c       
 
 /* ── unowned leaves (no other definition in the src tree) — faithful-signature stubs
  *    reconstructed HERE so screens.c's 1:1 call sites resolve at the BUMPY.EXE link;
- *    RECONSTRUCTION FIDELITY: file-I/O / decode / BGI-overlay leaves, not game logic. */
+ *    RECONSTRUCTION FIDELITY: file-I/O / decode / graphics-overlay leaves, not game logic. */
 int  open_resource(u16 res_idx, u16 mode);
 u32  read_chunked(int handle, u16 buf_off, u16 buf_seg, u16 len_off, u16 len_seg);
 void c_close(int handle);
@@ -626,7 +626,7 @@ void process_sprites(u16 buf_off, u16 buf_seg) { sprite_proc_dispatch(buf_off, b
 #endif
 #ifdef BUMPY_PLAYABLE
 /* Playable build: route to host palette-stage primitive (host_gfx.c).
- * fun_7b93 thunk (1000:7b93) dispatches into BGI overlay 1ab9:0620, which
+ * fun_7b93 thunk (1000:7b93) dispatches into graphics overlay 1ab9:0620, which
  * copies 48 bytes from [buf_seg:buf_off]+0x33 into the per-page palette slot.
  * 'flag' is the page index.  RECONSTRUCTION FIDELITY: see host/host_gfx.h. */
 void fun_7b93_present_blank(u16 buf_off, u16 buf_seg, u16 flag)
@@ -637,7 +637,7 @@ void fun_7b93_present_blank(u16 buf_off, u16 buf_seg, u16 flag)
 #endif
 #ifdef BUMPY_PLAYABLE
 /* Playable build: route to host DAC-upload primitive (host_gfx.c).
- * fun_7bca thunk (1000:7bca) dispatches into BGI overlay 1ab9:0677, which
+ * fun_7bca thunk (1000:7bca) dispatches into graphics overlay 1ab9:0677, which
  * writes host_gfx_page_palette[page & 1] to VGA DAC ports 0x3c8/0x3c9.
  * RECONSTRUCTION FIDELITY: see host/host_gfx.h. */
 void fun_7bca_flip(u8 page) { host_gfx_upload_palette_to_dac(page); }
@@ -647,7 +647,7 @@ void fun_7bca_flip(u8 page) { (void)page; }
 #ifdef BUMPY_PLAYABLE
 /* Playable build: route to host clip/viewport primitive (host_gfx.c).
  * fun_7b4a thunk (1000:7b4a, Ghidra: gfx_set_viewport_thunk, formerly blit_view_step)
- * dispatches into BGI overlay 1ab9:0179 (gfx_init_viewport): writes CONSTANT clip
+ * dispatches into graphics overlay 1ab9:0179 (gfx_init_viewport): writes CONSTANT clip
  * extents view[+0x18]=0x14, view[+0x1a]=0x19; sets gfx_write_mode_flag_a=2/b=1;
  * VGA dispatch slot 0x4dda[2]=0x0000 -> NULL -> no pixel blit.
  * Called from the iris loop (play_iris_wipe_transition) and all screen builders;
@@ -687,7 +687,7 @@ u8 __far *dac_palette_src_buf;     /* far ptr -> decoded-image buffer (palette @
 u16       dac_palette_mode_active; /* the palette_mode the dispatch selected (for notes) */
 
 /* vga_dac_upload_from_buffer — RECONSTRUCTION FIDELITY (behavior-faithful, from the raw
- *  disassembly of the static VGA-DAC writer at image off 0xb204; the runtime BGI
+ *  disassembly of the static VGA-DAC writer at image off 0xb204; the runtime graphics
  *  overlay handler is not in the Ghidra corpus).  Emits the canonical VGA-DAC palette
  *  upload: set write index 0, push 8 colours (R,G,B each) to 0x3c9; set write index
  *  0x10, push 8 more colours.  Palette source = img_buf+0x33 (16 colours × 3 bytes,
@@ -703,7 +703,7 @@ void vga_dac_upload_from_buffer(u8 __far *img_buf)
         outp(0x3c9, pal[2]);           /* B */
         pal += 3;
     }
-    outp(0x3c8, 0x10);                 /* DAC write index 0x10 (BGI colours 8..15) */
+    outp(0x3c8, 0x10);                 /* DAC write index 0x10 (graphics-overlay colours 8..15) */
     for (i = 0; i < 8; i++) {
         outp(0x3c9, pal[0]);
         outp(0x3c9, pal[1]);
@@ -714,7 +714,7 @@ void vga_dac_upload_from_buffer(u8 __far *img_buf)
 }
 
 /* wait_vretrace_dispatch — 2036:0000 (formerly mis-named dispatch_by_palette_mode_2036).
- *  The engine thunk 1000:9864 CALLFs 2036:0000, which indirect-calls the BGI overlay
+ *  The engine thunk 1000:9864 CALLFs 2036:0000, which indirect-calls the graphics overlay
  *  handler at table [palette_mode*2 + 0x6976].  For the VGA boot (palette_mode==2) that
  *  handler is 2036:0015 — a VERTICAL-RETRACE (vsync) WAIT (`mov dx,0x3da; in al,dx;
  *  test al,8`: wait for the retrace to START, then to END).  It is NOT a DAC upload:
@@ -723,7 +723,7 @@ void vga_dac_upload_from_buffer(u8 __far *img_buf)
  *  to_dac (and the standalone modelled writer vga_dac_upload_from_buffer).
  *
  *  RECONSTRUCTION FIDELITY: the overlay handler table at 0x6976 is runtime-populated by
- *  the BGI driver (all-zero in the static image) and 2036:0015 is dynamically-loaded
+ *  the graphics overlay (all-zero in the static image) and 2036:0015 is dynamically-loaded
  *  overlay code — NOT in the Ghidra corpus.  The mode-2 handler chain
  *  (9864 -> 2036:0000 -> table[2] = 2036:0015) is collapsed here into the vsync poll the
  *  playable build needs; the default (byte-compared, never-run) build keeps its verbatim
@@ -757,7 +757,7 @@ void wait_vretrace_thunk(void)
  *  stepping the blit-view rect inward (10 steps, 4 view-blits + 4 DAC uploads per
  *  step), then clear it.  The descriptor RECT SWEEP (fields +0x14/+0x16/+0x1e/+0x20
  *  and the +0xe/+0x1c/+0x22..+0x25 setup) is reconstructed 1:1; the per-step view-blit
- *  (FUN_7b4a) + present (FUN_7b93/7bca) are stubbed BGI-overlay leaves; the captured
+ *  (FUN_7b4a) + present (FUN_7b93/7bca) are stubbed graphics-overlay leaves; the captured
  *  DAC sequence is emitted by FUN_7b4a's faded palette (see the carve-out note).
  * ════════════════════════════════════════════════════════════════════════════ */
 void play_iris_wipe_transition(void)
@@ -1645,7 +1645,7 @@ u16 draw_name_entry_cursor(u8 col, u8 row, u16 frame, char do_blit)
     run_n_frames(8);
     /* The original is void; the engine's caller reuses AX (= the frame value, the cursor
        glyph just drawn) as `cur_letter` for the next iteration — modelled by returning
-       `frame`.  RECONSTRUCTION FIDELITY: the cursor glyph is a stubbed BGI-overlay blit;
+       `frame`.  RECONSTRUCTION FIDELITY: the cursor glyph is a stubbed graphics-overlay blit;
        only the returned frame (a non-game AX carry) feeds the next loop, which re-masks
        its low byte — the validated output is the name buffer + the SCRSNAP, not this. */
     return frame;
@@ -2039,7 +2039,7 @@ u8 enter_password(u8 col, u8 row)
  *  RECONSTRUCTION FIDELITY: the row-1 name string + the per-level name table are engine
  *  DGROUP data (fmemcpy'd into SS-locals / read from 0x1354); reconstructed as module
  *  data the harness seeds.  The glyph blits write the p1_sprite descriptor (the gated
- *  DESCRIPTOR-LEVEL output); the BGI overlay glyph pixels are the stubbed blit_sprite's.
+ *  DESCRIPTOR-LEVEL output); the graphics overlay glyph pixels are the stubbed blit_sprite's.
  * ════════════════════════════════════════════════════════════════════════════ */
 u8  intro_name_row[0xd];        /* row-1 name string (fmemcpy'd from DGROUP)            */
 u16 level_name_table[16 * 2];   /* DGROUP 0x1354 (per-level name far ptrs, stride 4)    */

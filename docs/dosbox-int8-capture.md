@@ -35,7 +35,7 @@ integrated-DOS dosbox-x; BUMPY.EXE boots and **runs** under it.
   `0x01`=UP (↑ `0x48`), `0x02`=DOWN (↓ `0x50`), `0x04`=LEFT (← `0x4b`), `0x08`=RIGHT
   (→ `0x4d`), **`0x10`=FIRE (Enter `0x1c`, Space `0x39`, or `0x74`)**.
 - **Startup gate sequence solved (boot → gameplay graphics).** Two text-mode keypress gates
-  in the BGI/overlay init guard the gameplay graphics mode, then the in-graphics screens take
+  in the graphics-overlay init guard the gameplay graphics mode, then the in-graphics screens take
   over:
   1. **gfx_driver_init palette select** — **F2** (`0x3c`) (or F3 `0x3d`); text mode `0x02`.
   2. **second overlay gate** — **F5** (`0x3f`); on pressing it the BIOS video mode flips to
@@ -53,7 +53,7 @@ integrated-DOS dosbox-x; BUMPY.EXE boots and **runs** under it.
   (`0x10`) → `intro_start_level`**) → the per-tick gameplay loop. `wait_keypress` (`1000:328f`)
   and the menu/intro waits all read `input_state` via `poll_input`, so the decoded FIRE
   scancode (Enter `0x1c`) drives them. The non-`game_loop` segments seen in the trace are the
-  regular static code segments (`CODE_6` `1cec`/runtime `1510` is the **BGI EGAVGA driver**,
+  regular static code segments (`CODE_6` `1cec`/runtime `1510` is the **graphics-overlay EGAVGA driver**,
   un-analyzed — all rendering routes through it) plus the int8/PIT sound ISR
   (`pit_timer_isr_multiplexer` `1000:7c02`); the once-per-video-frame PC sampler sits in those
   + the input pollers, so it rarely catches the brief `game_loop`/physics frames directly.
@@ -93,9 +93,9 @@ granularity did not line up with where the engine advances physics).
 
 ## Why DOSBox (and why a *patched* build)
 
-We need a reference that runs the game **faithfully**: real BGI overlay rendering, the real
+We need a reference that runs the game **faithfully**: real graphics-overlay rendering, the real
 self-unpacking TinyProg image, and a real int8 cadence. A full-system DOS emulator gives
-that; the Unicorn harness (great for per-function capture) does not model the BGI/CRTC/PIT
+that; the Unicorn harness (great for per-function capture) does not model the graphics-overlay/CRTC/PIT
 environment.
 
 To get state *out* at the frame boundary we instrument the emulator with a small hook
@@ -256,7 +256,7 @@ caught, and the oracle calibration anchor agreeing. One-command gate:
   (item-collection, contact-action, cell-animation); the only residual full-tilemap
   divergence is the **animated-tile FX-graphics layer** (cell+0xa0, e.g. cell `0xc8` =
   anim-slot cell `0x28` + `0xa0` cycling its displayed tile-graphic +6/tick), written
-  INSIDE the carved-out BGI render core (`render_player_view` → `gfx_set_mode_10` → the
+  INSIDE the carved-out graphics-overlay render core (`render_player_view` → `gfx_set_mode_10` → the
   un-analyzed EGAVGA overlay handler `1ab9:0db0`). No gameplay-collision callee reads
   that layer; it is render-only, so it is legitimately excluded from the state-spine
   SNAP. The collision-layer tilemap is validated per-cell by the items/anim/spawn

@@ -42,7 +42,7 @@ extern u8 __huge *host_framebuffer;  /* 4 * HOST_PLANE_SIZE */
 void host_fb_init(void);             /* allocate + register the page table into it */
 
 /* ── Real-VGA mode-0x0D plane-store primitives (faithful blit target) ──────────
- * The original engine blitters (1cec sprite codec, 1ab9 BGI tile/copy) write the
+ * The original engine blitters (1cec sprite codec, 1ab9 graphics-overlay tile/copy) write the
  * VGA plane window directly via the Sequencer Map-Mask + GC Bit-Mask + the 4 plane
  * latches; the reconstructed blitters compute the identical per-byte plane values
  * and coverage mask, and these helpers commit them to real VGA (the a000 64KB
@@ -69,7 +69,7 @@ void host_screens_buf_init(void);    /* host_resource.c — back fullscreen_buf 
 void host_load_cursor_bank(void);    /* host_resource.c — load+transform FLECHE.BIN at boot */
 void host_cursor_bind(u8 __huge *bank, u32 base_lin, u16 ftbl_off, u16 ftbl_seg); /* host_render.c */
 void host_blit_cursor(u16 x, u16 y); /* host_render.c — blit cursor frame 0 at (x,y) */
-/* BGI text (engine 1000:9837/9804 -> overlay 1ab9:1441/13ec; font = DDFNT2.CAR loaded
+/* graphics-overlay text (engine 1000:9837/9804 -> overlay 1ab9:1441/13ec; font = DDFNT2.CAR loaded
  * by load_graphics_resources as resource 4, bound at DGROUP 0x68a2).  See host_render.c. */
 void host_load_font(void);           /* host_resource.c — load DDFNT2.CAR at boot */
 const u8 __far *host_font_ptr(void); /* host_resource.c — the loaded font object (or NULL) */

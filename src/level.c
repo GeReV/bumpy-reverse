@@ -543,7 +543,7 @@ static void render_level(void)
  * tiles) before the per-cell entity scan.  The entity layers (spawn), the players +
  * level palette (game-loop entry, game.c) paint over this.  RECONSTRUCTION FIDELITY:
  * the recon renders the tiles via the semantic bg_render_grid rather than the original's
- * self-modifying BGI tile-run chain (docs/reconstruction-fidelity.md). */
+ * self-modifying graphics-overlay tile-run chain (docs/reconstruction-fidelity.md). */
 void level_render_bg(void)
 {
     extern u8 __far *cur_level_ptr;   /* game.c — set by load_current_level_data */
@@ -682,7 +682,7 @@ extern void run_n_frames(u8 n);                   /* 1000:05e7                  
 
 /* DGROUP globals the challenge reads/writes (owned by other modules / the engine). */
 extern u8  input_state;                  /* DGROUP:0x8244 — latched input bits        */
-extern u16 palette_mode;                 /* DGROUP:0x541d — BGI/DAC dispatch mode      */
+extern u16 palette_mode;                 /* DGROUP:0x541d — gfx/DAC dispatch mode      */
 extern u16 copyprot_seed_src;            /* DGROUP:0x119c — live prng seed (0x5192 RT) */
 extern u8 __far  *level_dec_buf_fp;      /* DGROUP:0x6be8 far ptr → decoded res buffer */
 extern u8 __far  *p1_sprite;             /* DGROUP:0x8884 far ptr → p1 blit descriptor */

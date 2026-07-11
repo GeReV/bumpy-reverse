@@ -20,9 +20,9 @@
  *
  * The original engine's keyboard ISR (installed by install_keyboard_isr 1000:798a
  * via INT 21h AH=0x25/AL=0x09) lives in the original binary as self-modifying
- * BGI-overlay code that does not cleanly decompile.  The faithful reconstruction
+ * graphics-overlay code that does not cleanly decompile.  The faithful reconstruction
  * documents the ISR's EFFECT on g_key_state_table (the same table get_key_state /
- * read_input_action poll) rather than reproducing the BGI overlay machinery.
+ * read_input_action poll) rather than reproducing the graphics overlay machinery.
  *
  * The host ISR is the minimal correct implementation of that effect:
  *   1. Read the scancode from port 0x60.
@@ -44,7 +44,7 @@
  * No special 0xE0 state machine is needed; the choice is documented here.
  *
  * Deviations from the original:
- *   - The original ISR body is in a BGI-overlay page; this host version is a plain
+ *   - The original ISR body is in a graphics-overlay page; this host version is a plain
  *     C interrupt handler with the same observable effect on g_key_state_table.
  *   - The original used INT 21h AH=0x35/0x25 directly; the host uses
  *     _dos_getvect / _dos_setvect (same semantics, OW-idiomatic wrappers).

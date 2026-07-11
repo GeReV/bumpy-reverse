@@ -5,22 +5,22 @@
 #include "host_gfx.h"
 
 /* ============================================================================
- * host_gfx.c — BGI overlay primitive host reimplementation (BUMPY_PLAYABLE)
+ * host_gfx.c — graphics-overlay primitive host reimplementation (BUMPY_PLAYABLE)
  * ============================================================================
  *
- * RECONSTRUCTION FIDELITY — BGI OVERLAY PRIMITIVES (FUNCTIONAL EQUIVALENCE)
+ * RECONSTRUCTION FIDELITY — GRAPHICS-OVERLAY PRIMITIVES (FUNCTIONAL EQUIVALENCE)
  * The original Bumpy engine calls graphics primitives through thunks in segment
- * 1000 that dispatch into the Borland BGI overlay loaded at segment 1AB9.  The
- * BGI overlay implements per-mode handlers (CGA mode 0 / VGA mode 2) selected
- * via a vector table at palette_mode*2+0x5441.  The overlay is third-party
- * (Borland BGI library) and is NOT in the Ghidra decompilation corpus; 1:1
+ * 1000 that dispatch into the graphics overlay loaded at segment 1AB9.  The
+ * graphics overlay implements per-mode handlers (CGA mode 0 / VGA mode 2) selected
+ * via a vector table at palette_mode*2+0x5441.  The overlay is Loriciel-custom
+ * (not Borland BGI) and is NOT in the Ghidra decompilation corpus; 1:1
  * reconstruction of its internals is impossible.
  *
  * This module provides functional equivalents for the VGA (palette_mode==2)
  * path — the only path exercised by the playable build.  Each function replaces
- * the corresponding BGI dispatch thunk under #ifdef BUMPY_PLAYABLE while the
+ * the corresponding graphics-overlay dispatch thunk under #ifdef BUMPY_PLAYABLE while the
  * default BUMPY.EXE build retains the faithful-signature NOP stubs in screens.c.
- * Deviation recorded in docs/reconstruction-fidelity.md ("playable host: BGI
+ * Deviation recorded in docs/reconstruction-fidelity.md ("playable host: graphics
  * overlay primitives").
  *
  * Ghidra provenance — palette pipeline:
@@ -28,7 +28,7 @@
  *              thunk → 1ab9:0620  VGA palette-STAGE handler.
  *              Disassembly: DS:SI = buf+0x33, ES:DI = *0x5311 + page*99 + 0x33,
  *              rep movsw (0x18 words = 48 bytes).  Copies the decoded-image's
- *              16-colour BGI palette into the per-page palette slot.
+ *              16-colour graphics-overlay palette into the per-page palette slot.
  *   1000:7bca  fun_7bca_flip(page)
  *              thunk → 1ab9:0677  VGA DAC-UPLOAD handler.
  *              Disassembly: reads *0x5311 + page*99 + 0x33; OUT 0x3c8=0, 8×RGB,
@@ -61,7 +61,7 @@ u8 gfx_write_mode_flag_a;   /* DGROUP 0x541f */
 u8 gfx_write_mode_flag_b;   /* DGROUP 0x5420 */
 
 /* ── host_gfx_stage_image_palette ───────────────────────────────────────────
- * Functional equivalent of the BGI VGA palette-stage handler (1ab9:0620).
+ * Functional equivalent of the graphics-overlay VGA palette-stage handler (1ab9:0620).
  *
  * The original handler copies 0x18 words (48 bytes = 16 colours × 3 bytes) from
  * DS:SI = [buf_seg:buf_off]+0x33 to ES:DI = *0x5311 + page*99 + 0x33 via
@@ -80,11 +80,11 @@ void host_gfx_stage_image_palette(u16 buf_off, u16 buf_seg, u16 page)
 }
 
 /* ── host_gfx_upload_palette_to_dac ─────────────────────────────────────────
- * Functional equivalent of the BGI VGA DAC-upload handler (1ab9:0677).
+ * Functional equivalent of the graphics-overlay VGA DAC-upload handler (1ab9:0677).
  *
  * The original handler reads *0x5311 + page*99 + 0x33 (the staged palette slot)
  * and emits the canonical VGA-DAC write sequence: OUT 0x3c8=0x00, 8×RGB to
- * 0x3c9, OUT 0x3c8=0x10, 8×RGB to 0x3c9 (BGI colour indices 0..7 at DAC 0..7,
+ * 0x3c9, OUT 0x3c8=0x10, 8×RGB to 0x3c9 (graphics-overlay colour indices 0..7 at DAC 0..7,
  * indices 8..15 at DAC 0x10..0x17).  The host reads from host_gfx_page_palette
  * [page & 1] and emits the identical port sequence.
  *
@@ -103,7 +103,7 @@ void host_gfx_upload_palette_to_dac(u16 page)
         outp(0x3c9, pal[2]);           /* B */
         pal += 3;
     }
-    outp(0x3c8, 0x10);                 /* DAC write index 0x10 (BGI colours 8..15) */
+    outp(0x3c8, 0x10);                 /* DAC write index 0x10 (graphics-overlay colours 8..15) */
     for (i = 0u; i < 8u; i++) {
         outp(0x3c9, pal[0]);
         outp(0x3c9, pal[1]);
@@ -113,7 +113,7 @@ void host_gfx_upload_palette_to_dac(u16 page)
 }
 
 /* ── host_gfx_set_viewport ───────────────────────────────────────────────────
- * Functional equivalent of BGI overlay gfx_init_viewport (1ab9:0179), called
+ * Functional equivalent of graphics-overlay gfx_init_viewport (1ab9:0179), called
  * via main-segment thunk 1000:7b4a (Ghidra: gfx_set_viewport_thunk).
  *
  * Engine disassembly (1ab9:0179):
@@ -154,7 +154,7 @@ void host_gfx_upload_palette_to_dac(u16 page)
  * exercise; other `view[+0x1c]` sub-handlers and non-black fills are not reached and are
  * left unimplemented (early return).  The self-modifying per-plane inner loop is replaced
  * by an equivalent all-planes zero fill (Map-Mask=0x0F, write 0).  Recorded in docs/
- * reconstruction-fidelity.md ("playable host: BGI overlay primitives").
+ * reconstruction-fidelity.md ("playable host: graphics-overlay primitives").
  *
  * Called from fun_7b4a_view_blit (screens.c) under #ifdef BUMPY_PLAYABLE. */
 void host_gfx_set_viewport(u8 __far *view, u16 seg)

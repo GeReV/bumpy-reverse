@@ -97,7 +97,7 @@ extern void draw_anim_channels_a(void);           /* 1000:165e (anim.c)         
 extern void erase_anim_channels_a(void);          /* 1000:1a67 (anim.c)               */
 extern void draw_anim_channels_b(void);           /* 1000:17c7 (anim.c)               */
 extern void erase_anim_channels_b(void);          /* 1000:1b2b (anim.c)               */
-/* The engine's blit_sprite (1000:942a) is the BGI-overlay self-modifying leaf that
+/* The engine's blit_sprite (1000:942a) is the graphics-overlay self-modifying leaf that
    does not decompile; the project reconstructs it as anim.c's anim_blit_sprite_leaf
    (same address, faithful signature) and EVERY caller (anim.c, player2.c, screens.c)
    routes through it.  spawn.c follows that convention so the layer-C call is the same

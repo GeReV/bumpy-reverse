@@ -5,7 +5,7 @@
 
 /* Faithful C port of the per-cell background tile build restore_bg_tile_run
    (1000:0a90) plus the masked planar tile blit it drives (via restore_bg_view ->
-   the BGI overlay).  The blit's pixel semantics were reconstructed byte-exact
+   the graphics overlay).  The blit's pixel semantics were reconstructed byte-exact
    against the engine (tools/bg_blit_ref.py over the engine plane capture).
 
    For one playfield cell it reads the tile id(s) from the level map and copies
@@ -29,9 +29,9 @@
    --- RECONSTRUCTION FIDELITY (deviates from the engine) ---
    * The run-loop (bg_tile_run) faithfully mirrors restore_bg_tile_run (1000:0a90).
    * The actual tile blit is BEHAVIOR-faithful, not a port: the engine builds a
-     descriptor and calls restore_bg_view -> the BGI overlay (palette_mode dispatch)
+     descriptor and calls restore_bg_view -> the graphics overlay (palette_mode dispatch)
      to do the masked planar putimage, which is not cleanly decompilable.  Here the
-     "build descriptor + BGI putimage" is collapsed into a direct blit whose pixel
+     "build descriptor + graphics-overlay putimage" is collapsed into a direct blit whose pixel
      output was reconstructed byte-exact against the engine.
    * Operates on a 4-plane MEMORY image, not the VGA-hardware OUT sequence (the plane
      bytes are identical; the register OUTs / 0xA000 writes are not reproduced). */

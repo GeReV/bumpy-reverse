@@ -12,7 +12,7 @@ faithful (and breaks behavior). Everything here is either work to do or a deviat
 must stay documented (genuinely redundant, or self-modifying code that does not decompile).
 
 **Decisions (agreed).**
-- **BGI graphics-driver overlay (seg `1ab9`) → reimplement in the host module
+- **graphics-driver overlay (seg `1ab9`) → reimplement in the host module
   (`src/host/`)**, performing the *same functionality* as the original driver. It is a
   third-party graphics library, not the game's own logic (same category as the CRT), so it
   belongs in the host platform layer rather than as a 1:1 `src/` mirror. The game's
@@ -34,7 +34,7 @@ structure; *stub* means a no-op; *missing* means no `src/` presence at all.
 | Seg | Role | Reconstruction status |
 |-----|------|-----------------------|
 | `1000` CODE_0 | main game logic + Borland CRT | game logic mostly 1:1; CRT redundant (see §6) |
-| `1ab9` CODE_1 | **BGI graphics-driver overlay** | **largely unreconstructed (§1)** |
+| `1ab9` CODE_1 | **graphics-driver overlay** | **largely unreconstructed (§1)** |
 | `1c28` CODE_2 | `.VEC` interpreter (`vec_run`) | reconstructed (vec.c / tools) |
 | `1cd5/1cda/1ce5` | seg-alloc, `vec_xform`, PRNG | reconstructed |
 | `1cec` CODE_6 | **sprite pipeline** | **partial (§2)** |
@@ -43,7 +43,7 @@ structure; *stub* means a no-op; *missing* means no `src/` presence at all.
 
 **Headline.** The *game logic* (physics, AI, collision, the per-tick spine, menu/title state
 machines) is reconstructed and in large part validated. The **graphics + IO substrate is the
-real gap**: the engine's BGI graphics-driver overlay (seg `1ab9`, ~27 fns) is almost entirely
+real gap**: the engine's graphics-driver overlay (seg `1ab9`, ~27 fns) is almost entirely
 unreconstructed and is instead *modeled* by a few host shims (`restore_bg_view`,
 `render_player_view`, `present_frame`), and the sprite pipeline (seg `1cec`) is only half
 ported. This is the root of the title/menu offset/jitter/pacing symptoms and the reason
@@ -51,7 +51,7 @@ several presentation primitives are no-ops.
 
 ---
 
-## §1 — BGI graphics-driver overlay (seg `1ab9`) — PRIMARY GAP
+## §1 — graphics-driver overlay (seg `1ab9`) — PRIMARY GAP
 
 > ⚠️ **CORRECTION (2026-06-27): the role labels below for `7b93`/`7bca` are MISNOMERS.**
 > Capture-driven RE of the actual VGA (`palette_mode==2`) handlers (disassembled from the
@@ -88,7 +88,7 @@ several presentation primitives are no-ops.
 > Reconstruction is tracked in `docs/superpowers/plans/2026-06-27-host-bgi-present-transitions.md`
 > (rewritten). **Task 4 (2026-06-27) has now updated the per-row "Role"/"Action" text below.**
 
-The engine's graphics primitives are a Borland-BGI-style driver overlay. Main-segment
+The engine's graphics primitives are a Loriciel-custom driver overlay. Main-segment
 **thunks** (`1000:7b4a`…) call **dispatch** functions here, which indirect-call a
 **runtime vector table** indexed by `palette_mode` (DGROUP `0x4dda`/`0x5435`/`0x5441`/
 `0x5475`/`0x555e`), reaching the per-mode handler. All of `1ab9` is in the corpus and
@@ -132,7 +132,7 @@ VGA (`palette_mode==2`) path**: `7b4a` → `host_gfx_set_viewport`, `7b93` →
 `host_gfx_stage_image_palette`, `7bca` → `host_gfx_upload_palette_to_dac`, `7bdd` →
 `present_frame`; their default-build NOP stubs remain. The remaining thunks (`7b76`/`7b86`/
 `7ba7`/`7bbd`/`7bea`) are still NOP. The per-`palette_mode` **vector tables** (DGROUP
-`0x4dda/0x5435/0x5441/0x5475/0x555e`) and the **BGI-init code that populates them** (currently
+`0x4dda/0x5435/0x5441/0x5475/0x555e`) and the **graphics-overlay init code that populates them** (currently
 absent — `init_misc_7bd7`/`init_misc_7bbd` are NOP) remain unresolved for the 1:1 path;
 the host bypass avoids the table indirection entirely.
 
@@ -195,7 +195,7 @@ These run in the original but are no-ops even in the playable. Decompilable unle
 unless the disassembly can be recovered by hand.
 
 **Misc init (NOP both builds):** `init_misc_7bd7` (`7bd7`), `init_misc_7bbd` (`7bbd`) —
-the BGI gfx-init thunks; needed for §1 vector-table population. → reconstruct 1:1.
+the gfx-init thunks; needed for §1 vector-table population. → reconstruct 1:1.
 
 ---
 
@@ -243,13 +243,13 @@ reconstructed — not part of this.)
 
 ## Reconstruction priority order
 
-1. **BGI overlay dispatch + vector tables + BGI-init (§1 dispatch layer + §3 init_misc)** —
+1. **graphics-overlay dispatch + vector tables + graphics-overlay init (§1 dispatch layer + §3 init_misc)** —
    the foundation; unblocks every visual primitive and the title/menu transitions.
 2. **`gfx_set_mode_01/10/11` un-merge (§1 + §5)** — real handlers + behavior-faithful blit
    cores; makes `restore_bg_view`/`render_player_view` faithful.
 3. **Sprite pipeline front-end (§2)** — RLE decode, `sprite_proc_dispatch`, palette
    dispatches, un-merge `sprite_chain`; restores sprite/cursor/entity decode.
-4. **BGI text/font (§1 text group + §4 glyph no-ops)** — menu/highscore/HUD text.
+4. **graphics-overlay text/font (§1 text group + §4 glyph no-ops)** — menu/highscore/HUD text.
 5. **Title/menu pacing (§4: `play_intro_animation_loop`, `wait_50_frames`)** — fixes the
    black-gap/“extra input”/jitter pacing.
 6. **Sound L4/L6 backend (§3)** — audio fidelity.

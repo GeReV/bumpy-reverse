@@ -120,7 +120,7 @@ source. No DOSBox fork is vendored — only these patches.
   instead of gold). Dumping the real AC lets `shot_to_png.py` resolve pixels exactly as the
   hardware scans them — correct for the playable (VGA) **and** the original (EGA, which programs
   an image-specific AC). The shot record grows by 16 bytes (`32000 + 768 + 16 = 32784`); the
-  decoder detects the section by file size and falls back to the engine's standard BGI AC map
+  decoder detects the section by file size and falls back to the engine's standard overlay AC map
   for older dumps.
 
 - **`06-bumpycap-strided-shot-and-poke.patch`** — two additions to the `VGA_VerticalTimer`

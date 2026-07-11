@@ -1,23 +1,23 @@
-/* host_gfx.h — BGI primitive host reimplementation (BUMPY_PLAYABLE).
+/* host_gfx.h — graphics-overlay primitive host reimplementation (BUMPY_PLAYABLE).
  *
- * RECONSTRUCTION FIDELITY — BGI OVERLAY PRIMITIVES (HOST REIMPLEMENTATION)
- * The original Bumpy engine's graphics primitives route through a Borland BGI
- * driver overlay loaded at segment 1AB9.  The overlay implements per-mode
+ * RECONSTRUCTION FIDELITY — GRAPHICS-OVERLAY PRIMITIVES (HOST REIMPLEMENTATION)
+ * The original Bumpy engine's graphics primitives route through a Loriciel-custom
+ * graphics overlay loaded at segment 1AB9.  The overlay implements per-mode
  * handlers (CGA/EGA/VGA) dispatched via a vector table at palette_mode*2+0x5441.
- * That overlay is third-party (BGI) and is absent from the Ghidra decompilation
+ * That overlay is Loriciel-custom (not Borland BGI) and is absent from the Ghidra decompilation
  * corpus; its internal structure cannot be reconstructed 1:1.  This host module
  * provides *functional equivalents* for VGA (palette_mode==2) only — the mode
  * the playable build runs in.  Each host primitive replaces the corresponding
- * BGI dispatch thunk under #ifdef BUMPY_PLAYABLE; the default BUMPY.EXE build
+ * graphics-overlay dispatch thunk under #ifdef BUMPY_PLAYABLE; the default BUMPY.EXE build
  * keeps the faithful-signature NOP stubs in screens.c.
- * Deviation recorded in docs/reconstruction-fidelity.md ("playable host: BGI
+ * Deviation recorded in docs/reconstruction-fidelity.md ("playable host: graphics
  * overlay primitives"). */
 #ifndef HOST_GFX_H
 #define HOST_GFX_H
 #ifdef BUMPY_PLAYABLE
 #include "bumpy.h"
 
-/* host_gfx_stage_image_palette — functional equivalent of BGI VGA stage handler
+/* host_gfx_stage_image_palette — functional equivalent of graphics-overlay VGA stage handler
  * (1ab9:0620): copies 48 bytes (16-colour 6-bit palette) from [buf_seg:buf_off]
  * +0x33 into the per-page side-store host_gfx_page_palette[page & 1].
  *
@@ -26,7 +26,7 @@
  * 0x33; the host uses a two-entry side-store instead (see host_gfx.c). */
 void host_gfx_stage_image_palette(u16 buf_off, u16 buf_seg, u16 page);
 
-/* host_gfx_upload_palette_to_dac — functional equivalent of BGI VGA DAC-upload
+/* host_gfx_upload_palette_to_dac — functional equivalent of graphics-overlay VGA DAC-upload
  * handler (1ab9:0677): reads host_gfx_page_palette[page & 1] and emits the
  * canonical VGA-DAC write sequence (OUT 0x3c8=0, 8×RGB; OUT 0x3c8=0x10, 8×RGB).
  *
@@ -42,7 +42,7 @@ void host_gfx_upload_palette_to_dac(u16 page);
 extern u8 gfx_write_mode_flag_a;   /* DGROUP 0x541f */
 extern u8 gfx_write_mode_flag_b;   /* DGROUP 0x5420 */
 
-/* host_gfx_set_viewport — functional equivalent of BGI overlay gfx_init_viewport
+/* host_gfx_set_viewport — functional equivalent of graphics-overlay gfx_init_viewport
  * (1ab9:0179), called via thunk 1000:7b4a (Ghidra: gfx_set_viewport_thunk).
  *
  * Sets clip-extent constants view[+0x18]=0x14, view[+0x1a]=0x19 and the two mode

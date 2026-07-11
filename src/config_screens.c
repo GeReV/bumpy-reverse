@@ -41,7 +41,7 @@
  *      than running the live hardware probe (detect_video_adapter, 202c:0000) that
  *      would overwrite it on real hardware.  EGA+VGA-present is the correct result
  *      for the validated VGA path the host targets.
- *  DAT_203b_530e = 0x40 is an engine BGI flag with no host effect; not reproduced.
+ *  DAT_203b_530e = 0x40 is an engine graphics-overlay flag with no host effect; not reproduced.
  * Recorded in docs/reconstruction-fidelity.md ("playable host" section).
  * ════════════════════════════════════════════════════════════════════════════ */
 #ifdef BUMPY_PLAYABLE

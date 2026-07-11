@@ -193,7 +193,7 @@ OFF_POSB_OFF: int = 0x3f4             # cell*4 pos tbls (draw B)
 OFF_POSB_SEG: int = 0x3f6
 
 # View-descriptor far ptrs (the structs the draw/erase fns write into then pass to the
-# BGI overlay save-under / restore_bg_view callees).
+# graphics overlay save-under / restore_bg_view callees).
 OFF_VIEW_A_ERASE: int = 0x8d4
 OFF_VIEW_A_DRAW: int = 0x8e0
 OFF_VIEW_A_CLEAR: int = 0x8c0

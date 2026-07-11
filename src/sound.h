@@ -173,7 +173,7 @@ extern u8 snd_mpu_byte_89e2;            /* the byte FUN_89e2 writes (engine AH; 
  *  so the Ghidra database has NO function boundary for them and the sound oracle does NOT
  *  hook them — there are no trace records, hence no host differential.  Ported here from
  *  the raw disassembly as DOCUMENTATION of the engine's async per-tick frequency sweep;
- *  the self-modifying-BGI-blitter precedent (behavior-faithful, not runtime-gated).  See
+ *  the self-modifying-graphics-overlay-blitter precedent (behavior-faithful, not runtime-gated).  See
  *  the RECONSTRUCTION FIDELITY block at the L5 section in sound.c +
  *  docs/reconstruction-fidelity.md. */
 void pit_timer_isr_multiplexer(void);   /* 1000:7c02 — IRQ0/int-8 PIT tick mux           */

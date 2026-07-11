@@ -92,7 +92,7 @@
      draw_anim_channels_a/b call restore_bg_view (erase) and render_player_view
      around each blit_sprite.  These are NOT a second visible draw of the entity:
      restore_bg_view restores background from fullscreen_buf (erase), and
-     render_player_view (BGI mode-0x10, 1ab9:0db0) is a PLANAR REGION COPY used for
+     render_player_view (graphics-overlay mode-0x10, 1ab9:0db0) is a PLANAR REGION COPY used for
      save-unders / read-backs on the a000/a200 double-buffer pages.  The visible
      entity pixels come solely from blit_sprite writing the current page.
      Both functions are now reconstructed in src/gfx_overlay.c (behavior-faithful)

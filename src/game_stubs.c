@@ -5,7 +5,7 @@
  * remaining symbol here is a documented CARVE-OUT: a faithful-SIGNATURE stub for
  * an engine function the reconstructed call graph references but that is
  * deliberately NOT reconstructed in C, in the same spirit as the self-modifying
- * BGI-overlay blitters and the L5 timer ISR.  Each falls into one carve-out
+ * graphics-overlay blitters and the L5 timer ISR.  Each falls into one carve-out
  * class (see the per-symbol notes below):
  *
  *   - HARDWARE INIT  — the init_game_session_state (0282) CRTC/audio/resource/IRQ
@@ -199,7 +199,7 @@ int dos_abort(void)                         { return 0; }
 /* ── A. init_game_session_state (1000:0282) setup callees — HARDWARE-INIT CARVE-OUT
  *  These are the engine's one-time CRTC / audio / resource-table / IRQ install
  *  block: real-mode port writes + DOS interrupt installs that cannot run without
- *  the full game data + real DOS, in the same carve-out class as the BGI-overlay
+ *  the full game data + real DOS, in the same carve-out class as the graphics-overlay
  *  blitters and the L5 timer ISR.  Faithful-signature no-op stubs for the link.
  *  The descriptive C names (init_crtc_window etc.) are the reconstruction's own;
  *  the canonical Ghidra label is cited per stub.  install_keyboard_isr is the one
@@ -281,7 +281,7 @@ void set_display_page(u8 page)
     (void)page;
 }
 
-/* 1000:97c5 — BGI set-text-colour thunk → 1ab9:1311 → pm-2 handler 1ab9:14ef
+/* 1000:97c5 — graphics-overlay set-text-colour thunk → 1ab9:1311 → pm-2 handler 1ab9:14ef
    (fg/bg 4-plane expansions at DGROUP 0x68a6/0x68ae).  Formerly misnomered
    set_palette_display_mode/set_palette_mode — it never touches palette_mode. */
 void set_text_color(u8 fg, u8 bg)
@@ -454,7 +454,7 @@ void wait_keypress(void)             {}
 /* Anim-channel DRAW + ERASE (per-tick) — RECONSTRUCTED in anim.c (Phase-5 T4:
    draw_anim_channels_a 1000:165e, draw_anim_channels_b 1000:17c7,
    erase_anim_channels_a 1000:1a67, erase_anim_channels_b 1000:1b2b); their stubs
-   are removed (dup-symbol once anim.obj's bodies link).  Their BGI-overlay present
+   are removed (dup-symbol once anim.obj's bodies link).  Their graphics-overlay present
    leaves stay faithful-signature stubs INSIDE anim.c (anim_*_leaf). */
 
 /* P1/P2 bounding-box update.  update_p2_bbox (1000:50c0) + update_p1_bbox (1000:5085)

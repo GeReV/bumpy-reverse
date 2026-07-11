@@ -36,7 +36,7 @@
 #define GFX_OVL_PAGE_A000_OFF GFX_PAGE_A000_OFF /* 0x0000UL */
 
 #ifdef BUMPY_PLAYABLE
-/* DGROUP write-mode flags (0x541f / 0x5420) that the BGI mode-01/mode-10
+/* DGROUP write-mode flags (0x541f / 0x5420) that the graphics-overlay mode-01/mode-10
    dispatchers set before calling their handler; defined in host/host_gfx.c. */
 extern u8 gfx_write_mode_flag_a;
 extern u8 gfx_write_mode_flag_b;

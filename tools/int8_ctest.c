@@ -223,9 +223,9 @@ void game_post_input(void);
  *  Far-ptr DESCRIPTOR backing — the view / sprite-object / pos-table DGROUP far
  *  ptrs the game_tick call tree dereferences (p1/p2 grid recompute read
  *  sprite+0x14/0x16; the anim steppers write p1_sprite+0..4 and the clear-view
- *  +0x14/0x16; render/erase pass the view ptrs to the no-op BGI leaves).  In the
+ *  +0x14/0x16; render/erase pass the view ptrs to the no-op graphics-overlay leaves).  In the
  *  engine these point into a contiguous DGROUP descriptor block set up by
- *  init_sprite_structs / init_view_anim_descriptors; the host can't run that BGI
+ *  init_sprite_structs / init_view_anim_descriptors; the host can't run that graphics-overlay
  *  init, so — exactly as tools/anim_chan_ctest.c wire_views() does — we point each
  *  far ptr at a dedicated host backing buffer.  Zeroed: the descriptor CONTENT
  *  (sprite origin words) is not yet in the captured scalar union (entity_state is
@@ -601,9 +601,9 @@ static int run_replay(const char *path)
            150-frame capture.  The ONLY residual full-tilemap-hash divergence is the
            ANIMATED-TILE FX-GRAPHICS layer (e.g. cell 0xc8 = anim-slot cell 0x28 +
            0xa0, cycling its displayed tile-graphic index +6/tick).  That write is
-           produced INSIDE the carved-out BGI render core: draw_anim_channels_a calls
-           render_player_view (1000:93b8) -> gfx_set_mode_10 -> the un-analyzed BGI
-           EGAVGA overlay handler (1ab9:0db0), which is the documented render-leaf
+           produced INSIDE the carved-out graphics-overlay render core: draw_anim_channels_a calls
+           render_player_view (1000:93b8) -> gfx_set_mode_10 -> the un-analyzed graphics
+           overlay handler (1ab9:0db0), which is the documented render-leaf
            carve-out (src/anim.c FIDELITY note; docs/rendering-pipeline.md).  No
            reconstructed (or original) game_tick state-callee writes that FX layer, and
            NO gameplay-collision callee READS it (collision reads only tilemap[cell]/

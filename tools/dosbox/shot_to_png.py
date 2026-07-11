@@ -19,7 +19,7 @@ Newer shot dumps append the 16 actual AC palette registers after the DAC (see th
 BUMPYCAP hook, patches/05-bumpycap-shot-attr-palette.patch); when present we apply the
 REAL AC so every shot — playable (VGA) or original (EGA, which programs an image-
 specific AC) — decodes exactly as the hardware scans it out.  Dumps that predate the
-AC section fall back to the engine's standard BGI map AC[v] = (v<8) ? v : 0x10+(v-8)
+AC section fall back to the engine's standard overlay map AC[v] = (v<8) ? v : 0x10+(v-8)
 (correct for the playable, which always programs that mapping).
 """
 import sys
@@ -33,7 +33,7 @@ AC_BYTES = 16
 
 
 def gfx_ac(v: int) -> int:
-    """Engine BGI Attribute-Controller mapping: 4-bit pixel value -> DAC index."""
+    """Engine overlay Attribute-Controller mapping: 4-bit pixel value -> DAC index."""
     return v if v < 8 else 0x10 + (v - 8)
 
 
@@ -49,7 +49,7 @@ def main() -> None:
         for i in range(256)
     ]
     # AC palette registers: use the dumped ones if the shot includes them, else the
-    # engine's standard BGI mapping (see the module docstring).
+    # engine's standard overlay mapping (see the module docstring).
     ac_off = pal_off + DAC_BYTES
     if len(data) >= ac_off + AC_BYTES:
         ac = [data[ac_off + v] for v in range(16)]

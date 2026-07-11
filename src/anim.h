@@ -110,7 +110,7 @@ extern u8 __far *anim_b_grid_tbl;     /* DGROUP 0x343e/0x3440 — cell*4 grid-co
 extern u8 __far *anim_posA_tbl;       /* DGROUP 0xf4/0xf6     — cell*4 pos tbl (A)    */
 extern u8 __far *anim_posB_tbl;       /* DGROUP 0x3f4/0x3f6   — cell*4 pos tbl (B)    */
 
-/* ── view descriptors — OWNED BY anim.c (the draw/erase BGI-overlay passes) ───── */
+/* ── view descriptors — OWNED BY anim.c (the draw/erase gfx-overlay passes) ───── */
 extern u8 __far *anim_a_erase_view;   /* DGROUP 0x8d4 — draw A erase pass  (->0x80bc) */
 extern u8 __far *anim_a_draw_view;    /* DGROUP 0x8e0 — draw A save-under  (->0x93b8) */
 extern u8 __far *anim_a_clear_view;   /* DGROUP 0x8c0 — erase A (restore_bg_view)     */

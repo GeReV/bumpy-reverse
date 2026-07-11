@@ -86,7 +86,7 @@ void init_misc_7bbd(u8 mode);
 void init_display_97f1(void);
 void init_crtc_window(u16 x0, u16 y0, u16 x1, u16 y1);/* 1000:9821 set_crtc_window (carve) */
 void set_display_page(u8 page);
-void set_text_color(u8 fg, u8 bg);   /* 1000:97c5 → 1ab9:1311/14ef BGI set-text-colour
+void set_text_color(u8 fg, u8 bg);   /* 1000:97c5 → 1ab9:1311/14ef graphics-overlay set-text-colour
                                         (formerly misnomered set_palette_mode — it never
                                         touches palette_mode; see host_video.c) */
 void set_resource_table(u16 off, u16 seg);

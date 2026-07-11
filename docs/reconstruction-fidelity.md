@@ -21,17 +21,17 @@ feasible, bring back toward 1:1. Each module's `.h` carries the detailed in-code
 | Module | Fidelity | Notes |
 |---|---|---|
 | `vec.c` / `op12.c` | Transcription | `vec_run` op0/op4/op12 decoders, transliterated from the decomp. |
-| `video.c` | Transcription | planar VGA mode-set + map-mask blit (BGI `int 10h` mode set ported). |
+| `video.c` | Transcription | planar VGA mode-set + map-mask blit (graphics-overlay `int 10h` mode set ported). |
 | `sprite.c` | Transcription | `sprite_bank_load_transform` = `sprite_bank_relocate_frames` + `sprite_frame_transform`. |
 | `sprite_anim.c` | Transcription | `sprite_prepare_frame` = the per-frame select in `prepare_sprite_frames`. The dead `ctrl&0x40` expansion path is reconstructed and kept, marked UNVALIDATED. |
 | `sprite_blit.c` | **Behavior-faithful** | `sprite_blit_planar_vga` reconstructs `1cec:10e1`, which does not decompile (self-modifying, unrolled, jump-table). Models the GC/Seq map-mask + bit-mask RMW as a portable 4-plane memory op, **not** VGA-hardware port writes. Validated byte-exact. `sel!=0` + left-edge clip-carry preload ported but UNVALIDATED. |
-| `bg_render.c` | **Behavior-faithful** | `bg_tile_run` / `bg_render_grid` reconstruct `restore_bg_tile_run`'s loop + the mode-01 BGI-overlay tile blitter (`1ab9:0aa0`), which does not decompile. Same memory-image-vs-hardware caveat as `sprite_blit`. Validated byte-exact (119/119 cells). |
-| `gfx_overlay.c` | **Behavior-faithful** | `restore_bg_view` (`1000:80bc` → `1ab9:0d77`) and `render_player_view` (`1000:93b8` → `1ab9:1028` → `1ab9:0db0`) reconstruct the two BGI-overlay dispatch wrappers. `render_player_view` sub-handler 0 (full 4-plane GC Read-Map-Select + rep-movsw copy) is fully reconstructed; sub-handlers 3–6 (masked copy variants) are STUBBED and UNVALIDATED. **Key finding:** both functions are structural NOPs in the layer-A/B draw context (code-embedded view descriptors at `0x114b:0x74a0` / `0x751e` have `word[0]` / `word[0x0e]` > 1 → NOP guard fires; see `present_model.md` §5). The NOP path is exercised by the harness via a `nop_view` descriptor mirroring the code-embedded values. |
+| `bg_render.c` | **Behavior-faithful** | `bg_tile_run` / `bg_render_grid` reconstruct `restore_bg_tile_run`'s loop + the mode-01 graphics-overlay tile blitter (`1ab9:0aa0`), which does not decompile. Same memory-image-vs-hardware caveat as `sprite_blit`. Validated byte-exact (119/119 cells). |
+| `gfx_overlay.c` | **Behavior-faithful** | `restore_bg_view` (`1000:80bc` → `1ab9:0d77`) and `render_player_view` (`1000:93b8` → `1ab9:1028` → `1ab9:0db0`) reconstruct the two graphics-overlay dispatch wrappers. `render_player_view` sub-handler 0 (full 4-plane GC Read-Map-Select + rep-movsw copy) is fully reconstructed; sub-handlers 3–6 (masked copy variants) are STUBBED and UNVALIDATED. **Key finding:** both functions are structural NOPs in the layer-A/B draw context (code-embedded view descriptors at `0x114b:0x74a0` / `0x751e` have `word[0]` / `word[0x0e]` > 1 → NOP guard fires; see `present_model.md` §5). The NOP path is exercised by the harness via a `nop_view` descriptor mirroring the code-embedded values. |
 | `sprite_chain.c` | Transcription | `sprite_blit_object_list` (0e48) + `sprite_blit_clip` (0f50) + `sprite_blit_setup` (103d) reconstructed 1:1 from the clean decomp. `sprite_blit_build_desc` is a thin public wrapper. One documented residual deviation: `sprite_blit_setup` fills the descriptor rather than tail-calling `sprite_blit_planar_vga` (the composite invokes the blitter separately). Validated descriptor-exact (17/17). |
 | `entity.c` | Mixed | Layer-C/A/B placement + `draw_p1/p2_sprite` are transcriptions of the `spawn_and_draw_level_entities` (`1000:2a78`) loops and the draw fns. `entity_blit_object` is a shared helper the engine doesn't have (the engine inlines/repeats the prepare→blit per call). `entity_draw_layer_a/_b` now mirror the engine's full 3-step draw sequence: **erase (`restore_bg_view`) → blit (`blit_sprite`) → save-under (`render_player_view`)** — both erase and save-under are STRUCTURALLY PRESENT, called via `nop_view`, and are effective NOPs (code-embedded views in the engine; see `gfx_overlay.c` entry). Composite unchanged: 54152/64000 (world-8 live page). See [rendering-pipeline.md](rendering-pipeline.md). |
 | `main.c` | **Reimplementation deviation (CRT/startup)** | The original's `main` and ~60 CRT-garble startup functions (TC++ CRT0, `__cstart`, etc.) are NOT reproduced — they are not decompilable and are not meaningful. This reconstruction uses the Open Watcom CRT with a standard `main`. As of Phase-1 Task 7 `main` is WIRED TO THE REAL SESSION: it calls `init_game_session_state()` then `run_game_session()` (both reconstructed in `game.c`); the Task-3 stubs are gone. |
 | `game.c` | Transcription (spine) | The four session/loop functions ported 1:1 from the decomp (cross-checked live via Ghidra MCP): `run_game_session` (1000:0258), `init_game_session_state` (1000:0282), `reset_game_state` (1000:0bf9), `game_loop` (1000:0c18). Control flow, comparisons and call order reproduced verbatim. Owns the cross-module session/round/tick control globals (`round_continue_flag` 0x9d30, `session_continue_flag` 0x856d, `frame_abort_flag` 0x928d), the `tilemap` far pointer (0xa0d8 — no single module home), and the menu/score/level-index scratch. **Deviations** (all noted in-code): (a) the per-function Turbo-C `stack_check_limit`/`FUN_ab83` stack-check prologue is CRT scaffolding, omitted (OW CRT does its own); (b) `init_game_session_state`'s VGA mode set is surfaced via `video_set_mode_0d()` so the boot harness has an observable mode 0x0D (engine sets it inside the FUN_9821 CRTC block); (c) the ~46 trailing UNNAMED `DAT_203b_xxxx` resets in `init_game_session_state` are collapsed into the documented `reset_opaque_session_globals()` stub rather than invented as named externs. As of Phase-9 T3/T4 `game.c` also owns the reconstructed `init_view_anim_descriptors` / `game_post_present` / `game_post_input` per-tick spine fns, and `game_loop` drives the real P1 path (the carve-out boundary is gated by `validate_integration.sh`); see the Phase-9 sections. |
-| `game_stubs.c` | **Genuine carve-outs (Phase-9 T4)** | NOT a reconstruction. Faithful-SIGNATURE no-op/benign-default stubs for the engine functions the reconstructed call graph references but that are deliberately NOT reconstructed — every remaining symbol is a documented CARVE-OUT, in the same spirit as the self-modifying BGI-overlay blitters and the L5 timer ISR. As of Phase-9 T4 the file holds **58 carve-out function symbols + `mode_script_tbl`**, all in one of these classes: HARDWARE-INIT (the `init_game_session_state` CRTC/audio/resource/IRQ block), CRTC PAGE-FLIP (`present_frame`), int8-TIMING (`run_n_frames`/`rotate_timing_flags_and_wait`/`wait_keypress`), ENGINE STANDALONE LOADER (`load_current_level_data` — slice loads via `level.c start_level`), NEVER-DECOMPILED (`reset_round_counters` = `init_round_state` 0x31de; Ghidra-labelled but decompilation fails), RENDER-CORE LEAVES (`init_sprite_structs`, `init_fullscreen_view_desc`, `setup_fullscreen_view`, `apply_level_palette`, `show_text_screen`, `show_pause_screen`, `fun_75a2_poll_action`), OUT-OF-SCOPE SOUND L4/L6 drivers + player handler-table targets + the P2 indirect-call backend, and the `dos_abort` CRT thunk. Through Phases 2–8 most of the original deferral list was un-stubbed into real module bodies (player/player2/anim/screens/sound/spawn/level); what remains is carve-out-only. **NAMING:** symbols still spelled `FUN_1000_<off>` (e.g. `FUN_1000_6183` = `sweep_active_entities`) have canonical Ghidra labels but are kept `FUN_`-spelled to mark "unported carve-out, link-only" and to avoid churning the validated call sites that reference them; the canonical name is cited in-code. The carve-out boundary (which `game_loop` callees are genuine hardware/CRT/int8-timing leaves vs reconstructed game logic) is ENFORCED by `tools/validate_integration.sh`: it links `BUMPY.EXE` (no dup symbols), asserts every `game_loop` per-tick callee resolves to its real module `.obj` (not `game_stubs.obj`), and asserts `game_stubs.obj`'s symbol set ⊆ the explicit carve-out allowlist; a built-in `--self-test` proves the gate fails when a spine callee regresses to a stub. |
+| `game_stubs.c` | **Genuine carve-outs (Phase-9 T4)** | NOT a reconstruction. Faithful-SIGNATURE no-op/benign-default stubs for the engine functions the reconstructed call graph references but that are deliberately NOT reconstructed — every remaining symbol is a documented CARVE-OUT, in the same spirit as the self-modifying graphics-overlay blitters and the L5 timer ISR. As of Phase-9 T4 the file holds **58 carve-out function symbols + `mode_script_tbl`**, all in one of these classes: HARDWARE-INIT (the `init_game_session_state` CRTC/audio/resource/IRQ block), CRTC PAGE-FLIP (`present_frame`), int8-TIMING (`run_n_frames`/`rotate_timing_flags_and_wait`/`wait_keypress`), ENGINE STANDALONE LOADER (`load_current_level_data` — slice loads via `level.c start_level`), NEVER-DECOMPILED (`reset_round_counters` = `init_round_state` 0x31de; Ghidra-labelled but decompilation fails), RENDER-CORE LEAVES (`init_sprite_structs`, `init_fullscreen_view_desc`, `setup_fullscreen_view`, `apply_level_palette`, `show_text_screen`, `show_pause_screen`, `fun_75a2_poll_action`), OUT-OF-SCOPE SOUND L4/L6 drivers + player handler-table targets + the P2 indirect-call backend, and the `dos_abort` CRT thunk. Through Phases 2–8 most of the original deferral list was un-stubbed into real module bodies (player/player2/anim/screens/sound/spawn/level); what remains is carve-out-only. **NAMING:** symbols still spelled `FUN_1000_<off>` (e.g. `FUN_1000_6183` = `sweep_active_entities`) have canonical Ghidra labels but are kept `FUN_`-spelled to mark "unported carve-out, link-only" and to avoid churning the validated call sites that reference them; the canonical name is cited in-code. The carve-out boundary (which `game_loop` callees are genuine hardware/CRT/int8-timing leaves vs reconstructed game logic) is ENFORCED by `tools/validate_integration.sh`: it links `BUMPY.EXE` (no dup symbols), asserts every `game_loop` per-tick callee resolves to its real module `.obj` (not `game_stubs.obj`), and asserts `game_stubs.obj`'s symbol set ⊆ the explicit carve-out allowlist; a built-in `--self-test` proves the gate fails when a spine callee regresses to a stub. |
 | `level.c` | Transcription (compile/link) | `start_level` (1000:2d14) level-1 path wired to the validated Phase-0 render API; see prior audit. Owns `current_level` (0x79b2), `copyprotect_flag`, `p1_start_x/y`, `current_entity_index`. **No ownership edits were needed in Task 7** — its globals were already cleanly owned. |
 | `input.c` | Transcription | Pure keyboard-input layer ported 1:1 (install_keyboard_isr 798a, get_key_state 7ab4, flush_keyboard_buffer 7b01, input_state_clear 65d2, poll_input 1dde, read_input_action 75a2). Owns `input_state` (0x8244), `g_key_state_table` (0x4d42), `g_joystick_handler_table` (0x4cf2), `g_keyboard_isr_installed` (0x4dc4). Its `extern int dos_abort(void)` (faithful abort-path control flow) is resolved by a `game_stubs.c` stub for the linked build. **No ownership edits were needed in Task 7.** |
 | `player.c` | Transcription | P1 move-execution spine + 19 game-mode handlers + tile-collision leaves, ported 1:1 (Tasks 6a/6b/6c); dispatch/contact/action tables dumped byte-exact from the unpacked image. Owns all P1 move-state scalars (`p1_pixel_x/y`, `game_mode`, `move_locked`, `p1_cell`, `rng_frame`, …) and the dumped tables. Its forward-declared out-of-scope handlers + `mode_script_tbl` are resolved by `game_stubs.c` for the linked build (NOT reached on the level-1 boot path). **No ownership edits were needed in Task 7.** (Phase 2 reconstructs the 2 landing leaves + the jump/fall/bounce move-step substates here — see the Phase-2 audit below.) |
@@ -166,7 +166,7 @@ stream steppers, and the A/B overlay draw/erase — ported 1:1 from the live Ghi
 decomp. Validation splits along the same line as the rest of `src/`: the allocator +
 steppers are gated at the **semantic-state** level (12-byte channel records + DGROUP
 scalars); the draw/erase functions are gated at the **view-descriptor** level over the
-already-plane-exact Phase-0 blitter (the BGI-overlay leaves stay faithful-signature
+already-plane-exact Phase-0 blitter (the graphics-overlay leaves stay faithful-signature
 stubs). The shared channel record is 12 bytes: `[0]`active `[1]`cell `[2..5]`stream-ptr
 (far) `[6]`frame-byte `[8..11]`data-ptr (far).
 
@@ -191,7 +191,7 @@ stubs). The shared channel record is 12 bytes: `[0]`active `[1]`cell `[2..5]`str
   path never writes — the per-tick step-B *stream* ptr (rec bytes [2..5]; confirmed 0 in
   both the 2a78 decomp and the spawn_oracle level-2 capture `001e…0002001700`) — remains
   harness-supplied; the cell + frame-data ptr are engine-real.
-- **BGI-overlay leaves stay faithful-signature stubs.** `restore_bg_view`,
+- **graphics-overlay leaves stay faithful-signature stubs.** `restore_bg_view`,
   `blit_sprite`, `render_player_view`, `FUN_1000_80ac` — the Phase-0 render core is
   untouched; draw/erase are validated at the descriptor level over that already-
   plane-exact core (see the `gfx_overlay.c` / Phase-0 entries).
@@ -252,7 +252,7 @@ anim-channel FX subsystem is **reconstructed and validated**:
    — **DONE in Phase 8** (`src/spawn.c`; see Phase-8 section). B's step/draw/erase are
    now validated against records the real populator stamps, not synthetic seeds.
 2. **Sound** (`play_sound`, `play_state_sound` 6e11/647e) — extern stubs → Phase 6.
-3. **BGI-overlay leaves / `gfx_overlay.c` sub-handlers 3–6** — Phase-0 render core
+3. **graphics-overlay leaves / `gfx_overlay.c` sub-handlers 3–6** — Phase-0 render core
    untouched; draw/erase validated at the descriptor level over it. Unchanged.
 4. **int8-synced end-to-end gate** — the Unicorn capture granularity does not match the
    engine's physics-frame rate; a frame-accurate capture (DOSBox path) is needed before
@@ -277,7 +277,7 @@ L5 is reconstructed 1:1 as **documentation** (NOT runtime-gated — see below).
 | **L2 device state** (T4): `sound_select_device` (6de3), `snddrv_init` (88e5), `select_sound_device_from_mask` (891e), `snddrv_dispatch_a-d` (85b5/85db/8600/8626), `snd_busy_delay` (872e) | Transcription | The device init/select state machine (`sound_init_state` 0→1→2; `snddrv_mode` 0x85b3; `sound_active_device_mask` 0x5586). The dead `if(!substep_ok)` failure arms in `snddrv_init` preserved 1:1. Semantic-state validated. |
 | **L3 timer-table mgmt** (T4): `set_timer_slot(_raw)` (7de8/7df9), `arm_timer_callback` (7f2b), `disable_timer_callback` (7f65), `get_timer_slot_field` (7e3d), `timer_restore` (7fde) | Transcription | Two tables: the 0x5516 cb table (`arm`/`disable`, 8-byte slot `{current@0, reload@2, cb_off@4, cb_seg@6}`) and the 0x549c slot table (`set`/`get`, `{value@0, 0@2, cb_seg@4, cb_off@6}` at `(channel+2)*8`). Slot-store register semantics recovered from the asm. Semantic-state + TABLE-diff validated. |
 | **L4 hardware backends** (T5): `pc_speaker_silence` (9115), `speaker_gate_reset/strobe` (9440/9451), `record_status_and_strobe_speaker` (946e), `opl_write_reg` (9007), `opl_play_note` (905d), `FUN_89e2` (89e2, MPU byte-out), `FUN_8a07` (8a07, MPU sample), `FUN_8ad0` (8ad0, MPU settle), `FUN_8e2f` (8e2f, OPL all-off) | Transcription | The engine's real port-I/O drivers (PC-speaker/PIT 0x61, MPU-401 0x330/0x331, OPL2 0x388/0x389). Validated by the **port-write-sequence** differential: capture the engine's `OUT(port,val,size)` under Unicorn, replay the recorded IN sequence into the host `in()` shim, run the reconstructed driver, diff its OUT capture vs the engine's — a perturbation-proven real gate (corrupting any emitted OUT FAILs). |
-| **L5 ISR tone-sequencer** (T6): `pit_timer_isr_multiplexer` (7c02), `tone_seq_callback_9631` (9631), `tone_seq_callback_96c4` (96c4), `tone_seq_callback_95b5` (95b5) | **Behavior-faithful (NOT runtime-gated)** | The PIT (IRQ0/int-8) multiplexer walks the 0x5516 cb table each tick (`current += reload`; on the 500-tick period far-call the slot's installed callback) and the three tone-sequencer callbacks advance the L3 param frame + reprogram PIT ch2 (0x42/0x43) / strobe the speaker gate (0x61) to sweep the tone. Reached ONLY via the installed far pointer — NO Ghidra function boundary, NOT hooked by the oracle, so the trace has ZERO records and there is no host differential. Transcribed verbatim from the raw disasm as documentation; the **self-modifying-BGI-blitter precedent** (`sprite_blit`/`bg_render`): faithful to what the binary does, validated by inspection vs the asm, not by a runtime gate. |
+| **L5 ISR tone-sequencer** (T6): `pit_timer_isr_multiplexer` (7c02), `tone_seq_callback_9631` (9631), `tone_seq_callback_96c4` (96c4), `tone_seq_callback_95b5` (95b5) | **Behavior-faithful (NOT runtime-gated)** | The PIT (IRQ0/int-8) multiplexer walks the 0x5516 cb table each tick (`current += reload`; on the 500-tick period far-call the slot's installed callback) and the three tone-sequencer callbacks advance the L3 param frame + reprogram PIT ch2 (0x42/0x43) / strobe the speaker gate (0x61) to sweep the tone. Reached ONLY via the installed far pointer — NO Ghidra function boundary, NOT hooked by the oracle, so the trace has ZERO records and there is no host differential. Transcribed verbatim from the raw disasm as documentation; the **self-modifying graphics-overlay blitter precedent** (`sprite_blit`/`bg_render`): faithful to what the binary does, validated by inspection vs the asm, not by a runtime gate. |
 
 **Phase-6 deviations (all accurate; stated plainly; in-code RECONSTRUCTION FIDELITY notes present):**
 
@@ -395,9 +395,9 @@ deviation (a)).
 **Phase-7 deviations (all accurate; stated plainly; in-code RECONSTRUCTION FIDELITY notes present):**
 
 - **(a) DAC carve-out — the runtime DAC path is NOT engine-port-trace-validated.** The
-  engine's RUNTIME DAC writes come from runtime-loaded **BGI-overlay code** that does NOT
+  engine's RUNTIME DAC writes come from runtime-loaded **graphics-overlay code** that does NOT
   execute under Unicorn (the `[palette_mode*2 + 0x6976]` handler table is runtime-populated
-  by BGI driver init; under the natural boot `palette_mode==2` the standalone-vsync records
+  by graphics-overlay init; under the natural boot `palette_mode==2` the standalone-vsync records
   carry **0 captured DAC** — an engine fact surfaced by the T1 oracle). So
   `wait_vretrace_thunk`'s records carry **0 OUT events** and are gated as a **no-emission
   consistency check** (NOT a DAC validation; the old name `upload_vga_dac_palette` was a
@@ -408,9 +408,9 @@ deviation (a)).
   hardware protocol sequence (an external standard, perturbation-proven). Plainly: the engine's
   runtime DAC path is **not** port-trace-validated against the engine; the **static writer IS**
   gated 1:1 + protocol-correct. (The 50-write DAC sequence the T1 oracle captured comes from the
-  iris-wipe's per-step DAC upload — BGI overlay `1ab9:0677` dispatched via thunk `fun_7bca`
+  iris-wipe's per-step DAC upload — graphics overlay `1ab9:0677` dispatched via thunk `fun_7bca`
   (`gfx_upload_palette_to_dac_dispatch`) — over its faded palette state, NOT reconstructable 1:1
-  from the static image (`1ab9:0677` is runtime-loaded BGI overlay code). ⚠️ *Misnomer corrected
+  from the static image (`1ab9:0677` is runtime-loaded graphics overlay code). ⚠️ *Misnomer corrected
   2026-06-27*: the old text attributed these writes to "`FUN_7b4a`" — that is `gfx_init_viewport`
   (clip/viewport, null VGA blit slot) which emits NO DAC writes. The iris-wipe's descriptor RECT
   SWEEP is the faithfully-reconstructed, validated part.) This is the self-modifying-blitter / L5-ISR class
@@ -572,7 +572,7 @@ until this populator landed.
 
 - **Render-core leaves stay module-owned / faithful-signature.** `setup_fullscreen_view`
   (483c), `draw`/`erase_anim_channels_a`/`_b` (anim.c, Phase-5-validated), and `blit_sprite`
-  (942a, the BGI-overlay self-modifying leaf, routed via `anim_blit_sprite_leaf`) are NOT
+  (942a, the graphics-overlay self-modifying leaf, routed via `anim_blit_sprite_leaf`) are NOT
   re-implemented here; spawn.c calls them by name over the already-validated render core.
 - **Nested blit inside layer A/B.** `draw_anim_channels_a`/`_b` each NEST a `blit_sprite` per
   active entity (Phase-5 behavior); the host replay harness (`tools/spawn_ctest.c`) separates
@@ -835,7 +835,7 @@ new structural gate that enforces it.
 | Item | Class | Note |
 |------|-------|------|
 | `game_loop` spine wiring | Transcription (unchanged code) | The four session/loop fns (`run_game_session` 0258, `init_game_session_state` 0282, `reset_game_state` 0bf9, `game_loop` 0c18) are the Phase-1 1:1 ports; with the T1–T3 bodies un-stubbed, the per-tick callees they invoke now resolve to **real module `.obj` code** (player/player2/level/game/anim/spawn) rather than `game_stubs.c` no-ops. No call line changed in T4 — only the resolution target (stub → real fn) as the bodies landed across Phases 2–9. |
-| `game_stubs.c` (58 carve-out fn symbols + `mode_script_tbl`) | **Genuine carve-outs (not reconstructions)** | Reworded DEFERRED → carve-out. Every remaining symbol is a faithful-signature no-op/benign-default stub in one of the documented carve-out classes (HARDWARE-INIT / CRTC PAGE-FLIP `present_frame` / int8-TIMING `run_n_frames`·`rotate_timing_flags_and_wait`·`wait_keypress` / ENGINE STANDALONE LOADER `load_current_level_data` / NEVER-DECOMPILED `init_round_state` 0x31de / RENDER-CORE LEAVES / OUT-OF-SCOPE SOUND-L4·L6 + player handler-table targets + the P2 indirect-call backend / the `dos_abort` CRT thunk) — the same spirit as the self-modifying BGI-overlay blitters and the L5 timer ISR. Through Phases 2–8 most of the original deferral list was un-stubbed into real bodies; what remains is carve-out-only. |
+| `game_stubs.c` (58 carve-out fn symbols + `mode_script_tbl`) | **Genuine carve-outs (not reconstructions)** | Reworded DEFERRED → carve-out. Every remaining symbol is a faithful-signature no-op/benign-default stub in one of the documented carve-out classes (HARDWARE-INIT / CRTC PAGE-FLIP `present_frame` / int8-TIMING `run_n_frames`·`rotate_timing_flags_and_wait`·`wait_keypress` / ENGINE STANDALONE LOADER `load_current_level_data` / NEVER-DECOMPILED `init_round_state` 0x31de / RENDER-CORE LEAVES / OUT-OF-SCOPE SOUND-L4·L6 + player handler-table targets + the P2 indirect-call backend / the `dos_abort` CRT thunk) — the same spirit as the self-modifying graphics-overlay blitters and the L5 timer ISR. Through Phases 2–8 most of the original deferral list was un-stubbed into real bodies; what remains is carve-out-only. |
 | `FUN_*` link-symbol reconciliation | Naming (no code change) | The `FUN_*`-spelled symbols with **confirmed** Ghidra labels were cited inline to their canonical names (`9821`=`set_crtc_window`, `6183`=`sweep_active_entities`, `4802`=`move_step_teleport_exit`, `1e3d`=`game_mode_handler_idx30`, `7563`=`init_sound_tables`, `31de`=`init_round_state`). The link symbols themselves are kept `FUN_*`-spelled to mark "unported carve-out, link-only" and avoid churning the validated call sites; the canonical name is cited in-code (no guessed names — the live sound/player stub symbols whose labels are not confirmed stay `FUN_*` with no invented name). |
 
 **Phase-9 T4 deviations / honest carve-out boundary (in-code notes present):**
@@ -844,7 +844,7 @@ new structural gate that enforces it.
   `init_game_session_state` CRTC/audio/resource/IRQ hardware-init block, the CRTC page-flip
   `present_frame`, the int8 timing/wait leaves, the engine standalone loader, the
   never-decompiled `init_round_state` (Ghidra-labelled but decompilation fails), the
-  render-core BGI-overlay leaves, and the out-of-scope sound-L4/L6 + handler-table tails. These
+  render-core graphics-overlay leaves, and the out-of-scope sound-L4/L6 + handler-table tails. These
   are stated plainly as carve-outs (the blitter / L5-ISR / DAC precedents), not claimed as ports.
 - **The carve-out partition is gated, not asserted.** `tools/validate_integration.sh` proves
   the boundary mechanically rather than by trust (see the gate description below).
@@ -981,7 +981,7 @@ The host computed the real value (8); the mis-read capture stored 0. Fixed to 0x
 **One precise exclusion (NOT a tolerance) — the render-core animated-tile FX layer.** After
 closing the read-set above, the only residual divergence is the per-frame `tilemap_hash`,
 caused by a single FX cell (e.g. `0xc8` = active anim-slot cell `0x28` + `0xa0`) cycling its
-**displayed tile-graphic index** (+6/tick). That write is produced INSIDE the carved-out BGI
+**displayed tile-graphic index** (+6/tick). That write is produced INSIDE the carved-out graphics-overlay
 render core: `draw_anim_channels_a` → `render_player_view` (1000:93b8) → `gfx_set_mode_10` →
 the un-analyzed EGAVGA overlay handler (`1ab9:0db0`) — the documented render-leaf carve-out
 (`src/anim.c` FIDELITY note; `docs/rendering-pipeline.md`). No reconstructed (or original)
@@ -1100,7 +1100,7 @@ documented CORE render divergence:**
     code-embedded NOP view (`word00=0xc3fb` / `word0e=0x85b3 > 1`) — STRUCTURAL NOPs in
     the gameplay context, matching the engine (`present_model.md §5`).  The visible
     per-tick pixels come solely from the blit leaves.
-  - **Out-of-scope leaves** (`anim_render_leaf_80ac` B-side render leaf, the BGI text
+  - **Out-of-scope leaves** (`anim_render_leaf_80ac` B-side render leaf, the graphics-overlay text
     leaves) stay faithful NOPs (no clean decomp).
 
 - **`g_planes` aliases `host_framebuffer`.** Under the flag, `level.c`'s static level
@@ -1118,7 +1118,7 @@ documented CORE render divergence:**
 
 - **Flat-RAM save-under (setup_fullscreen_view).** The original engine's
   `setup_fullscreen_view` (1000:483c) copies VGA page-0 (`a000:0000`) into
-  `fullscreen_buf` via `render_player_view` + the BGI overlay mode-10 subhandler-0
+  `fullscreen_buf` via `render_player_view` + the graphics overlay mode-10 subhandler-0
   full-plane copy.  In the host flat-RAM model we additionally copy
   `host_framebuffer` page-0 (4 planes × 0x1F40 B each = 32000 B total) into a
   static `hv_saveunder_buf` allocated from the far heap.  The view-descriptor
@@ -1136,12 +1136,12 @@ documented CORE render divergence:**
   obj writes and the blit leaf read the same bytes.  The sprite-sheet buf seed
   (`+0x06/+0x08`) and flag byte (`+0x09`) are skipped: the frametable is seeded
   by `level_populate_dg` (level.c) from `g_bank_buf` (the correct frametable);
-  `screen_sprite_buf` is a BGI-overlay ptr unused by the planar pipeline.
+  `screen_sprite_buf` is a graphics-overlay ptr unused by the planar pipeline.
   `hud_icon_sprite_ptr` (obj at 0x7986) has no C declaration; skipped.
 
-- **BGI mode-11 call (init_fullscreen_view_desc) — full-page sync, parity-hardened
+- **graphics-overlay mode-11 call (init_fullscreen_view_desc) — full-page sync, parity-hardened
   source.** The engine ends `init_fullscreen_view_desc` with `gfx_set_mode_11_thunk`
-  (→ `gfx_set_mode_11` 1ab9:126e, dynamically-loaded BGI overlay code not
+  (→ `gfx_set_mode_11` 1ab9:126e, dynamically-loaded graphics overlay code not
   decompilable): a full-screen page copy `page[table[mode]] → page[table[flag]]` that
   leaves BOTH VGA pages holding the just-composed screen before the save-under + first
   present flip.  The view-descriptor field writes are 1:1; the host performs the copy
@@ -1211,7 +1211,7 @@ clearly separate from the documentary `src/` mirror:
 
 - `tools/composite_ctest.c` — models a **4-plane memory image** and the a000/a200
   double-buffer to validate the entity composite plane-exact. It is **not** how the
-  engine renders (no BGI overlay, no VGA ports, no real page-flip); it's a differential
+  engine renders (no graphics overlay, no VGA ports, no real page-flip); it's a differential
   oracle harness.
 - `tools/sprite_oracle.py` — boots the real binary under Unicorn to capture engine ground
   truth (FRM3/FRM4); pure instrumentation.
@@ -1246,7 +1246,7 @@ These deviations exist ONLY in the `BUMPYP.EXE` playable build (`wmake play`); t
   which runs *after* this screen; the on-screen result (mode/strings/layout/F2-EGA/F3-VGA) is
   identical.  (2) the host uses the shipped static adapter table rather than running the live
   hardware probe (`detect_video_adapter`, 202c:0000) that would overwrite it; EGA+VGA-present
-  is correct for the validated VGA path.  `DAT_203b_530e = 0x40` (a BGI flag with no host
+  is correct for the validated VGA path.  `DAT_203b_530e = 0x40` (a graphics-overlay flag with no host
   effect) is not reproduced.  Verified headless: BUMPYP.EXE sets mode 0x02 and parks at the
   BIOS INT 16h wait (CS:IP f000:cf4x) for the F2/F3 keypress.
   NOTE: the original's `sound_select_device` (1000:6de3) draws **no screen** (it is a silent
@@ -1268,7 +1268,7 @@ These deviations exist ONLY in the `BUMPYP.EXE` playable build (`wmake play`); t
 
 - **host title-path `restore_bg_view` shim** (screens.c, `BUMPY_PLAYABLE` only) — screens.c
   models the engine's `restore_bg_view` (1000:80bc) with its ENGINE-FAITHFUL 2-arg far-ptr
-  signature `restore_bg_view(view, seg)` and treats it as a *stubbed* BGI-overlay render leaf
+  signature `restore_bg_view(view, seg)` and treats it as a *stubbed* graphics-overlay render leaf
   (the title present is produced by the descriptor build + `present_frame(1)` that follow).
   But `gfx_overlay.c` reconstructs the SAME symbol with the EXPANDED host 3-arg form
   `restore_bg_view(planes, vga_src, view)` (used by entity.c/player.c/view_setup.c).  Under
@@ -1284,9 +1284,9 @@ These deviations exist ONLY in the `BUMPYP.EXE` playable build (`wmake play`); t
   default `BUMPY.EXE` build is unaffected (the `#ifndef BUMPY_PLAYABLE` extern branch is
   byte-stable; that build is byte-compared, never executed, so its latent ABI mismatch is inert).
 
-- **playable host: BGI overlay primitives** (`src/host/host_gfx.c`, `BUMPY_PLAYABLE` only) —
+- **playable host: graphics-overlay primitives** (`src/host/host_gfx.c`, `BUMPY_PLAYABLE` only) —
   the engine reaches its graphics primitives through main-segment thunks (`1000:7b4a`…) that
-  dispatch into the Borland **BGI graphics-driver overlay at segment `1ab9`**, which selects a
+  dispatch into the **graphics-driver overlay at segment `1ab9`**, which selects a
   per-`palette_mode` handler through runtime vector tables (`pm*2 + 0x4dda/0x5435/0x5441/…`).
   The overlay is a third-party library, **absent from the Ghidra decompilation corpus**, so its
   internals cannot be reconstructed 1:1.  Per the agreed decision (see
@@ -1304,7 +1304,7 @@ These deviations exist ONLY in the `BUMPYP.EXE` playable build (`wmake play`); t
     `show_title_background`/`show_title_and_init` and two highscore sites call `fun_7bca_flip(0)`
     immediately followed by `present_frame(1)`, so those sites now present twice (two vblank waits;
     same content, visually harmless).  The redundancy is a symptom of the host's `present_frame`
-    already merging the BGI putimage+flip; it is resolved once the putimage/present primitives land
+    already merging the graphics-overlay putimage+flip; it is resolved once the putimage/present primitives land
     and the present model is unified (priority-#1 plan, Tasks 2–5).
   - **viewport / rect fill** (`fun_7b4a_view_blit` = `gfx_set_viewport_thunk` `1000:7b4a` →
     `gfx_init_viewport` `1ab9:0179`): `host_gfx_set_viewport(view, seg)` (host_gfx.c) writes the
@@ -1455,12 +1455,12 @@ deterministic `bumpyp.conf`, boot script `tools/dosbox/scripts/bumpyp-boot.txt`)
 ```
 frame=70-350   level=1 mode=0   IP 0824:1ddf-1e71 (DGROUP 0x3fe4)   ← run_main_menu (FIRE picks Start)
 frame=385      level=1 mode=4   IP ba51:1218       ← game_mode flips 0→4: PER-TICK GAMEPLAY ENTERED
-frame=385-3500 level=1 mode=4                       ← game_tick() loop runs stably (dispatching to the BGI overlay)
+frame=385-3500 level=1 mode=4                       ← game_tick() loop runs stably (dispatching to the graphics overlay)
 ```
 
 `game_mode` transitions 0→4 at frame 385 and holds `mode=4` (active gameplay) for the rest of the
 run — the documented success criterion (reach the per-tick `game_tick()` region with `mode != 0`).
-The IP at `ba51:1218` is the dynamically-loaded BGI render overlay the per-tick draw path far-calls
+The IP at `ba51:1218` is the dynamically-loaded graphics render overlay the per-tick draw path far-calls
 into (with periodic `f000:caXX` BIOS dips), i.e. the engine's per-tick render/timer loop executing.
 
 NB on the runtime DGROUP segment: adding the wiring to `init_sprite_structs` grew the code image by
@@ -1548,7 +1548,7 @@ uploads the DAC correctly; the offline screenshot decoder (`tools/dosbox/shot_to
 mis-decoding it.
 
 **Root cause.** A mode-0x0D pixel value is not a direct DAC index: the VGA resolves it as
-`DAC[ AC[pixel] ]`, where `AC` is the 16 Attribute Controller palette registers.  The engine's BGI
+`DAC[ AC[pixel] ]`, where `AC` is the 16 Attribute Controller palette registers.  The engine's graphics-overlay
 init (reconstructed as `host_set_gfx_attribute_palette`, `host_video.c`, called once from
 `init_display_97f1` after the BIOS mode-set) programs `AC[v] = v` for `v<8` and `AC[v] = 0x10+(v-8)`
 for `v≥8`, and `vga_dac_upload_from_buffer` loads the image's 16-colour palette into DAC slots
@@ -1562,18 +1562,18 @@ the playable's dumped DAC holds it split across `0..7`/`0x10..0x17` exactly as e
 
 **Fix (tooling only).** `tools/dosbox/patches/05-bumpycap-shot-attr-palette.patch` appends the real
 `vga.attr.palette[0..15]` to the `BUMPYCAP_SHOT` dump, and `shot_to_png.py` now resolves
-`DAC[ AC[pixel] ]` using the dumped AC (falling back to the engine's standard BGI map for older
+`DAC[ AC[pixel] ]` using the dumped AC (falling back to the engine's standard graphics-overlay map for older
 dumps).  This is faithful for **both** the playable (VGA: AC dumped as `{0..7,0x10..0x17}`, logo
 renders gold) **and** the original in EGA mode, which programs an *image-specific* AC
 (e.g. `{0,0,0,0,0,0,0,2,0xa,4,6,6,0xc,0xe,0xf,0xf}`) that maps the gradient-sky indices to black —
 so the original EGA menu correctly decodes as a black background + red/white logo (its intended EGA
-look), where the old hard-coded BGI map would have rainbowed it.  No game code changed; `BUMPY.EXE`
+look), where the old hard-coded graphics-overlay map would have rainbowed it.  No game code changed; `BUMPY.EXE`
 and `BUMPYP.EXE` are untouched.
 
 **Remaining (documented, out of scope).** Booted in EGA mode (`F2`), the *playable* still uploads
 `TITRE.VEC`'s VGA palette (its `dispatch_by_palette_mode` host shim — the playable-only vsync/dispatch
 shim, distinct from the renamed engine dispatcher `wait_vretrace_dispatch` at 2036:0000 — always reads
-`+0x33`) and uses the fixed BGI AC, so it shows the VGA gold look rather than the original's EGA
+`+0x33`) and uses the fixed overlay AC, so it shows the VGA gold look rather than the original's EGA
 black/red.  The playable's default and validated path is VGA (`F3` → `palette_mode=2`), where it
 matches; the EGA-mode palette divergence is a non-default corner case left as-is.
 
@@ -1684,7 +1684,7 @@ STATUS: file I/O + read + buffer all VERIFIED working (the game opens SCORE/MASK
 the read lands in the aligned buffer).  vec_decode renders FULLSCREEN-RASTER .VEC (TITRE.VEC, the
 MONDE*.VEC level backgrounds — header 99 / palette @51 / planar @99).  The title-flow's first
 composed resources (SCORE.VEC, BUMPRESE.VEC) are STRUCTURED .VEC command streams (not rasters), so
-they still compose blank — they need the .VEC vector/op12 interpreter (the BGI-overlay command
+they still compose blank — they need the .VEC vector/op12 interpreter (the graphics-overlay command
 machinery), the larger remaining render piece.  Default BUMPY.EXE byte-identical (cac9ff23).
 
 ### Level resource loader — PAV/DEC/BUM stream into the op12 arena (level.c)
@@ -1714,7 +1714,7 @@ These two screens are reconstructed ENGINE functions (not host platform glue), s
 in `src/config_screens.c`, not `src/host/` — built only into the playable image.
 
 `gfx_driver_init` is a faithful 1:1 reconstruction of `gfx_driver_init` (1ab9:02ce), the
-BGI-overlay routine the original runs at boot to choose the display adapter / palette mode.
+graphics-overlay routine the original runs at boot to choose the display adapter / palette mode.
 The original does not cleanly decompile (inline `swi(0x10)`/`swi(0x21)`); the reconstruction
 mirrors its disassembly exactly: `int 10h AX=0002h` (text mode 0x02) → cursor (1,1) + DOS
 print "BUMPY (C) LORICIEL 1992$" → loop the 6-entry adapter table at DGROUP 0x548b
@@ -1769,16 +1769,16 @@ menu text).  Default BUMPY.EXE byte-identical (cac9ff23); all changes are host-o
    wipes that window; compose/present only touch `[0..0x3f40]`.  This SUPERSEDES the
    "allocated BEFORE host_fb_init" note in the resource-loader section above.
 
-3. **BGI palette: Attribute Controller + DAC upload (`host_video.c`, `screens.c`).**
+3. **graphics-overlay palette: Attribute Controller + DAC upload (`host_video.c`, `screens.c`).**
    The decoded image's palette was never sent to the DAC, so screens showed the BIOS
    mode-0x0D default ramp.  FIX: (a) `host_set_gfx_attribute_palette` (one-time, in
-   `init_display_97f1`) programs the AC palette to the BGI 16-colour mapping — pixel i →
+   `init_display_97f1`) programs the AC palette to the graphics-overlay 16-colour mapping — pixel i →
    DAC (i<8 ? i : 0x10+(i−8)) — matching the DAC targets (0..7, 0x10..0x17) of
    `host_gfx_upload_palette_to_dac` / `vga_dac_upload_from_buffer`; the BIOS default AC
    otherwise maps pixel 6→DAC 0x14 and 8..15→DAC 0x38..0x3f, which the image palette never
    loads.  (b) the menu/title DAC upload flows through `fun_7bca_flip` →
    `host_gfx_upload_palette_to_dac` (Task 1, staged by `fun_7b93_present_blank`).
-   RECONSTRUCTION FIDELITY: these are host BGI-init reconstructions (the original BGI
+   RECONSTRUCTION FIDELITY: these are host graphics-overlay init reconstructions (the original graphics-overlay
    mode/palette handler is not decompilable); the DAC write SEQUENCE stays the
    corpus-validated `host_gfx_upload_palette_to_dac` (slots 0..7, 0x10..0x17).
 
@@ -1820,7 +1820,7 @@ menu text).  Default BUMPY.EXE byte-identical (cac9ff23); all changes are host-o
    dump (all `(0,0,0)`).  The only host deviation now is inlining the byte-swap and sourcing
    `cur_level_ptr` from `g_dec_buf` instead of the engine's DGROUP archive (same bytes).
    **DAC-LAYOUT RECONCILIATION:** `load_palette`→`host_gfx_upload_palette_to_dac` writes the
-   level palette to DAC slots {0..7, 0x10..0x17} — the slots the active BGI AC mapping reads
+   level palette to DAC slots {0..7, 0x10..0x17} — the slots the active overlay AC mapping reads
    — so gameplay colours 8..15 (AC→DAC 0x10..0x17) are correct.  `render_level` now calls
    `apply_level_palette()` in the playable build (was `video_set_palette6(g_pav_buf+51)`), so the
    initial level frame and the world-map/iris that precede `game_loop`'s own `apply_level_palette`
@@ -1893,7 +1893,7 @@ lateral and downward moves were clean. The original game never trails in any dir
 confirmed), so this is a host deviation, not faithful behaviour.
 
 **Root cause:** the per-sprite erase (`erase_p1_view` → `restore_bg_view`) is a semantic
-reconstruction of the un-decompilable BGI overlay; the host models it as a 4×4-tile rect whose
+reconstruction of the un-decompilable graphics overlay; the host models it as a 4×4-tile rect whose
 origin is the descriptor's grid cell (`hr_su_rect`, host_render.c). The **faithful**
 `p1_update_grid_cell` (1000:1473) computes `grid_x = ((px-ox)>>4) - 1` (a −1 tile bias → the rect
 gets a 16px **left** margin) but `grid_y = (py-oy)>>3` with **no** bias → the rect top sits exactly
@@ -1909,7 +1909,7 @@ root cause below.
 
 ## Playable host — save-under rect read the SCROLL fields as its extent (the real trail root cause), 2026-07-01
 
-**Follow-up on the entry above.** The BGI overlay's real present/erase model was fully demystified
+**Follow-up on the entry above.** The graphics overlay's real present/erase model was fully demystified
 from the decomp (this closes the "primary UNCERTAIN" in `local/build/present_model.md`):
 
 - **Present** is a full back-buffer→display copy (a200→a000), NOT a CRTC page-flip. Confirmed by an
@@ -2135,7 +2135,7 @@ single-page composited save is a no-op).  **Zero new memory** (reuses `hv_saveun
 
 **Deviation classification.**  This is the same behavior-faithful deviation class as the existing
 player save-under and the single-image framebuffer model: the exact per-frame overlay byte
-sequence lives in the un-decompilable BGI overlay, so the host reproduces the *mechanism* (repaint
+sequence lives in the un-decompilable graphics overlay, so the host reproduces the *mechanism* (repaint
 the clean bg under the sprite) at the engine's real clean-bg source rather than transcribing the
 overlay.  The clean bg is captured bg-tiles-only (before the entity grid scan), matching the
 engine's `fullscreen_buf` at `setup_fullscreen_view` time.
@@ -2363,7 +2363,7 @@ Three follow-on corrections after the real-flip present landed:
   pixel-verified: every remnant in the user capture sat inside a predicted odd-cell
   strip; even cells were clean.
 
-## Playable host — pause-strip VGA copy + live BGI text (DDFNT2.CAR font), 2026-07-02 (round 4)
+## Playable host — pause-strip VGA copy + live graphics-overlay text (DDFNT2.CAR font), 2026-07-02 (round 4)
 
 Follow-ups closing the "pause strip / UI text" gaps left by the real-flip present:
 
@@ -2379,7 +2379,7 @@ Follow-ups closing the "pause strip / UI text" gaps left by the real-flip presen
   documentation; the descriptor-driven overlay copy leaf itself is not re-driven.
   The `set_active_display_page(0)`/`set_sprite_table_ptr(0)` … `(1)`/`(1)` UI bracket
   around `draw_number`+`draw_icon_row` was already 1:1 (verified against the decomp).
-- **BGI text leaves un-misnomered + implemented** (screens.c / host_render.c;
+- **graphics-overlay text leaves un-misnomered + implemented** (screens.c / host_render.c;
   engine 1000:9837 / 1000:9804): the recon had these as
   `text_clip_leaf_9837(clip_w, clip_h)` / `draw_string_glyphs_9804(x, y)` — WRONG
   semantics.  Overlay disasm: **9837 → 1ab9:1441 = SET TEXT POSITION** (stores x/y to
@@ -2400,7 +2400,7 @@ Follow-ups closing the "pause strip / UI text" gaps left by the real-flip presen
   file (`host_load_font`, host_resource.c) from the user's own game files.
 - **RECONSTRUCTION FIDELITY (glyph blit collapse + fg colour)**: the engine's pm=2
   handler expands each glyph into a 16×16-px 4-plane staging buffer (fg expansion at
-  DGROUP 0x68a6, bg at 0x68ae, both runtime-set through a BGI colour op) and blits it
+  DGROUP 0x68a6, bg at 0x68ae, both runtime-set through a graphics-overlay colour op) and blits it
   through the 1cec:2d15 codec.  The host collapses this into per-row
   `host_vga_rmw4` writes to the current draw page; the fg colour was not statically
   traceable (0x68a6/0x68ae are zero in the image; the colour-op entry 1ab9:14ef has

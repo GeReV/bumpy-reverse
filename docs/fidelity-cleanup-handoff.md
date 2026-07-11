@@ -142,7 +142,7 @@ These are correct/extracted already but can't land until P3 frees headroom (~2.2
 
 ### B. Faithful anim-channel save-under (issue B) — the in-level sprite trails / under-erase
 **What the binary does:** gameplay sprite-erase runs through `render_player_view`
-(1000:93b8) / `restore_bg_view` (1000:80bc) → the **self-modifying BGI overlay
+(1000:93b8) / `restore_bg_view` (1000:80bc) → the **self-modifying graphics overlay
 (1ab9:0db0) that does not decompile**. Behaviorally it's a per-sprite **save-under**:
 save the clean bg under each anim sprite before blit, restore next frame. Per-channel
 DGROUP buffers (from the asm / `anim.c` view setup):
@@ -179,7 +179,7 @@ blob+dedup-reloc pattern as C. Also memory-gated by P3.
 ## Justified deviations — DOCUMENT, do not "fix" to 1:1 (the rule's escape hatch)
 
 Already labelled; listed so the parallel effort doesn't mistake them for inventions:
-- Host save-under standing in for the un-decompilable BGI overlay (`host_render.c`).
+- Host save-under standing in for the un-decompilable graphics overlay (`host_render.c`).
 - 64 KB framebuffer / single a000-image model + `HOST_FB_16K` (vs engine a000/a200 + 256 KB).
 - The two planar blitters (`sprite_blit`, `bg_render`) as behavior-faithful semantic
   reconstructions of self-modifying overlay code.

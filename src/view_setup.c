@@ -52,7 +52,7 @@ extern u8 __far *p2_sprite;   /* player2.c DGROUP 0x9b9e/0x9ba0 */
  * ├──────────────────────────────────────────────────────────────────────────┤
  * │ 1. FLAT-RAM SAVE-UNDER (setup_fullscreen_view):                           │
  * │    The original engine's setup_fullscreen_view copies VGA page-0          │
- * │    (a000:0000) into fullscreen_buf via render_player_view + the BGI       │
+ * │    (a000:0000) into fullscreen_buf via render_player_view + the gfx       │
  * │    overlay's mode-10 subhandler-0 full-plane copy.  In the host flat-RAM  │
  * │    model we additionally copy host_framebuffer's page-0 region (4 planes  │
  * │    × GFX_PAGE_SIZE = 8000 B each) into hv_saveunder_buf.  The view-desc  │
@@ -72,13 +72,13 @@ extern u8 __far *p2_sprite;   /* player2.c DGROUP 0x9b9e/0x9ba0 */
  * │    the same bytes.  The sprite-sheet buf seed (+0x06/+0x08) and flag byte │
  * │    (+0x09) are SKIPPED: the frametable at +0x06/+0x08 is seeded by        │
  * │    level_populate_dg (level.c) from g_bank_buf (the correct frametable);  │
- * │    screen_sprite_buf is a BGI-overlay ptr unused by the planar pipeline.  │
+ * │    screen_sprite_buf is a gfx-overlay ptr unused by the planar pipeline.  │
  * │    hud_icon_sprite_ptr (obj at 0x7986) has no C declaration; skipped.     │
  * │    Recorded in docs/reconstruction-fidelity.md (Playable host / Task 7). │
  * │                                                                            │
- * │ 3. BGI MODE-11 CALL (init_fullscreen_view_desc):                           │
+ * │ 3. GFX-OVERLAY MODE-11 CALL (init_fullscreen_view_desc):                   │
  * │    The engine ends init_fullscreen_view_desc with gfx_set_mode_11_thunk    │
- * │    (→ gfx_set_mode_11 1ab9:126e, dynamically-loaded BGI overlay code).    │
+ * │    (→ gfx_set_mode_11 1ab9:126e, dynamically-loaded gfx overlay code).    │
  * │    In the host this call is replaced by present_frame(1) which copies the  │
  * │    composed RAM image to real VGA.  The view-desc build is 1:1.            │
  * │    Recorded in docs/reconstruction-fidelity.md (Playable host / Task 7). │
@@ -108,7 +108,7 @@ void redraw_level_background_tiles(void)
        runs — driven by setup_fullscreen_view at GAME-ENTRY (inside spawn_and_draw_level_
        entities, after the iris).  The recon renders the tiles via the semantic
        level_render_bg() (clear a000 + bg_render_grid) rather than the original's
-       self-modifying BGI tile-run chain (setup_sprite_descriptor/restore_bg_tile_run,
+       self-modifying graphics-overlay tile-run chain (setup_sprite_descriptor/restore_bg_tile_run,
        which do not decompile).  This is where the playable level bg is painted now —
        render_level (start_level) only BINDS the context (no early paint → no level flash
        before the overworld, and the bg survives for gameplay).  docs/reconstruction-fidelity.md. */
@@ -116,7 +116,7 @@ void redraw_level_background_tiles(void)
     level_render_bg();
 }
 
-/* BGI-overlay screen present thunks (stubs in screens.c).
+/* graphics-overlay screen present thunks (stubs in screens.c).
  * show_text_screen calls these after loading the fullscreen image.
  * In screens.c these are fun_7b93_present_blank / fun_7bca_flip. */
 extern void fun_7b93_present_blank(u16 buf_off, u16 buf_seg, u16 flag);  /* FUN_1000_7b93 */
@@ -264,7 +264,7 @@ void init_sprite_structs(void)
 /* ── init_fullscreen_view_desc — 1000:5181 ─────────────────────────────────────
  *
  * Set up the fullscreen view/blit descriptor at render_descriptor_ptr and call
- * the BGI present path (engine: gfx_set_mode_11_thunk; host: present_frame).
+ * the graphics-overlay present path (engine: gfx_set_mode_11_thunk; host: present_frame).
  *
  * Engine decomp (verbatim field writes into render_descriptor_ptr pointee):
  *   [+0x00] = sprite_id (mode arg)        [+0x06] = 0
@@ -274,7 +274,7 @@ void init_sprite_structs(void)
  *   [+0x20] = 0x19
  *   then: gfx_set_mode_11_thunk(off, seg)   (host: present_frame(1))
  *
- * RECONSTRUCTION FIDELITY: BGI MODE-11 CALL — see file header note §3.
+ * RECONSTRUCTION FIDELITY: GFX-OVERLAY MODE-11 CALL — see file header note §3.
  * ──────────────────────────────────────────────────────────────────────────── */
 void init_fullscreen_view_desc(u8 mode, u8 flag)
 {
@@ -447,7 +447,7 @@ const u8 __far *host_clean_bg(void)
  * Display a fullscreen image (resource 3) + render 9 sprite-glyph characters at
  * row 0x60, then idle 2 × 50 frames.
  *
- * Structural port of 1000:11eb.  Resource-load / BGI-overlay / DAC leaves are
+ * Structural port of 1000:11eb.  Resource-load / graphics-overlay / DAC leaves are
  * faithful stubs (screens.c); the p1_sprite glyph-blit path is live.
  * The engine fmemcpy's the far ptr at DGROUP 0x11ae into a stack-local text_buf
  * ptr and renders text_buf[0..8]; statically 0x11ae = {0x1327, DGROUP} — the
@@ -455,7 +455,7 @@ const u8 __far *host_clean_bg(void)
  * far-ptr pair (hv_text_ptr_11ae) the loop reads through, mirroring the engine's
  * indirection (nothing else writes 0x11ae in the corpus).
  *
- * RECONSTRUCTION FIDELITY: resource-load / BGI-overlay leaves stubbed (same
+ * RECONSTRUCTION FIDELITY: resource-load / graphics-overlay leaves stubbed (same
  * convention as screens.c screen fns).
  * ──────────────────────────────────────────────────────────────────────────── */
 
@@ -525,7 +525,7 @@ void show_text_screen(void)
  * restore_bg_view driven by the descriptor below, word00/word0e = 0 → page[table[0]])
  * is executed as a direct VGA 4-plane copy between page[table[0]] and hv_pause_strip
  * (the model of the engine's DGROUP 0x9694 save buffer) — the descriptor-driven
- * BGI-overlay copy leaves are not live on the real-VGA host; the descriptor field
+ * graphics-overlay copy leaves are not live on the real-VGA host; the descriptor field
  * writes are kept 1:1 as documentation.
  * ──────────────────────────────────────────────────────────────────────────── */
 

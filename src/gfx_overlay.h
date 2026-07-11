@@ -3,7 +3,7 @@
 
 #include "bumpy.h"
 
-/* Faithful C reconstructions of the two BGI-overlay dispatch functions used
+/* Faithful C reconstructions of the two graphics-overlay dispatch functions used
    by the entity draw pipeline:
 
    restore_bg_view   (1000:80bc) → gfx_set_mode_01 (1ab9:0d77)
