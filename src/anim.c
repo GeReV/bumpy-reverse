@@ -355,6 +355,16 @@ void anim_render_view_leaf(u8 __far *view);       /* render_player_view 1000:93b
 void anim_blit_sprite_leaf(u16 obj_off, u16 obj_seg); /* blit_sprite   1000:942a */
 void anim_render_leaf_80ac(u8 __far *view);       /* FUN_1000_80ac     1000:80ac */
 
+#ifdef BUMPY_PLAYABLE
+/* Faithful layer-B masked save-under (host_render.c, task B): erase each channel-B
+   sprite to its own footprint instead of the retired clean-bg repaint.  restore =
+   erase last frame; begin/end bracket the blit so entity_blit_object captures the
+   new footprint. */
+void host_animb_restore(u8 ch);
+void host_animb_begin_capture(u8 ch);
+void host_animb_end_capture(void);
+#endif
+
 /* The faithful default build defines these leaves as NOP stubs (the engine's
  * render leaves carry no work-buffer context here — see the note above).  Under
  * -dBUMPY_PLAYABLE the REAL bodies live in src/host/host_render.c, which routes the
@@ -525,9 +535,22 @@ void draw_anim_channels_b(void)
             posy = *(u16 __far *)(anim_posB_tbl + (u16)cell * 4 + 2);
             *(u16 __far *)(p1_sprite + 0) = *(u16 __far *)(anim_posB_tbl + (u16)cell * 4 + 0);
             *(u16 __far *)(p1_sprite + 2) = (u16)(posy + slot->data_off);
+#ifdef BUMPY_PLAYABLE
+            /* Faithful layer-B masked erase (task B): restore the footprint this page
+               last drew — erases the previous frame's sprite while leaving the
+               neighbouring static platform intact — before drawing the new frame.
+               Runs regardless of the hide flag so a hidden frame also erases cleanly. */
+            host_animb_restore((u8)channel_idx);
+#endif
             if ((slot->data_seg & 0x200) == 0) {
                 *(u16 __far *)(p1_sprite + 4) = (u16)(slot->data_seg + 0xf1);
+#ifdef BUMPY_PLAYABLE
+                host_animb_begin_capture((u8)channel_idx);   /* capture new footprint in the blit */
+#endif
                 anim_blit_sprite_leaf(0x792e, ANIM_DGROUP_RUNTIME_SEG);
+#ifdef BUMPY_PLAYABLE
+                host_animb_end_capture();
+#endif
             }
 
             /* ── DRAW view (0x8d0) save-under ─────────────────────────────────── */

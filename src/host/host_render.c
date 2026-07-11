@@ -465,6 +465,120 @@ static u8 s_p2_saveunder[4u * HR_SU_PLANE];
 static u8 s_p1_su_valid = 0u;   /* buffer holds a saved bg (skip the cold-start erase) */
 static u8 s_p2_su_valid = 0u;
 
+/* ── Layer-B anim masked save-under (faithful mode-00 reconstruction — task B) ────
+ * The engine erases each moving channel-B sprite via a MASKED shadow composite
+ * (draw_anim_channels_b: mode-00 blit_view_masked → shadows 0x9eba/0x9fba/0x8888,
+ * then mode-01 restore_bg_view).  That composite is the self-modifying Loriciel
+ * graphics overlay (NOT Borland BGI) that does not decompile.  The host previously
+ * substituted an UNMASKED clean-bg repaint over the fixed 1×4-tile anim_b_view1 rect
+ * (host adaptation 2026-07-05), which spilled into the neighbouring static layer-A
+ * platform above the B cell (world-2 "missing rows"); the F1 hr_in_spawn gate only
+ * suppressed it during the spawn scan.
+ *
+ * Behaviour-faithful reconstruction: capture the EXACT page rect the sprite's blit is
+ * about to overwrite — its real footprint (voff + cols×rows, stride) from
+ * sprite_blit_build_desc, inherently masked to the sprite — BEFORE the blit, and
+ * restore it the next time this page is drawn to erase the sprite.  Preserves the
+ * neighbouring platform (outside the sprite footprint) AND keeps a jumped platform's
+ * disappear intact (that is draw_anim_channels_a's fullscreen_buf erase, unchanged).
+ * Per-page (2) because the a000/a200 flip redraws each page every other tick.  Same
+ * mechanism as the P1/P2 save-under above, sized to the sprite rather than a fixed rect.
+ * DEVIATION: reproduces the net effect, not the exact masked-composite pixels (the
+ * mode-00 overlay is undecompilable).  docs/reconstruction-fidelity.md. */
+#define HR_ANIMB_CH    4u                       /* 4 channel-B slots               */
+#define HR_ANIMB_MAXW  5u                       /* max footprint bytes/row (40 px) */
+#define HR_ANIMB_MAXH  40u                      /* max footprint rows (5 tiles)    */
+#define HR_ANIMB_PLANE (HR_ANIMB_MAXW * HR_ANIMB_MAXH)   /* 200 bytes/plane        */
+/* SINGLE buffer per channel (matches the engine's one 0x7e3e shadow/ch): the bg-under
+   is page-independent (both a000/a200 pages hold identical bg + spawn statics via the
+   init_fullscreen_view_desc mode-11 copy), so the footprint origin is stored PAGE-
+   RELATIVE (voff & 0x1fff) and re-based onto the current draw page at restore. */
+static u8  s_animb_su[HR_ANIMB_CH][4u * HR_ANIMB_PLANE];
+static u16 s_animb_toff[HR_ANIMB_CH];           /* footprint origin, page-relative */
+static u8  s_animb_w[HR_ANIMB_CH];              /* footprint width  (bytes)        */
+static u8  s_animb_h[HR_ANIMB_CH];              /* footprint height (rows)         */
+static u8  s_animb_stride[HR_ANIMB_CH];         /* dst row stride (bytes)          */
+static u8  s_animb_valid[HR_ANIMB_CH];
+static s8  s_animb_cap_ch = -1;                 /* active capture channel, -1=off  */
+
+/* Called by draw_anim_channels_b BEFORE anim_blit_sprite_leaf: arm the footprint
+   capture for channel `ch`.  The blit path (entity_blit_object) then calls
+   host_animb_capture with the real footprint, which stores it here. */
+void host_animb_begin_capture(u8 ch)
+{
+    s_animb_cap_ch = (ch < HR_ANIMB_CH) ? (s8)ch : (s8)-1;
+}
+
+void host_animb_end_capture(void)
+{
+    s_animb_cap_ch = -1;
+}
+
+/* Called from entity_blit_object (BUMPY_PLAYABLE) with the sprite's exact page
+   footprint, just before sprite_blit_planar_vga writes it.  No-op unless a channel-B
+   capture is armed.  Saves the untouched bg-under (bg + any overlapping static) so the
+   next restore erases the sprite masked to its own footprint. */
+void host_animb_capture(u16 voff, u16 cols, u16 rows, u16 stride)
+{
+    u8  ch, r, c;
+    u16 toff, w, h;
+    if (s_animb_cap_ch < 0 || hr_in_spawn != 0u) {
+        /* Spawn draws each layer-B static ONCE via reused slot 0 at a different cell
+           each call — they must NOT enter the save-under (the next call's restore would
+           erase the previous static).  The save-under is gameplay-only. */
+        return;
+    }
+    ch   = (u8)s_animb_cap_ch;
+    toff = (u16)(voff & 0x1fffu);               /* page-relative origin            */
+    /* +1 byte covers the blit's sub-byte shift carry into the next column. */
+    w = (u16)(cols + 1u);
+    h = rows;
+    if (w > HR_ANIMB_MAXW) { w = HR_ANIMB_MAXW; }
+    if (h > HR_ANIMB_MAXH) { h = HR_ANIMB_MAXH; }
+    for (r = 0u; r < (u8)h; r++) {
+        for (c = 0u; c < (u8)w; c++) {
+            u16 off = (u16)(voff + (u16)r * stride + c);
+            u16 bi  = (u16)((u16)r * w + c);
+            host_vga_read4(off, &s_animb_su[ch][bi],
+                           &s_animb_su[ch][HR_ANIMB_PLANE + bi],
+                           &s_animb_su[ch][2u*HR_ANIMB_PLANE + bi],
+                           &s_animb_su[ch][3u*HR_ANIMB_PLANE + bi]);
+        }
+    }
+    s_animb_toff[ch]   = toff;
+    s_animb_w[ch]      = (u8)w;
+    s_animb_h[ch]      = (u8)h;
+    s_animb_stride[ch] = (u8)stride;
+    s_animb_valid[ch]  = 1u;
+}
+
+/* Called by draw_anim_channels_b BEFORE the blit (and before begin_capture): restore
+   channel `ch`'s saved footprint on the CURRENT draw page, erasing the sprite this
+   page last drew while leaving the neighbouring platform untouched. */
+void host_animb_restore(u8 ch)
+{
+    u8  r, c;
+    u16 base, w, h, stride;
+    if (ch >= HR_ANIMB_CH || s_animb_valid[ch] == 0u || hr_in_spawn != 0u) {
+        return;   /* gameplay-only (see host_animb_capture) */
+    }
+    base   = (u16)(host_draw_page_off() + s_animb_toff[ch]);  /* re-base to draw page */
+    w      = s_animb_w[ch];
+    h      = s_animb_h[ch];
+    stride = s_animb_stride[ch];
+    for (r = 0u; r < (u8)h; r++) {
+        for (c = 0u; c < (u8)w; c++) {
+            u16 off = (u16)(base + (u16)r * stride + c);
+            u16 bi  = (u16)((u16)r * w + c);
+            host_vga_put4(off, s_animb_su[ch][bi],
+                          s_animb_su[ch][HR_ANIMB_PLANE + bi],
+                          s_animb_su[ch][2u*HR_ANIMB_PLANE + bi],
+                          s_animb_su[ch][3u*HR_ANIMB_PLANE + bi]);
+        }
+    }
+    host_vga_blit_end();
+}
+
 static u16 hr_vw(const u8 __far *v, u16 off)       /* LE u16 from far descriptor */
 {
     return (u16)((u16)v[off] | ((u16)v[off + 1u] << 8));
@@ -591,9 +705,13 @@ void anim_restore_bg_view_leaf(u8 __far *view)
        (layer-B gap: see header). */
     {
         extern u8 __far *pending_erase_view;   /* player.c 0x8e4 */
-        extern u8 __far *anim_b_view1;         /* anim.c 0x8cc — layer-B restore view */
-        if (view != anim_a_erase_view && view != pending_erase_view &&
-            view != anim_b_view1) {
+        /* anim_b_view1 (layer-B) is NO LONGER erased here: the faithful masked
+           save-under (host_animb_* — see this file's header + draw_anim_channels_b)
+           now erases channel-B sprites to their own footprint, so the old unmasked
+           clean-bg repaint (which spilled into the neighbouring layer-A platform) is
+           retired.  Only the layer-A (anim_a_erase_view, the platform-DISAPPEAR erase)
+           and the deferred item erase (pending_erase_view) remain clean-bg. */
+        if (view != anim_a_erase_view && view != pending_erase_view) {
             return;
         }
     }

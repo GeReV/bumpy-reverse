@@ -5,6 +5,13 @@
 #include "sprite_chain.h"
 #include "sprite_blit.h"
 
+#ifdef BUMPY_PLAYABLE
+/* host_render.c — faithful layer-B masked save-under: capture the sprite's exact
+   page footprint just before it is blitted (no-op unless draw_anim_channels_b has
+   armed a channel-B capture).  See host_render.c host_animb_* + task B. */
+void host_animb_capture(u16 voff, u16 cols, u16 rows, u16 stride);
+#endif
+
 /* See entity.h.  Field offsets / arithmetic mirror the Ghidra decomp of the
    layer-C section inlined in spawn_and_draw_level_entities (1000:2a78, lines
    829-838 of the decomp body) and draw_p1_sprite (1000:1cb2) /
@@ -359,6 +366,12 @@ static void entity_blit_object(u8 __huge *planes, u8 *obj,
         u32 src_lin = (u32)((u16)desc[2] | ((u16)desc[3] << 8)) * 16u
                     + (u32)((u16)desc[0] | ((u16)desc[1] << 8));
         const u8 __far *src = (const u8 __far *)(bank + (src_lin - bank_base_lin));
+#ifdef BUMPY_PLAYABLE
+        /* Faithful layer-B masked erase (task B): save the untouched footprint bg-under
+           before the sprite overwrites it.  No-op for P1/P2/layer-C/-A blits (only
+           draw_anim_channels_b arms a capture). */
+        host_animb_capture(voff, cols, rows, dst_stride);
+#endif
         sprite_blit_planar_vga(planes, src, voff, dst_stride, full_w,
                                cols, rows, shift, clip_flags);
     }
