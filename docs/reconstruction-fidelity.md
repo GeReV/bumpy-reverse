@@ -129,7 +129,7 @@ As of Phase-3 Task 4 (validate gate re-confirmed Phase-3 Task 5), the item/scori
 | Module / function set | Fidelity | Notes |
 |---|---|---|
 | **Move-state machine** (T3): `p2_set_move_state` (4bc6), `p2_step_scripted_move` (4c14), `p2_update_grid_cell` (4b4e), `p2_tile_move_check` (4c99), `p2_set_pixel_from_cell` (48a9), `p2_advance_grid_history` (13b2) | Transcription | Ported 1:1 from the live Ghidra decomp. P2 move-state machine mirrors P1's (player.c) in structure but operates on P2-specific globals (`p2_pixel_x` 0x79ba, `p2_pixel_y` 0x79bc, `p2_move_anim` 0x8560, `p2_cell` 0x8571). |
-| **AI decision layer** (T4): `p2_ai_dispatch_move` (4f4e), `p2_ai_select_move_a` (4f04), `p2_ai_select_move_b` (4f89), `p2_ai_select_move_random` (4fd3), `p2_choose_move_state1`, `p2_choose_move_state2`, `p2_pick_move_priority_a/b/c`, `p2_run_move_state_handler` (5003), `p2_cell_move_up/down/left/right` | Transcription | Ported 1:1 from the decomp. **AI determinism validated genuinely**: the rng-driven decisions in `p2_ai_select_move_random` call `rand()` (the reconstructed prng in `src/prng.c`) AND read `rng_frame`; the validate_p2 harness seeds the reconstructed prng state so `rand()` returns the same sequence as the engine — the determinism is real, not faked. `select_move_b` threshold logic and `select_move_random` modulo are reproduced 1:1 from the decomp. **Coverage note**: 3 of 4 cell-move handlers are direction-seeded; the 0x85c handler table is runtime data (populated at boot, not decompilable as a static literal), so only `state-2 → cell_move_down` is end-to-end capture-validated; `cell_move_up/left/right` are transcribed from the decomp and pass the per-fn differential but are not independently capture-validated. |
+| **AI decision layer** (T4): `p2_ai_dispatch_move` (4f4e), `p2_ai_select_move_a` (4f04), `p2_ai_select_move_b` (4f89), `p2_ai_select_move_random` (4fd3), `p2_choose_move_state1`, `p2_choose_move_state2`, `p2_pick_move_priority_a/b/c`, `p2_run_move_state_handler` (5003), `p2_cell_move_up/down/left/right` | Transcription | Ported 1:1 from the decomp. **AI determinism validated genuinely**: the rng-driven decisions in `p2_ai_select_move_random` call `rand()` (the reconstructed prng in `src/prng.c`) AND read `rng_frame`; the validate_p2 harness seeds the reconstructed prng state so `rand()` returns the same sequence as the engine — the determinism is real, not faked. `select_move_b` threshold logic and `select_move_random` modulo are reproduced 1:1 from the decomp. **Coverage note**: 3 of 4 cell-move handlers are direction-seeded; only `state-2 → cell_move_down` is end-to-end capture-validated; `cell_move_up/left/right` are transcribed from the decomp and pass the per-fn differential but are not independently capture-validated. *(2026-07-03 correction: the 0x85c table was here assumed runtime-populated; it is in fact STATIC DGROUP image data — see "GROUNDED+FIXED (P2 move-state dispatch)" below.)* |
 | **Render / view + pvp** (T5): `draw_p2_sprite` (1cea), `render_p2_view` (1c41), `erase_p2_view` (19a1), `update_p2_bbox` (50c0), `check_pvp_collision` (50fb) | Mixed (transcription + faithful-signature stubs) | Ported 1:1 from the decomp. P2 draw validated at the **descriptor level** (the `draw_p2_sprite` descriptor fields: `p2_pixel_x`, `p2_pixel_y`, `p2_move_anim` match the capture; the underlying blitter is already plane-exact 24/24 from Phase 0). The blit/view leaf calls are **faithful-signature stubs**: `blit_sprite` is inlined in `entity.c` and not separately callable; `render_player_view` / `restore_bg_view` carry the 3-arg work-buffer signature matching the engine prototype but their sub-handlers 3–6 are stubbed (the Phase-0 `bgi_overlay.c` core is untouched). The frame-word in the draw descriptor is partially self-referential: `p2_frame_base` (0xa0de) was back-derived from the descriptor capture rather than read directly from the SNAP, so the x/y fields are full gates but the frame-word gate has limited independence. `check_pvp_collision` is validated: overlap/disjoint flag values match the capture (3/3 PvP records). |
 
 **Phase-4 deviations (all in-code RECONSTRUCTION FIDELITY notes present):**
@@ -138,7 +138,7 @@ As of Phase-3 Task 4 (validate gate re-confirmed Phase-3 Task 5), the item/scori
 - `render_player_view` / `restore_bg_view` (3-arg work-buffer) — faithful-signature, but sub-handlers 3–6 are STUBBED and UNVALIDATED (Phase-0 `bgi_overlay.c` state; see that entry).
 - `apply_cell_animation` (69aa, anim-channel allocator) — extern stub throughout → Phase 5.
 - `play_sound` / `play_state_sound` (6e11/647e) — extern stubs → Phase 6.
-- 0x85c cell-move handler table — runtime data; only `state-2 → cell_move_down` is end-to-end capture-validated; remaining handlers (`cell_move_up/left/right`) are transcription-only.
+- 0x85c cell-move handler table — only `state-2 → cell_move_down` is end-to-end capture-validated; remaining handlers (`cell_move_up/left/right`) are transcription-only. *(2026-07-03: table grounded as STATIC image data — see "GROUNDED+FIXED (P2 move-state dispatch)".)*
 - `p2_frame_base` (0xa0de) back-derived from descriptor capture for the frame-word gate; x/y fields are independently gated.
 
 **Phase-4 validation method:** per-function semantic-state differential (seed entry snapshot + captured script/tilemap → call the reconstructed C fn → assert output fields vs the engine's exit snapshot) across 14 scenarios (P2 trajectory, move-state, AI rng-decision, AI selection branches, move-step, handler dispatch, PvP overlap/disjoint, P2 draw descriptor). 74 records; PASS=74, FAIL=0, UNPORTED=0, DESC_CHECKED=1.
@@ -1139,11 +1139,29 @@ documented CORE render divergence:**
   `screen_sprite_buf` is a BGI-overlay ptr unused by the planar pipeline.
   `hud_icon_sprite_ptr` (obj at 0x7986) has no C declaration; skipped.
 
-- **BGI mode-11 call (init_fullscreen_view_desc).** The engine ends
-  `init_fullscreen_view_desc` with `bgi_set_mode_11_thunk` (→ `bgi_set_mode_11`
-  1ab9:126e, dynamically-loaded BGI overlay code not decompilable).  In the host
-  this call is replaced by `present_frame(1)` which copies the composed RAM image
-  to real VGA.  The view-descriptor build is 1:1.
+- **BGI mode-11 call (init_fullscreen_view_desc) — full-page sync, parity-hardened
+  source.** The engine ends `init_fullscreen_view_desc` with `bgi_set_mode_11_thunk`
+  (→ `bgi_set_mode_11` 1ab9:126e, dynamically-loaded BGI overlay code not
+  decompilable): a full-screen page copy `page[table[mode]] → page[table[flag]]` that
+  leaves BOTH VGA pages holding the just-composed screen before the save-under + first
+  present flip.  The view-descriptor field writes are 1:1; the host performs the copy
+  as a real VGA write-mode-1 latch copy.  **DEVIATION (parity-hardening):** the host
+  sources the copy from the LIVE draw page (`host_draw_page_off()`) and targets its
+  complement (`src ^ 0x2000`), NOT from `host_page_off_of(mode)`/`(flag)`.  The host's
+  draw-page index (`hr_cur_page_idx`, set by `fun_9410_set_sprite_table`) is not kept
+  in lockstep with the engine's descriptor page convention: at the `(1,0)` game-entry
+  (`game.c`) and overworld-entry (`screens.c level_intro_screen`) callers the screen is
+  composed on slot 0, but `mode=1` resolves to slot 1 — the non-composed page — so a
+  literal `host_page_off_of(mode)` sourced the WRONG page.  With the iris wipe a NOP
+  that page held a near-identical previous bg (mis-source invisible); once the
+  reconstructed GEOMETRIC iris (`host_bgi_set_viewport`) paints real BLACK there, the
+  sync propagated BLACK over the freshly-composed page → **overworld walk "freezes on
+  the frame-before-last" + in-level sprite flicker**.  Sourcing the draw page is
+  correct-by-construction (all three callers compose to it first) and is byte-identical
+  to the engine's intent for the menu `(0,1)` sync where host parity already matches.
+  This regression recurred several times because it was masked by the world-2
+  background bug (PAV read truncation, fixed 2026-07-07) and a headless input-injection
+  "phantom freeze"; the in-code comment forbids reverting to `host_page_off_of(mode)`.
 
 - **redraw_level_background_tiles carve-out.** `setup_fullscreen_view` calls
   `redraw_level_background_tiles` (1000:2a0a) 1:1 before the save-under copy.
@@ -1171,14 +1189,20 @@ documented CORE render divergence:**
   `level.c start_level` bypasses the resource table and builds filenames directly
   (see level.c RECONSTRUCTION FIDELITY note #3).
 
-- **`load_current_level_data` — calls `start_level()` (over-does engine 32b0).**
-  Engine body (1000:32b0): lightweight 0x96-byte header copy from the in-memory
-  level archive (`cur_level_ptr` / `level_src_ptr`) into the tilemap buffer.
-  In the playable host the in-memory archive is never populated; host calls
-  `start_level(current_level, current_level)` which performs a full file-load
-  + bank reload + render pass.  Functionally equivalent for Tier 1 round resets
-  (same data, redundant render), but NOT a 0x96-byte lightweight copy.
-  Runtime proof (round-reset loads correct level state) deferred to Tasks 9/11.
+- **`load_current_level_data` — now 1:1 with engine 32b0 (deviation REMOVED 2026-07-02).**
+  Engine body (1000:32b0): pointer setup + 0x96-byte header copy from the in-memory
+  level archive (`cur_level_ptr` / `level_src_ptr`) into the tilemap buffer — which is
+  exactly what the reconstruction does now.  The former per-round
+  `start_level(current_level, current_level)` full re-decode was removed: its
+  "overworld clobbers the shared level buffers" justification was traced and refuted
+  (`g_pav/g_dec/g_bum` are private once-allocated buffers; the overworld's `vec_decode`
+  shares only the `g_op12_arena` scratch, read after the level copy-out), and the
+  re-decode both stalled every respawn (3 op12 decodes + ~87 KB bank reload) and
+  re-cleared the move-descriptor flags — wiping collected-entry progress on each death,
+  which the engine's per-round 32b0 never does.  The per-round bg repaint the old call
+  provided comes from the very next call in `reset_game_state`
+  (`spawn_and_draw_level_entities` → `setup_fullscreen_view` →
+  `redraw_level_background_tiles`).
 
 ## Host/validation tooling (not part of the decompilation)
 
@@ -1282,22 +1306,100 @@ These deviations exist ONLY in the `BUMPYP.EXE` playable build (`wmake play`); t
     same content, visually harmless).  The redundancy is a symptom of the host's `present_frame`
     already merging the BGI putimage+flip; it is resolved once the putimage/present primitives land
     and the present model is unified (priority-#1 plan, Tasks 2–5).
-  - **clip/viewport** (`fun_7b4a_view_blit` = `bgi_set_viewport_thunk` `1000:7b4a` →
-    `bgi_init_viewport` `1ab9:0179`): `host_bgi_set_viewport(view, seg)` (host_bgi.c) mirrors the
-    original 1:1 for the VGA path: writes CONSTANT clip extents `view[+0x18]=0x14`,
-    `view[+0x1a]=0x19`; sets `bgi_write_mode_flag_a=2` (DGROUP 0x541f), `bgi_write_mode_flag_b=1`
-    (0x5420); then returns with NO pixel blit (VGA dispatch slot `0x4dda[2]=0x0000` is null).
-    **VGA iris degeneration (critical, documented in findings §2 and `faithfulness-gap-audit.md §1`):**
-    `bgi_init_viewport` ignores the iris loop's per-step rect (`+0x14/+0x16/+0x1e/+0x20`) — it
-    always writes the CONSTANTS 0x14/0x19 to `+0x18/+0x1a`; the compose path reads clip from
-    `+0x0a/+0x0c` (different fields), so no geometric clip shrink occurs on VGA.  The visible VGA
-    iris = the vsync-timed hold (4x `wait_vretrace_thunk`/step, 10 steps, Task-2 pacing) + the
-    final blank-palette upload (`fun_7b93` zeroed-tiles → `fun_7bca` DAC zeroed → screen black).
-    This is a **TIMED-HOLD → BLANK-TO-BLACK**, not a shrinking rectangle (the geometric iris is an
-    EGA/CGA effect for non-null blit handler modes 0/1; on VGA mode 2 it degenerates).  The host
-    faithfully reconstructs this degeneration — no geometric wipe is invented.  The two
+  - **viewport / rect fill** (`fun_7b4a_view_blit` = `bgi_set_viewport_thunk` `1000:7b4a` →
+    `bgi_init_viewport` `1ab9:0179`): `host_bgi_set_viewport(view, seg)` (host_bgi.c) writes the
+    CONSTANT clip extents `view[+0x18]=0x14`, `view[+0x1a]=0x19`; sets `bgi_write_mode_flag_a=2`
+    (DGROUP 0x541f), `bgi_write_mode_flag_b=1` (0x5420); then dispatches `[palette_mode*2 + 0x4dda]`.
+    **CORRECTION (2026-07-05) — this slot is a RECT FILL, not a null no-op.**  The prior text here
+    (and `faithfulness-gap-audit.md §1`, and findings §2) called the EGA/VGA slot `0x4dda[1]/[2]==0`
+    a "null → no pixel blit" and concluded the iris "degenerates" to a timed-hold + palette-blank.
+    That was a **disassembly error**: `CALL word ptr [BX+0x4dda]` with the entry value 0 does NOT
+    no-op — it calls the near address 0, i.e. `1ab9:0000`, a **real secondary dispatcher**.  Fully
+    disassembled (2026-07-05, all in the non-decompiling overlay seg `1ab9`):
+    `1ab9:0000` runs GC/SEQ setup (`0x64d`) + geometry setup (`0x427`) from the descriptor, reads
+    the sub-mode `view[+0x1c]`, and dispatches table `0x4dcc[view+0x1c]`; `0x4dcc[0]=1ab9:002b` is a
+    **solid rectangle fill** across all 4 planes (per-plane SEQ map-mask + `rep stosw`), fill value
+    from `view[+0x22..+0x25]`.  Geometry (`1ab9:0427`, with `flag_a==2` → dest-only): dest byte-x
+    `= view[+0x14]*2`, dest row `= view[+0x16]*8`, width bytes `= view[+0x1e]*2`, height rows
+    `= view[+0x20]*8`, stride 40, offset `= row*40 + byte-x + draw-page`.  This one primitive is
+    THREE previously-open gaps at once:
+    - the **geometric IRIS** (`play_iris_wipe_transition` drives shrinking black-rect outline rings
+      via `+0x14/+0x16/+0x1e/+0x20` per step — the real "closing square", superseding the earlier
+      timed-hold+palette-blank approximation; **Task 24**),
+    - the **name-entry cursor ERASE** (`draw_name_entry_cursor` fills the 1×2-tile cursor cell black
+      **before** re-blitting the glyph → no letter trail on cycling; capture-confirmed 2026-07-05,
+      the reported password-screen letter trails are gone),
+    - the **code/password-screen CLEAR** (`show_menu_select_screen` composes no bg; the iris fill
+      tiles the whole 20×25 view black — see the code-screen note below).
+    RECONSTRUCTION FIDELITY: only sub-mode 0 (rect fill) with a black fill colour is reconstructed —
+    the only path the playable callers (iris + name entry) exercise; other `view[+0x1c]` sub-handlers
+    and non-black fills are unreached and left as an early return.  The self-modifying per-plane inner
+    loop is replaced by an equivalent all-planes zero fill (Map-Mask=0x0F, write 0).  The two
     `bgi_write_mode_flag` globals (DGROUP 0x541f/0x5420) are declared in `host_bgi.c` (playable
-    only; not needed in the default build whose NOP stub never reaches them).
+    only; not needed in the default build whose NOP stub never reaches them).  The fill targets
+    the **draw page** (`host_draw_page_off()`), matching the engine geometry (`1ab9:0427`,
+    `offset = … + draw-page`).  KNOWN OPEN ISSUE (2026-07-07): the overworld-entry iris
+    (`level_intro_screen`) runs at `idx=1` (the hidden gameplay slot) with no `fun_9410` to
+    realign to the displayed slot 0 — unlike every OTHER iris (menu/password bracket their iris
+    with `fun_9410(0)`).  Because `host_fb_init` resets the page table per level while the CRTC is
+    never re-anchored (`init_crtc_window` is a no-CRTC clip store), the draw/display alignment at
+    that iris is parity-dependent, so the wipe is visible after some menu paths and hidden after
+    others (e.g. after entering a password, whose extra `run_main_menu` present loop flips the
+    parity).  A first attempt to fill the live-CRTC display page instead made the wipe visible but
+    re-broke the mode-11 view-sync freeze fix (the two are coupled through the page the iris
+    paints) and was REVERTED.  Proper fix pending: re-anchor the CRTC display when `host_fb_init`
+    resets the table + bracket the overworld iris to slot 0 like the others.
+
+- **playable host: code-screen (menu-select / "ENTER YOUR PASSWORD") background clear**
+  (`show_menu_select_screen`, `src/screens.c`, `BUMPY_PLAYABLE` only) — unlike
+  `show_highscore_screen` (which composes a fullscreen background via `restore_bg_view`),
+  `show_menu_select_screen` (1000:0f7a) composes **no** background: it loads only resource
+  (3,4)'s 99-byte palette header, stages that palette, and draws the "ENTER YOUR PASSWORD"
+  title + the code-entry field as sprite glyphs onto a screen that must already be **black**.
+  **RESOLVED 2026-07-05 by the reconstructed geometric iris (the rect-fill note above), not by an
+  invented clear.**  An earlier reconstruction inserted a host `host_vga_clear_display()` here on
+  the mistaken premise that the iris was a palette-only blank and `fun_7b4a` a null no-op, so the
+  code screen was drawing on top of the still-visible main menu (capture-confirmed: title graphic +
+  PLAY/HIGH-SCORE/LEVEL bleeding through, nonzero VGA bytes 36921).  Once `fun_7b4a`/`1ab9:0000`
+  was correctly identified as a **solid black rect fill**, `play_iris_wipe_transition()`'s shrinking
+  outline rings were shown to tile the whole 20×25 view to black on their own — so the invented
+  `host_vga_clear_display()` call was **removed** and the screen is cleared by the engine's own iris
+  (capture-confirmed 2026-07-05: iris-alone gives a clean-black code screen, nonzero VGA bytes 1799).
+  The default `BUMPY.EXE` build is unaffected (`fun_7b4a` stays a faithful-signature NOP stub there).
+  The related iris `play_iris_wipe_transition` `blank_tiles` staging also had a bug — it passed
+  DGROUP as the segment for the SS-local blank palette buffer (original passes `unaff_SS`); fixed to
+  `FP_OFF/FP_SEG(blank_tiles)` so the iris fade stages the real all-black palette.
+
+- **playable host: menu-select text-row buffers** (`show_menu_select_screen`, `src/screens.c`,
+  `BUMPY_PLAYABLE` only) — the engine `fmemcpy`s three loader-relocated far pointers (DGROUP
+  0x11a2/0x11a6/0x11aa) to the DGROUP strings `"ENTER YOUR PASSWORD"` (0x12f5), `" PASSWORD OK  "`
+  (0x1309, password-match path) and `"PASSWORD ERROR"` (0x1318, no-match path), then draws each
+  char as a sprite glyph (frame = char + 0x175).  The reconstruction keeps the three row buffers
+  (`menu_select_row1[0x13]`, `menu_select_row3a/b[0x0e]`) as module globals but originally left
+  them **zero-filled**, so row 1 drew 19× the char-0 glyph (an orb) instead of the title (masked by
+  the menu bleed until the background-clear fix above exposed it).  Fix: fill the buffers from the
+  same DGROUP string literals at `show_menu_select_screen` entry (the relocated far pointers can't
+  be statically embedded — same rationale as `init_highscore_default_table`).
+
+- **playable host: process_sprites** (`process_sprites` in `src/screens.c`; `prepare_sprite_frames`
+  + `sprite_proc_dispatch` in `src/sprite_anim.c`) — `process_sprites` (1000:93d8) is the
+  **load-time** sprite-bank frame processor: a wrapper over `sprite_proc_dispatch` (1cec:2ced),
+  which indirect-calls the per-`palette_mode` handler from `CS:[0x2d09 + palette_mode*2]`; for the
+  VGA path (mode 2) that handler is `prepare_sprite_frames` (1cec:2ded), which walks a
+  NULL-terminated list of sprite-object far pointers and, per object, selects the current animation
+  frame (`frame_table[frame_idx]`), copies the 12-byte frame header, and (for `ctrl&0x40` frames)
+  expands the packed pixels into the DGROUP decode scratch.  It is called only at load
+  (`init_title_graphics`, `load_graphics_resources`) — **not** per tick.  **Reconstruction:** the
+  faithful far-pointer body (`prepare_sprite_frames` + `sprite_proc_dispatch`, transcribed 1:1 incl.
+  the null-frame fall-through and the DGROUP scratch/`pixel_bitrev_lut` at 0x56ee/0x66f0, reusing the
+  earlier `sprite_expand_frame`) is built into the **byte-compared default `BUMPY.EXE`** (which is
+  never executed).  The **playable host keeps `process_sprites` a NOP** (`#ifdef BUMPY_PLAYABLE`):
+  its blit path resolves each frame per-blit via `sprite_prepare_frame` (the host flat-bank model)
+  against the halloc'd bank, and `host_resource.c` drains the engine's sprite-bank reads instead of
+  building the engine's in-place object list at DGROUP 0xa0c6 — so there is no engine obj list to
+  process.  This closes task #18's `process_sprites` item (documents the real load-time frame prep)
+  without affecting the validated per-tick host render path; `sprite_prepare_frame`'s descriptor-
+  exact `tools/anim_ctest.c` coverage is unchanged (45/0 PASS).
 
 The Task-9 OPEN blocker (`retf` at `0824:5E38` popping a corrupted frame in the title/present
 path) was root-caused to the **`restore_bg_view` signature schism** above and FIXED (the host
@@ -1585,6 +1687,27 @@ composed resources (SCORE.VEC, BUMPRESE.VEC) are STRUCTURED .VEC command streams
 they still compose blank — they need the .VEC vector/op12 interpreter (the BGI-overlay command
 machinery), the larger remaining render piece.  Default BUMPY.EXE byte-identical (cac9ff23).
 
+### Level resource loader — PAV/DEC/BUM stream into the op12 arena (level.c)
+
+`level_decode_file` loads and op4+op12-decodes a level's `.PAV`/`.DEC`/`.BUM` resource.  The engine
+(`open_resource` + `read_chunked` into the decode arena) reads the whole file straight into the
+shared `g_op12_arena` and decodes in place; the reconstruction now does the same — `dosio_read(fd,
+g_op12_arena, OP12_ARENA_SIZE)` (0x8000, which covers the 25475-byte largest resource, D9.PAV),
+then `op12_vec_run` in place.
+
+CORRECTED DEVIATION (2026-07-07): an earlier reconstruction staged the raw bytes through a fixed
+`g_filebuf[LEVEL_PAV_FILE_MAX]` and then copied them into the arena, with `LEVEL_PAV_FILE_MAX =
+0x3c00 = 15360` sized for D1.PAV (15071 B) ONLY.  `dosio_read` capped the read at 15360, so every
+larger resource — D2.PAV 19937, D3 16196, D4 20631, D5 24072, D6 19132, D7 16526, D9 25475 — was
+silently **truncated**; op12 then decoded a short input and produced an atlas that was byte-correct
+up to ~0x4DFF then went zero, dropping the tail of planes 2/3.  In-game this rendered world-2+
+black background silhouettes (idx15, all 4 planes) as **orange (idx3)** / brown (idx7) — the
+"orange ostriches".  World 1 (D1 < 15360) was unaffected, which masked the bug.  Verified fixed:
+runtime `g_pav_buf` atlas is now byte-identical to the offline decode across all 4 planes (diff=0),
+and the rendered ostrich level's idx3 count drops 2685 → 132 (residual = legitimate foreground
+sprite pixels) with idx15 restored 7721 → 12141.  `g_filebuf` and the unused `LEVEL_PAV_FILE_MAX`
+were removed.  Both builds link clean; validate_integration PASS, validate_bg 119/119 byte-exact.
+
 ### VERIFIED (boot graphics/sound select screens — config_screens.c)
 
 These two screens are reconstructed ENGINE functions (not host platform glue), so they live
@@ -1712,3 +1835,662 @@ key/state or a sprite-blit side effect, not the interpreter.  The title PRESENTA
 speckled because the sprite overlay is stubbed.  Gameplay/level rendering needs a SECOND 256 KB
 plane buffer (`level.c` `g_planes`) that cannot coexist with `host_framebuffer` in 640 KB — a
 separate memory problem.  The clean TITRE menu raster itself is confirmed rendering correctly.
+
+## Playable host — screen sprites (menu cursor / world-map Bumpy / glyphs), 2026-06-28
+
+All `#ifdef BUMPY_PLAYABLE`; the default (byte-compared) build is unchanged.
+
+| Item | Type | Notes |
+|------|------|-------|
+| `sprite.c` `sprite_bank_load_transform` table relocation | **Transcription (was MISSING)** | Adds the engine's `sprite_bank_relocate_frames` (`1cec:0c34`) step the host had omitted: rewrite each BE32 frame-offset table entry IN PLACE as the normalized far ptr (`ES:0x800+off`). Without it the 512-entry table stays big-endian and `sprite_prepare_frame` reads garbage frame pointers → no entity sprite renders. The `BSPRITE`/`validate_sprites` harness only diffs the DATA region `[0x800,eof)`, so the table reloc was never covered and the live build silently lacked it. NORMALIZATION DEVIATION: the engine stores `off` in `[0x800,0x810)`; the port reuses `bank_ptr`'s `(lin&0xf)+0x10` split — identical LINEAR (all `sprite_prepare_frame` uses), different paragraph normalization. |
+| `entity.c` `entity_draw_screen_sprite` | Host-platform leaf | Like `entity_draw_p1` but takes the frame-table far ptr EXPLICITLY — pre-level (menu) there is no DGROUP sprite descriptor bound, so `hr_blit_obj` NOPs; the menu cursor is drawn from a dedicated bank instead. |
+| `host_resource.c` `host_load_cursor_bank` + `host_render.c` `host_cursor_bind`/`host_blit_cursor` | Host-platform | Load FLECHE.BIN (engine resource 9 → `DAT_6c2c`) into a static `__far` buffer, run the transform (incl. reloc), and blit frame 0 at the menu cursor position. The engine loads this via `load_graphics_resources` at session init; the host resource path drains the engine's own sprite-bank reads (`process_sprites` was a NOP), so the cursor is loaded explicitly. LIVE-VERIFIED (cursor renders in the title menu). |
+| `level.c` `start_level` re-call of `init_sprite_structs` | Host-platform (required by the heap-DG deviation) | The engine's `init_sprite_structs` (`1000:33c5`) runs once and points `p1_sprite`/`p2_sprite` at the STATIC DGROUP sprite objs (always valid). The reconstruction's DG shadow (`g_entity_dg`) is heap-allocated in `start_level` — AFTER `game_loop`'s lone `init_sprite_structs` call (which saw `level_get_entity_dg()==NULL` and skipped the wiring), so `p1_sprite` stayed NULL and `draw_p1_sprite` wrote to a NULL descriptor while `hr_blit_obj` read the stale DG obj. Re-invoke `init_sprite_structs()` after the DG exists (idempotent). |
+
+WORLD-MAP BUMPY (BUMSPJEU frame 0x21, `level_intro_screen` 1000:3852) + level-name glyphs (ASCII+0x175) use the same `entity_draw_p1`/`entity_blit_object` leaf the menu cursor exercises (relocated-table + the `p1_sprite` fix). Plumbing is source-traced correct (`render_level` binds `hr_dg=g_entity_dg`; `present_frame` packs framebuffer page0; `host_set_draw_page` has no callers → draw page is always page0; `restore_bg_view` word0e=1 → page0). **VERIFIED 2026-06-28** once the conventional-memory OOM below was fixed: a headless capture of the level-1 puzzle screen renders the platform geometry + speckled background + item sprites + a green Bumpy (the player) — i.e. `entity_draw_p1` and the level pipeline render correctly end-to-end.
+
+## Playable host — conventional-memory OOM (player + level didn't render), 2026-06-28
+
+All `#ifdef`'d; the default (byte-compared) build stays md5 `cac9ff236a832284fec6fafff2d8602b`.
+
+SYMPTOM: in interactive play the player sprite and the puzzle level both rendered blank. ROOT CAUSE: `render_level` (level.c) draws BOTH the level background AND the player (`entity_draw_p1` @ the `p1_start` cell), and it runs only when `start_level` completes — but `start_level`'s single early-exit is `if (level_alloc_buffers() != 0) return;`. The 256 KB `host_framebuffer` (4 × 0x10000) + the ~167 KB of level buffers (`g_bank_buf` 87 KB, `g_pav/dec/bum` 39 KB, `g_entity_dg` 41 KB) + the ~281 KB program + DOS exceeded 640 KB, so `level_alloc_buffers` failed → `render_level` never ran → blank player + level. The earlier note above ("a SECOND 256 KB plane buffer that cannot coexist with `host_framebuffer`") is THIS problem. Two-part fix:
+
+1. **Framebuffer 256 KB → 64 KB** (frees 192 KB). New playable-only flag `HOST_FB_16K` (`src/Makefile` adds `-dHOST_FB_16K` to every `play/` compile alongside `-dBUMPY_PLAYABLE`; the offline blitter ctests never set it, so they and the default build keep the 0x10000 stride and stay byte-identical). It shrinks the plane stride `0x10000 → 0x4000` in every place that must agree with the framebuffer allocation: `host.h` `HOST_PLANE_SIZE`, `bg_render.c`/`sprite_blit.c` `PLANE_SIZE`, `bgi_overlay.h` `BGI_PLANE_SIZE` (consumed by `restore_bg_view` + `view_setup.c`'s save-under), `entity.c` `ENTITY_PLANE_SIZE` (dead but kept consistent), and `level.c`'s own self-contained `LEVEL_PLANE_SIZE` (it includes `host.h` only under `BUMPY_PLAYABLE`). 16 KB/plane still holds page0 `[0..0x1f40)` + page1 `[0x2000..0x3f40)`; page1 is REQUIRED (`view_setup.c:517/525/532` `restore_bg_view word0e=0` writes it), so the stride cannot go below `0x4000`. `fullscreen_buf` can no longer live in the (now absent) plane-0 slack → `host_screens_buf_init` halloc's it as its own `0x8800` block under `HOST_FB_16K`.
+
+2. **All-`halloc` level buffers** (the decisive part — fragmentation, not raw size). With the 64 KB framebuffer there were ~179 KB free at `start_level` (measured), yet the 167 KB of buffers STILL failed: the original `level_alloc_buffers` mixes `halloc` (DOS-direct: framebuffer, `fullscreen_buf`, `g_bank_buf`) with `_fmalloc` (Watcom far heap: pav/dec/bum/dg), and the far-heap growth interleaved with the DOS-direct blocks fragmented conventional memory enough that the four `_fmalloc` blocks could not be placed. New macro `LEVEL_FAR_ALLOC(n)` = `halloc((u32)(n),1)` under `BUMPY_PLAYABLE` / `_fmalloc((size_t)(n))` in the default build; routing the four small far buffers through it makes EVERY level buffer one contiguous run of DOS blocks, so 167 KB packs into the 179 KB free. The level buffers are never freed, so there is no `hfree`/`_ffree` asymmetry. (Confirmed with a temporary `BUMPY_PLAYABLE_DIAG_HALT` instrument — a DOS `INT 21h/48h BX=FFFF` largest-free-block report painted into the framebuffer — pre-fix reported failure at 179 KB free, post-fix reported alloc success; the instrument has been removed.)
+
+## Playable host — in-level walk trails / wrong-frame / erratic keys were move-script double-relocation, 2026-07-01
+
+**Symptom (playtest):** in-level, lateral moves left sprite/platform trails and flicker;
+occasionally a *platform* frame drew at Bumpy's position; arrow keys felt wrong (left→jump,
+up/down dead); the idle bounce was clean. Overworld and level-entry animations trailed on some
+moves. First-suspected cause — the per-sprite save-under rect under-covering the sprite — was
+**ruled out with data**: Bumpy's frames are ≤32 px wide (`half_w ≤ 4` bytes) and ≤21 px tall
+(`BUMSPJEU.BIN` frame headers), and the descriptor's `4×4`-tile save rect (`p1_erase_view+0x0a/+0x0c`,
+game.c:751; matching the decomp-confirmed clipped-rect `restore_bg_view` model) covers 8 bytes × 32
+rows at every sub-cell phase. The geometry is faithful; the trails were a *symptom*, not the cause.
+
+**Root cause:** `init_move_scripts` (`move_scripts.c`, host reconstruction of the DOS-loader
+relocation for the move-script blob) relocated each header's `entries` far-ptr **in place, once per
+referencing mode**. `s_hdr_off` shares headers across modes — `0x14e4` at modes **4** (the main
+in-level walk) & 45, `0x1756` at modes 14/48/49 — so shared headers were relocated 2–3× (the 2nd pass
+re-relocates the already-relocated value, double-adding `base`). At the runtime blob base `0x4610` the
+mode-4 `entries` ptr went `0x14b4`→(correct)`0x4748` but (buggy)`0x79dc`, `+0x3294` bytes out of
+range. `p1_step_scripted_move` then read `p1_move_anim = script[0]` (garbage → a platform frame),
+`dx/dy = script[1..2]` (garbage → erratic jumps; the erratic motion is what smeared the save-under
+trails). Invisible in the original binary: its loader relocation is single **and** `base == MS_BASE
+(0x137c)` there, so double==single; the host build's `base ≠ MS_BASE` exposes it.
+
+**Fix:** relocate each unique header's `entries` field **exactly once** — skip the in-place fixup when
+an earlier mode already relocated the same `hoff`, then still fill `mode_script_tbl[m]` for every
+referencing mode (all point at the one relocated shared header). Mirrors the loader (each pointer field
+relocated once). `#ifdef BUMPY_PLAYABLE`; default `BUMPY.EXE` md5 unchanged (`c8c0a3f5…`).
+
+## Playable host — overworld "trails when moving up" = save-under rect had no top margin, 2026-07-01
+
+**Symptom:** on the overworld / level-intro map, Bumpy left a trail **only when moving up**;
+lateral and downward moves were clean. The original game never trails in any direction (user-
+confirmed), so this is a host deviation, not faithful behaviour.
+
+**Root cause:** the per-sprite erase (`erase_p1_view` → `restore_bg_view`) is a semantic
+reconstruction of the un-decompilable BGI overlay; the host models it as a 4×4-tile rect whose
+origin is the descriptor's grid cell (`hr_su_rect`, host_render.c). The **faithful**
+`p1_update_grid_cell` (1000:1473) computes `grid_x = ((px-ox)>>4) - 1` (a −1 tile bias → the rect
+gets a 16px **left** margin) but `grid_y = (py-oy)>>3` with **no** bias → the rect top sits exactly
+at the sprite's top. Because the save/erase cell lags the drawn pixel by one 4px step, the left/
+right/bottom slack absorbs lateral+down motion, but with **zero top margin** an up-move leaves up to
+a ~4px sliver of the previous sprite above the erase rect → the up-trail. (The real overlay fully
+covers the sprite, so the original doesn't trail — the reconstruction simply lost that coverage.)
+
+**Fix (first pass):** `hr_su_rect` extends the rect upward by `HR_SU_TOP_MARGIN` (1 tile), applied to
+BOTH the save (cell `+0x06`) and its paired erase (cell `+0x14`). `HR_SU_MAX_H` 32→40, `HR_SU_PLANE`
+256→320. This improved the up-trail but did not fully resolve residual trailing — see the deeper
+root cause below.
+
+## Playable host — save-under rect read the SCROLL fields as its extent (the real trail root cause), 2026-07-01
+
+**Follow-up on the entry above.** The BGI overlay's real present/erase model was fully demystified
+from the decomp (this closes the "primary UNCERTAIN" in `local/build/present_model.md`):
+
+- **Present** is a full back-buffer→display copy (a200→a000), NOT a CRTC page-flip. Confirmed by an
+  in-level oracle capture (`frame_oracle.bin`, FRM4): pages a000 and a200 are byte-identical full
+  frames except the ~328 px of the two moving-sprite bands (`tools/extract/pageprobe.py`).
+- **Per-tick erase** is per-sprite save-under (`game_tick`, game.c:292): `erase_p1_view` (restore bg at
+  the *previous* cell) → … → `render_p1_view` (save bg at the *current* cell) → `draw_p1_sprite` →
+  `present_frame`. The grid history makes frame N+1's erase cell equal frame N's save cell, so the
+  erase repaints exactly where the sprite was drawn.
+- **The rect is a FIXED 4×4-tile (64×32 px) footprint**, set ONCE by `init_view_anim_descriptors`
+  (1000:535e): `p1_erase_view` `+0x0a=4`/`+0x0c=4` (mode-01, read by `restore_bg_view`); `p1_view`
+  `+0x18=4`/`+0x1a=4` (mode-10). Per-frame `render_p1_view`/`erase_p1_view` only update the CELL
+  (`+0x06/+0x08` save, `+0x14/+0x16` erase) and the SCROLL (`+0x1e/+0x20 = p1_scroll_x/y`).
+
+**Root cause:** `hr_su_rect` read the rect extent from `+0x1e/+0x20` — the **scroll** fields, not the
+footprint. `p1_scroll_x/y` are 4 at rest but SHRINK below 4 near the screen edges
+(`0x14-grid_x` / `0x19-grid_y`, player.c `render_p1_view`). So near the right/bottom edges the erase
+rect shrank and no longer covered the sprite; worse, if scroll differed between the save frame and the
+paired erase frame (player crossing an edge threshold), the save wrote a 4-tile buffer but the erase
+read a smaller rect with a different byte-stride → wrong buffer bytes → corrupted restore. `bgi_overlay.c`'s
+own `restore_bg_view` already notes "the `+0x1e/+0x20` extent fields belong to the mode-10 path, not
+this one" — the host save-under simply used the wrong fields.
+
+**Fix:** `hr_su_rect` takes an `ext_off` and reads the extent from the real fixed footprint —
+`+0x18/+0x1a` for the mode-10 save leaf, `+0x0a/+0x0c` for the mode-01 erase leaf (both = 4 tiles, so
+save/erase share buffer geometry unconditionally). Strictly better-or-equal: identical away from
+edges (scroll==4), correct at edges (was shrinking). The `HR_SU_TOP_MARGIN` over-coverage is retained
+as a labelled benign superset (repaints one extra already-saved clean-bg tile row). Host-only
+(`host_render.c`, `#ifdef BUMPY_PLAYABLE`); `BUMPY.EXE` unaffected.
+
+## Playable host — menu cursor trail (save-under), 2026-06-28
+
+`run_main_menu`'s arrow left a trail when moved. The engine erases the moving cursor implicitly via its a000/a200 double-buffer (every frame recomposes the whole background into the draw page); the host composes into ONE page (`host_framebuffer`) and `run_main_menu` only recomposes the small option-2 strip per frame, NOT the cursor column. FIX (`host_render.c`, `BUMPY_PLAYABLE`): `host_blit_cursor` now saves the background box under the cursor before drawing and restores the PREVIOUS box before the next draw (`HR_CUR_BOX` 4 bytes × 20 rows × 4 planes, bounded inside page0), so exactly one cursor is ever live — a host-platform save-under standing in for the engine's double-buffer erase. The faithful `run_main_menu` structure is unchanged.
+
+## Playable host — in-level entity layers (platform bars / items / Bumpy), 2026-06-30
+
+The in-level scene (`spawn_and_draw_level_entities` 1000:2a78) draws three grid layers
+plus the P2 sprite via DGROUP lookup tables that are **bare zero-init arrays** in the
+reconstruction (`spawn.c` `spawn_a/b_type_tbl`, `spawn_p2_frame_tbl`; `anim.c`
+`anim_a/b_frame_tbl`, `anim_a/b_grid_tbl`, `anim_posA/B_tbl`; `player2.c`
+`p2_cell_coord_tbl`) — the original holds these as initialised `.data` whose far-ptr
+entries carry the link-time DGROUP segment `0x103b`, fixed up by DOS at load. A
+from-scratch Open Watcom relink cannot reproduce that load-time fixup, so with the
+arrays left zero the type→descriptor lookup returned a null far-ptr and
+`draw_anim_channels_a/b` blitted nothing: the platform bars, items, and Bumpy were
+absent (only the background drew).
+
+| Item | Type | Notes |
+|------|------|-------|
+| `src/anim_data.c` (NEW, `init_anim_data()`) | **Data table relocation (host build-shape deviation)** | GENERATED by `tools/extract/gen_anim_data.py` — the placement tables extracted **verbatim** from `BUMPY_unpacked.exe` DGROUP (file base `0x11440`), ground-truthed against the asm (`disassemble 1000:2a78`, which pinned the (X,Y) strides + the exact table bases the decompiler hid). `init_anim_data()` runs once at boot (beside `init_worldmap_data`/`init_move_scripts`, both builds), copies the byte tables verbatim, points the coord-table pointers (`anim_a/b_grid_tbl`, `anim_posA/B_tbl`, `p2_cell_coord_tbl`) at the local blobs, and **REBUILDS** the layer-A/B frame far-ptr tables (`anim_a/b_frame_tbl`) as runtime far pointers (`FP_OFF`/`FP_SEG`) into the local descriptor blobs — standing in for the original's link-time `0x103b` segment fixup that the relink cannot reproduce. Same relocation pattern as `worldmap_data.c`/`move_scripts.c`. The table VALUES are byte-identical to the binary; only the segment halves of the two frame tables are runtime-rebuilt. |
+| Table bases (asm-confirmed) | Reference | layer A: `spawn_a_type_tbl@0x3d3a` (cv→type, 0x30 B), desc `@0x37be` (yoff/frame ×4 B), `anim_a_frame_tbl@0x3d6a` (type×4 far-ptr), grid `@0x32be`, posA `@0xf4` (48×4 B). layer B (tilemap[+0x30], col 7 skipped): `spawn_b_type_tbl@0x4086` (0x20 B), desc `@0x3ad2` (106 entries — **contiguous** after the layer-A blob; layer A's type-198 entry overlaps layer-B desc[0], benign as each layer indexes only its own type range), `anim_b_frame_tbl@0x40a6`, grid `@0x343e`, posB `@0x3f4`. layer C (tilemap[+0x60], static sprites, no type table): `p2_cell_coord_tbl@0x274` (48×4 B, index `col*4+row*32`, frame = `cv+0x179`). P2: `spawn_p2_frame_tbl@0x2546` (0x20 u16, index `header[+0x96]*2`; word[0] is a stray `0x103b`, never indexed). |
+| `game.c` CMARK crash-localiser scaffolding | Removed | The 13 `#ifdef CMARK` probe sites + the `cmark()` writer (used to localise the now-fixed INT 6 level-entry crash) were removed for fidelity. The 1-line `wait_keypress()` guard is now `#ifndef AUTOKEY` (AUTOKEY = the headless-capture harness flag only) so captures still reach gameplay; the default + clean playable builds keep the unconditional `wait_keypress`. |
+
+VERIFIED 2026-06-30: a headless capture of the world-1 level-1 puzzle screen (AUTOKEY
+harness build) renders the red hotdog platform-bar grid (layer A) + the flag, Bumpy,
+popsicle, pizza, ice-cream sundae, and coin (layers B/C) over the dark-blue textured
+background — a match to `results/oracle/world1_level1.png`. `validate_spawn` PASS
+(FAIL=0, perturbation gate has teeth); both builds compile clean (`anim_data.obj` in
+each). The clean `BUMPYP.EXE` (no `-dAUTOKEY`/`-dCMARK`) differs from the verified
+harness build only by the inert `wait_keypress`/CMARK removal, so its draw path is
+identical.
+
+## Playable host — in-level player position + frame pacing (two bug fixes), 2026-06-30
+
+Once the level rendered (above), the player sprite was at the wrong location, behaved
+as if on a different level's layout, and moved far too fast.  Two distinct pre-existing
+defects (both unrelated to the anim-table work; exposed by the now-visible level):
+
+### (1) `init_round_state` (1000:31de) was a no-op stub — player spawned at the stale world-map pixel
+
+`reset_round_counters` (the recon name for `init_round_state`, called from
+`reset_game_state` after spawn) was a no-op CARVE-OUT ("decompilation fails, UNCERTAIN").
+But its DISASSEMBLY (1000:31de..328e) is complete and every store maps to a named global,
+so it is now RECONSTRUCTED 1:1 in `player.c`.  The stub had dropped, among ~20 counter
+resets, two critical calls: `p1_set_pixel_from_cell` (1000:4906 @325d) and
+`p2_set_pixel_from_cell` (1000:48a9 @3260) — which set the players' pixel positions FROM
+their in-level start cells.  Without them, `p1_pixel_x/y` kept the **world-map** position
+left by `level_intro_screen` (`p1_pixel = p1_start_x/y`), so the player drew at the
+overworld coordinate while its `p1_cell` (= `tilemap[0x90]-1`, the real start cell) was
+correct → cell/pixel mismatch → "behaves like a different level".  It also dropped the
+move-step counter resets (`move_step_count` 0x824c, `p1_move_step_idx`, `p1_move_steps_left`)
+and the entry drop-in move script (`p1_move_script = DS:0x1394`, resolved through
+`move_script_entries` in the playable build, as `p1_begin_walk_*` do for 0x140c/0x1460).
+VERIFIED 2026-06-30 by headless capture: the player moved from the stale top-left
+world-map pixel to the correct in-level start cell (cell 40 = row 5/col 0, bottom-left).
+A new global `p1_idle_jump_flag` (0x79b4) is added for the one store whose consumers
+(`gamemode_default_idle`/`p1_try_jump_action`) the recon does not yet read.
+
+### (2) `run_n_frames` (1000:05e7) paced on the 500 Hz PIT tick, not the VGA vblank → ~7× too fast
+
+The engine's `run_n_frames` is `while (n) { wait_vretrace_thunk(); n--; }` — it paces each
+game frame on the **VGA vertical retrace** (`wait_vretrace_thunk` → 2036:0015 vsync poll,
+~70 Hz for mode 0x0D).  The recon had instead spun on `host_tick` (the ~500 Hz INT8/PIT
+ISR primitive), pacing the game loop at ~250-333 fps instead of ~35-70 fps — the
+user-reported "movement too fast" (~7× over speed; everything tick-driven, incl. movement,
+ran proportionally fast).  FIX (`game.c`, playable `run_n_frames`): call
+`wait_vretrace_thunk()` `n` times, 1:1 with the decompiled engine.  The host INT8 ISR
+(`host_timer.c`) stays installed at the engine's 0x0951 (~500 Hz) divisor for sound /
+BIOS-clock chaining; it is simply no longer the FRAME-pace source.  (NOTE: this changes
+headless-capture wall-clock pacing — the `BUMPYCAP` injection-frame scripts, tuned for the
+old fast loop, need re-tuning to reach gameplay; movement *feel* is most directly verified
+interactively.)
+
+## Playable host — layer-A tile-def animation table (active-platform frames), 2026-06-30
+
+User report: an active platform's sprite "changes to incorrect frames during animation".
+ROOT CAUSE: `anim_a_tiledef_tbl` (DGROUP 0x2ede, anim.c) was a **zero-init** bare array.
+`apply_cell_animation` (1000:69aa — called by `land_on_tile_below` / `p1_try_jump_action`
+/ `p1_collect_item` / `p1_set_cell_animation` etc. on player↔tile interaction) reads
+`tile_def = anim_a_tiledef_tbl[action_code*4]`, then sets the channel's animation
+**stream** pointer `slot->stream_off/seg = tile_def[2/4]` (and stamps
+`tilemap[cell] = tile_def[0]`).  With the table zero, `tile_def` was a NULL far ptr, so the
+stream pointer was garbage → `step_anim_channels_a` walked garbage cmd bytes → wrong frames.
+
+FIX (WRITTEN, then DISABLED — see below): `tools/extract/gen_anim_data.py` dumps the
+layer-A tile-def + anim-stream blob (DGROUP [0x2811, 0x2ede), 1741 B — interleaved
+`[stream][tile_def]` chunks; each tile_def = `{tile_word, stream_far_ptr(link-seg
+0x103b)}`, streams are 0xff-terminated cmd-byte sequences) and `init_anim_data()`
+relocates it exactly like `move_scripts.c`: each UNIQUE tile_def's internal stream far
+ptr is rewritten ONCE to the runtime blob (dedup avoids the double-relocation hazard when
+several actions share a tile_def), then `anim_a_tiledef_tbl[action]` is filled with the
+relocated tile_def far ptr (0 for the two null actions, codes 0 and 96).  97 action
+codes, 95 unique tile_defs.
+
+**RE-ENABLED 2026-07-02** (`EMIT_TILEDEF = True`): the conventional-memory cliff that
+deferred this on 2026-06-30 (the +2.2 KB blob made `level_alloc_buffers` OOM — overworld
+rendered, level never loaded, `vganz=0`) was cleared by reclaiming the dead 64 KB flat
+`host_framebuffer` (see `host_render.c host_fb_init` under `HOST_FB_16K`: after the
+real-VGA migration nothing displayed or read that buffer).
+
+Same-pattern siblings, both now DONE:
+- `contact_tiledef_tbl` (DGROUP 0x3256, player.c, layer-B `apply_contact_action`):
+  **relocated 2026-07-02**.  `gen_anim_data.py` dumps the contact tile-def blob
+  (DGROUP [0x3062, 0x3256), 500 B — starts at the END of the layer-A tiledef table at
+  0x2ede+97*4; verified byte-identical and every stream 0xff-terminated in-region) and
+  `init_anim_data()` relocates each unique tile_def's stream ptr once, then rewrites
+  `contact_tiledef_tbl`'s static link-seg-0x103b entries to the runtime blob (24
+  actions, 23 unique tile_defs).  Before this the layer-B contact path walked a
+  garbage stream on tile contacts.
+- **Layer-A frame table is NOT linear (extraction bug found+fixed 2026-07-02):** the
+  original `init_anim_data` REBUILT `anim_a_frame_tbl` as `type → &desc[type-1]`, but
+  the binary's table at DGROUP 0x3d6a deviates from linear in 88 of 197 entries (types
+  1..95 linear, 96..197 a scrambled permutation of desc indices 0..196; entries 0 and
+  198 NULL).  ~16 affected types appear on level 1 → wrong layer-A frames/y-offsets
+  (a second, independent cause of the "wrong sprite frames" report).  The generator
+  now extracts the real table as a per-type desc-index array (`g_anim_a_frame_idx`,
+  199 B, byte-verified 199/199) and `reloc_frame_tbl_idx` translates it.  The layer-B
+  table at 0x40a6 was byte-verified genuinely linear (0 deviations) and keeps the
+  linear rebuild.  The layer-A descriptor blob is 197×4 B ([0x37be,0x3ad2)); the old
+  198th "benign overlap" entry was an artifact of the false linear assumption.
+
+## Playable host — anim-channel under-erase (active-platform background restore), 2026-07-01
+
+User report: in-level "sprite-drawing and under-erase are still an issue" — a moving/animating
+anim-channel (layer-A active-platform) sprite was not erased between frames, so its background
+was not restored.  The two host leaves `anim_render_view_leaf` (render_player_view 1000:93b8)
+and `anim_restore_bg_view_leaf` (restore_bg_view 1000:80bc) were explicit NOPs in
+`host/host_render.c`.
+
+**Grounding — SUPERSEDED 2026-07-02 (the "single-page" reading was a misread).**  This
+section originally claimed `crtc_page.md` proved gameplay is single-page (CRTC never
+reprogrammed).  The 2026-07-02 overworld investigation recovered the present primitive
+from the runtime-relocated overlay (`bgi_present_dispatch` 1ab9:0351 → pm=2 handler →
+**1ab9:06c1**): every `present_frame(1)` **XORs the CRTC start high byte with 0x20 (a
+real 0x0000↔0x2000 page flip) and swaps the two `sprite_table_base` entries** — the
+oracle's single observed CRTC value 0xDF00 is `0xFF ^ 0x20` (the Unicorn VGA model
+returns 0xFF on the CRTC read), i.e. the flip fired on every present.  The host now
+implements the real flip (`host_video.c present_frame`) + live page-table resolution
+in every draw/save/erase leaf, and `init_fullscreen_view_desc` is the engine's real
+mode-11 full-screen page sync.  The erase description below remains correct: the
+erase that matters is `draw_anim_channels_a`'s erase-view (`0x8d4`) at anim.c:422,
+BEFORE the blit at :430, repainting the clean background from `fullscreen_buf` over
+the sprite's grid cell — now onto the current draw page.
+
+**Fix (`host/host_render.c`, `view_setup.c`; `BUMPY_PLAYABLE` only; CORRECTED 2026-07-02).**
+`setup_fullscreen_view` (`view_setup.c`, the real playable body, not the empty default
+carve-out) captures the clean level background into `hv_saveunder_buf` (32000 B) right after
+`redraw_level_background_tiles` — reading the freshly-painted **a000 page-0 via
+`host_vga_read4`**.  `anim_restore_bg_view_leaf`, when called with the layer-A erase-view
+(matched by pointer identity against `anim_a_erase_view`), repaints the cell's tile rect
+(origin `view+0x14/0x16`, extent `view+0x1e/0x20`) from `host_clean_bg()` back to the
+displayed page **via `host_vga_put4`** — mirroring the engine's
+`restore_bg_view(fullscreen_buf)` erase.  `anim_render_view_leaf` stays a NOP (the
+single-page composited save is a no-op).  **Zero new memory** (reuses `hv_saveunder_buf`).
+
+> **Correction (2026-07-02 review):** the 2026-07-01 version of this fix was **dead
+> end-to-end** — it captured the snapshot from the flat `host_framebuffer` (which the
+> real-VGA blitters no longer write → all zeros) and repainted into that same undisplayed
+> buffer, so on-screen platform pixels were never erased.  Both endpoints were rewired to
+> real VGA as described above.  **LAYER-B fixed 2026-07-05:** `draw_anim_channels_b` calls
+> the same leaf twice per active B channel with `anim_b_view1` (0x8cc) — in the engine that
+> view's `word0e==1` dispatches an a000 blit from the 0x9eba/0x9fba shadow + 0x8888 sources
+> (extent `view+0x0a`×`view+0x0c`).  The host never populates those shadows (the render/mask
+> pass `anim_render_leaf_80ac`/`bgi_set_mode_00` is a NOP — the composited double-buffer is
+> single-page-vestigial), so `anim_restore_bg_view_leaf` now also matches `anim_b_view1` by
+> pointer identity and **repaints the clean tile background over the B cell** (extent from the
+> faithful mode-01 `+0x0a`/`+0x0c` fields, NOT the layer-A `+0x1e`/`+0x20` footprint), the same
+> mechanism as the layer-A erase — fixing the layer-B trails/flicker + world-2 background
+> speckles.  Deviation vs the engine: the clean-bg repaint does not composite overlapping STATIC
+> layer-B content the shadow blit would preserve (host-adaptation; capture/playtest-pending).
+> Earlier (2026-07-02): `anim_b_view0/1` were never BOUND to descriptor
+> storage (`host_view_descriptors_init` bound only the `p2_anim_clear_view_8c8/8cc`
+> aliases) — any active layer-B channel far-stored through NULL; both names now bind to
+> the same slots.
+
+**Deviation classification.**  This is the same behavior-faithful deviation class as the existing
+player save-under and the single-image framebuffer model: the exact per-frame overlay byte
+sequence lives in the un-decompilable BGI overlay, so the host reproduces the *mechanism* (repaint
+the clean bg under the sprite) at the engine's real clean-bg source rather than transcribing the
+overlay.  The clean bg is captured bg-tiles-only (before the entity grid scan), matching the
+engine's `fullscreen_buf` at `setup_fullscreen_view` time.
+
+**Validation (2026-07-01).**  Default `BUMPY.EXE` byte-unchanged (all edits `#ifdef
+BUMPY_PLAYABLE`).  Headless capture (frames 10000/12000, `enter-level-go`) renders the level clean
+and oracle-matching with no accumulated smearing and no corruption at platform cells (confirms
+`hv_saveunder_buf` is a valid clean bg and the repaint targets the right region).  A diagnostic
+build (erase rect filled with a bright marker) showed **no** marker at frames 10000/12000 → no
+active layer-A channels fire while Bumpy is idle, so the erase path is correct-by-construction but
+not yet *exercised* headlessly: the active-platform trigger needs Bumpy to land on/activate a
+platform, which requires movement — currently blocked by the separate INT6 walk-crash.  Interactive
+verification (or fixing the walk-crash) is the remaining step to exercise it live.
+
+## Fidelity fix (2026-07-01): contact/action resolver tables must be contiguous banks
+
+**Bug (position-dependent in-level input).**  The engine's mode-resolver tables are
+**contiguous, fixed-stride byte tables in DGROUP** that it flat-indexes with an
+**unmasked** tilemap byte, so an index past a table's own footprint deliberately reads
+into the *next* table:
+
+- **Contact resolvers** at DGROUP `0x4256` (stride `0x20`): `move_left`/`move_right`/
+  the walk + gamemode-25/26 resolvers do `resolved_mode = *(byte*)(p1_contact_code +
+  <base>)` with `p1_contact_code = tilemap[cell+0x30]` (`read_tile_layer_contact`,
+  unmasked 0x00..0xff).
+- **Move-action LUTs** at DGROUP `0x36ee` (stride `0x30`): `p1_move_left/right` do
+  `exec_move_action(*(byte*)(p1_pending_action + 0x36ee/0x371e))` and `move_down` does
+  `down_action_lut[tilemap[cell-8]]` — again unmasked tile bytes.
+
+The reconstruction modelled each as an **isolated fixed-size array**: the contact
+tables as `u8[0x40]` **zero-filled above 0x13** (so codes `>=0x20` returned mode 0 —
+the fall script — instead of the adjacent table's real mode), and the action LUTs as
+`u8[0x30]` (so tile bytes `>=0x30` read **out of bounds**).  A captured in-level contact
+layer holds codes up to **`0xa9`**, so real tiles hit both paths.  Symptom: correct
+where the tile byte was `<0x20`/`<0x30`, and wrong (input ignored / wrong direction /
+stuck) where it was higher — exactly "responds correctly at some positions, wrong at
+others."  The core movement *logic* (`p1_cell`, tilemap reads, `move_scripts.c` — whose
+`s_hdr_off`/headers were re-verified 1:1 against the binary's `mode_script_tbl`) was
+never at fault; the resolver *data model* was.
+
+**Fix (`player.c`/`player.h`).**  Model each region as ONE verbatim DGROUP dump and
+alias every named table to its offset via a macro, so `tbl[code]` reproduces the
+engine's `*(byte*)(code + base)` read for **any** byte `0x00..0xff`:
+
+- `g_contact_resolver_bank[0x220]` = DGROUP `[0x4256,0x4476)` — aliases
+  `contact_action_tbl_left`, `collision_mode_table_right/left`,
+  `collision_mode_table_right_alt`, `contact_transition_tbl(_b)`,
+  `left/right_walk_contact_tbl_34/35/38/39`.
+- `g_action_lut_bank[0x160]` = DGROUP `[0x36ee,0x384e)` — aliases `action_tbl_left`,
+  `action_tbl_right`, `down_action_lut`, `action_tbl_default`.
+
+This is a **fidelity improvement, not a deviation**: the low halves are byte-identical
+to the former arrays (codes `<0x20`/`<0x30` unchanged) and the banks are verbatim
+binary bytes (the trailing bytes are the real `tile_followup_action_lut` /
+`move_step_dispatch_tbl` bytes the engine spills into for the highest codes — dumped,
+not invented).  All callers use `tbl[idx]`, so the macro aliases are transparent
+(incl. `tools/player_ctest.c`).  Ground truth + regeneration:
+`local/build/op12-handoff/{validate_contact_tbls,validate_movescripts,gen_contact_bank,
+gen_action_bank,sweep_tables}.py`.  Both `BUMPY.EXE` and `BUMPYP.EXE` rebuild clean.
+
+**Class-wide extension (2026-07-01, after a "helped but not 100%" playtest).**  The
+same defect covers a whole family of flat-indexed tables — anything the engine reads as
+`table[unmasked_tilemap_byte]`.  A grep for the unmasked tilemap-derived indices
+(`p1_contact_code`, `p1_pending_action`, `p1_current_tile`, `tile_below`,
+`tile_below_player`, `p1_latched_action = p1_pending_action`) found **24 more tables**
+across `player.c` and `sound.c`, each declared `[0x30]` (or `[0x60]`) but reachable with
+bytes up to `0xa9`:
+
+- contact/pending/anim: `contact_action_lut_35be/35fe/361e/363e/365e/367e/369e`,
+  `contact_sound_lut_35de`, `pending_action_lut_36be`,
+  `pending_anim_lut_3c7a/3caa/3cda/3d0a`, `tile_followup_action_lut`
+- sound LUTs: `move_sound_lut_opl_25ae`/`std_25de`, `action_sound_lut_opl_260e`/`std_263e`,
+  `land_sound_tbl_opl`/`std`, `state_sound_lut_opl_26ce`/`std_26fe`,
+  `contact_sound_lut_opl_276e`/`std_278e`
+- `land_mode_fx_tbl` — indexed by `tile_below_player*2` (+0/+1), so it needs `[0x200]`.
+
+Because these are **interleaved in the source and split across `player.c`/`sound.c`**,
+converting them to shared banks would be error-prone, so they use the array form of the
+same fix: each is **resized to `[0x100]` (`land_mode_fx_tbl` to `[0x200]`) and filled
+with the verbatim DGROUP window from its own base**, so `table[byte]` reproduces the
+engine's `*(byte*)(byte + base)` read for any `0x00..0xff`.  Low `[0x30]` prefixes are
+byte-identical, so all previously-correct indices are unchanged.  DGROUP has ~28 KB
+headroom (it is only `0x8e40`; the big buffers are `FAR_DATA`), so the ~5 KB growth is
+safe.  Regenerated/verified by `local/build/op12-handoff/{apply_lut_resize,
+verify_resize_final}.py` (all 24 reproduce the binary for their full index range); both
+EXEs rebuild clean.  The two cleanly-groupable families (`0x4256` resolvers, `0x36ee`
+action LUTs) stay as contiguous banks; the interleaved families use oversized verbatim
+arrays — two spellings of the identical "reproduce the engine's flat read" fix.
+
+## 2026-07-02 review corrections (multi-agent audit of the playable work)
+
+A verified 10-finding review of the in-flight playable work; each item below is either a
+**reconstruction bug fixed** (the C didn't match the binary) or a **deviation documented**.
+Items already folded into their per-module sections above are only cross-referenced.
+
+- **`FUN_1000_4437` ⇄ `FUN_1000_1e3d` bodies were SWAPPED** (`game_stubs.c`) — a genuine
+  translation error: the binary's 1000:4437 is the P1 input router (idx 0x1d..0x20) and
+  1000:1e3d the move-descriptor/round activator (idx 0x30); each C symbol carried the
+  OTHER address's body, so both builds dispatched the wrong handler for those five modes
+  (verified against the disasm and the dispatch table at DGROUP 0x7ca, which is 2-byte
+  NEAR offsets, matching player.c's routing).  Bodies swapped back; the dispatch table
+  was already correct.
+
+- **`level_packed_palette` now returns `cur_level_ptr`** (`level.c`) — the engine's
+  `load_palette_byteswapped` (1000:063b) reads the palette through `cur_level_ptr`
+  (per-level 0x32c stride); the host returned block 0 (`g_dec_buf+2`) for every level →
+  wrong palette on any level at block index > 0 (the "broken bg on some levels"
+  playtest bug — `current_level_index` is set per round from the worldmap node).  The
+  old deferral note ("shared with the overworld palette") was wrong: the accessor's only
+  caller is `load_palette`, and the overworld palette flows through
+  `host_bgi_stage_image_palette` instead.
+
+- **`worldmap_data.c` blob extended to DGROUP [0x9e6, 0x1114)** — it was one far-ptr
+  entry short: the game has 9 worlds (`current_level` wraps at 10) and `start_level`
+  indexes the anim-coord table 1-based from 0x10ec, so world 9 read the entry at 0x1110
+  — outside both the old blob and the relocation loop.  RECONSTRUCTION FIDELITY
+  (documented in the file header): the engine holds this data DGROUP-resident with
+  loader-fixed far ptrs; the recon keeps the blob `__far` and reproduces the loader
+  fixup at boot (`init_worldmap_data`), the same pattern as `move_scripts.c` /
+  `anim_data.c`.
+
+- **`spawn_p2_frame_tbl` words 0 and 19 are loader-relocated far-ptr seg halves**
+  (EXE reloc entries at DGROUP+0x2546/+0x256c): the DOS loader patches the link seg
+  0x103b to the runtime DGROUP at load; `init_anim_data` now reproduces that fixup
+  (they were copied verbatim-unrelocated).  Words 20+ are neighbouring copy-protection
+  string bytes reachable by the engine's unbounded header-byte index — kept verbatim.
+
+- **Dead 64 KB flat `host_framebuffer` reclaimed** under `HOST_FB_16K` (see the
+  layer-A tile-def section above): after the real-VGA migration nothing displayed or
+  wrote it; removing the halloc cleared the conventional-memory cliff and re-enabled
+  the gated tile-def data (issues C+D).  The non-`HOST_FB_16K` build keeps the buffer
+  (its plane-0 slack backs `fullscreen_buf`).
+
+- **Diagnostic scaffolding (deviations, playable-only, inert in faithful operation):**
+  `enter_game_mode`'s mode≥0x40 OOB guard (`player.c` — records to a ring + OOBLOG.BIN
+  every 8th hit instead of dispatching out of the 0x40-entry table; the engine has no
+  bounds check and never produces such modes) and the `HOST_TICKLOG` per-tick ring
+  logger (`game.c` — compiled out unless `-dHOST_TICKLOG`, which no Makefile target
+  defines).  Both are divergence-tracing aids, kept until the playable work stabilises;
+  remove with the CMARK/DECDUMP class when done.
+
+- **`p1_set_pixel_from_cell` gating note:** the default build sets only the semantic
+  row/col state (the pixel store needs the posC table via the playable-only
+  `level_get_entity_dg`); the int8 gate compares `p1_pixel_x/y` every tick and passes
+  150/150 (the scripted trace never calls this leaf; the teleport differential covers
+  it via `items_ctest`'s faithful stub).  Cleaner 1:1 follow-up: route P1 through the
+  build-unconditional `p2_cell_coord_tbl` far-shadow the way `p2_set_pixel_from_cell`
+  already does.  Older entries above describing a `game_stubs.c` faithful-signature
+  stub for this leaf are historical (the real body lives in `player.c` now).
+
+- **Comment-only corrections:** joystick axis/direction-bit labels in `input.c` were
+  swapped in mutually-canceling pairs (code verified 1:1 against 1000:7861/773c —
+  hardware X rides the HIGH packed byte and drives bits 4/8 = left/right); the
+  `main.c` "default main is byte-unchanged" claim retired (both builds now link
+  `worldmap_data`/`anim_data` and call their inits — nothing automated consumes the
+  old md5 baselines); `move_scripts.c`'s header no longer claims a nonexistent
+  `gen_move_scripts.py` generator.
+
+## Playable host — the REAL present: CRTC page flip + sprite-table swap, 2026-07-02
+
+The engine's `present_frame(1)` (1000:7bdd → `bgi_present_dispatch` 1ab9:0351; pm=2 →
+**1ab9:06c1**) is a true double-buffer present, recovered byte-for-byte from the
+runtime-relocated overlay:
+
+```
+cli ; dx=3d4 ; al=0x0c ; out ; inc dx ; in al,dx
+xor al,0x20 ; out dx,al            ; CRTC start high 0x00<->0x20  (display page flip)
+sti ; shl bx,2
+mov ax,[si+2] ; xchg [bx+si+2],ax ; mov [si+2],ax   ; swap sprite_table_base[0]<->[1]
+```
+
+Descriptor page fields (`word00`/`word0e`) are **indices into `sprite_table_base`**
+(DGROUP 0x5415: `[0]=a200:0000`, `[1]=a000:0000`), so a present retargets every
+subsequent draw through the swapped table.  The engine invariant this enables:
+**a present separates draw from save-under** — `level_intro_screen`/level entry draw
+Bumpy BEFORE the first `render_p1_view`, and the intervening flip+swap makes that
+save read the clean opposite page (both pages having been synced by the mode-11
+full-screen copy, `init_fullscreen_view_desc`).
+
+The host previously modeled present as a **NOP on one displayed page**, based on a
+misread of the `crtc_page.md` oracle (its single CRTC value 0xDF00 = `0xFF ^ 0x20`
+— the Unicorn VGA model returns 0xFF on the CRTC read, so the flip fired on every
+present).  That deviation caused the overworld start-node Bumpy ghost + the
+poisoned-save trails (first save captured the drawn marker).  Now faithful:
+`present_frame` performs the engine's exact port writes + table swap
+(`host_page_table_swap`), every draw/save/erase leaf resolves its page from the
+LIVE table (`host_draw_page_off`/`host_page_off_of`), the page-table entries were
+normalized to the engine's `seg:0000` form (the old `A200:0x2000` pairing
+double-counted to linear 0xA4000), and `init_fullscreen_view_desc` performs the
+real mode-11 page sync instead of a stray present.  The single `s_p1/p2_saveunder`
+buffer remains correct under alternation: the engine's 2-tick grid history pairs
+each save with the erase on the SAME physical page, and clean background is
+page-invariant.  Verified: menu + overworld-after-moves + in-level captures all
+clean (the ghost repro case now renders correctly); 19/19 validators pass.
+Remaining page consumers still on fixed pages (`show_pause_screen` strip,
+`fun_9410_set_sprite_table` UI bracket) are tracked follow-ups.
+
+## Playable host — UI page bracket + boot parity + erase half-tile flags, 2026-07-02 (round 3)
+
+Three follow-on corrections after the real-flip present landed:
+
+- **`fun_9410_set_sprite_table` wired** (screens.c; engine 1000:9410 → 1cec:2dd2
+  `set_sprite_table_ptr`): the UI screens bracket their draws with `(0)…(1)` —
+  slot 0 is the page the mode-11 sync READS from.  The engine has **no cursor
+  save-under**: the menu FLECHE erase IS the mode-11 full-page sync (disasm
+  1ab9:126e: src/dest = `page[table[word00]]`/`page[table[word0e]]`), which works
+  precisely because the cursor draws on the sync's source slot.  Leaving the
+  bracket a NOP under the real flip drew the cursor on the sync's DESTINATION
+  slot, re-baking the stale arrow into the displayed page every frame.
+- **Boot CRTC parity = page 1 (0x2000)** (`init_crtc_window`): the engine invariant
+  is `displayed page == page[sprite_table[0]]` (the UI slot).  Booting the display
+  on page 0 inverted it.  0x2000 is functionally forced by the engine's own
+  menu/gameplay coherence (a direct capture of the original's boot CRTC value does
+  not exist — crtc_page.md's 0xDF00 is the Unicorn in-al=0xFF artifact).  Presents
+  flip CRTC and table together, so the parity holds all session.  NOTE for headless
+  captures: physical page 0 is now the UI sync destination (cursor-free by design)
+  or the gameplay back page — shots read a complete frame either way.
+- **`anim_restore_bg_view_leaf` parses the `+0x1c` half-tile-offset flags** (engine
+  descriptor parser 1ab9:03c5/0400/044f): bit 0x200 = source X +8 px, 0x400 = dest
+  X +8 px, 0x100 = source Y += `view+0x26`; each self-clears when consumed.
+  `draw_anim_channels_a` sets 0x600 for ODD cells (posA draw X = grid_x*16+8);
+  dropping the bits left each odd cell's rightmost 8-px column un-erased — the
+  "right-tilt platform trails" (only the rightward dust frames 0x80-0x83 put pixels
+  in that strip; leftward 0x7c-0x7f keep their dust in columns 2-9).  Capture
+  pixel-verified: every remnant in the user capture sat inside a predicted odd-cell
+  strip; even cells were clean.
+
+## Playable host — pause-strip VGA copy + live BGI text (DDFNT2.CAR font), 2026-07-02 (round 4)
+
+Follow-ups closing the "pause strip / UI text" gaps left by the real-flip present:
+
+- **`show_pause_screen` strip save/restore is a direct VGA 4-plane copy**
+  (view_setup.c; engine 1000:49d7): the engine drives `render_player_view`
+  (descriptor `word00=0` → source `page[table[0]]`, 0x14×1 tiles at 0,0) into the
+  DGROUP 0x9694 save buffer (0x500 bytes, plane-major 320 B/plane) and restores it
+  with `restore_bg_view` (`word0e=0`).  The recon's call sites were dead (guarded on
+  the retired flat `host_framebuffer` path), so pause never restored the strip.  Now:
+  `hv_pause_strip[4*8*40]` models the 0x9694 buffer and the copy runs directly via
+  `host_vga_read4`/`host_vga_put4` + `host_vga_blit_end` against the LIVE
+  `host_page_off_of(0)`.  The descriptor field writes are kept verbatim as structural
+  documentation; the descriptor-driven overlay copy leaf itself is not re-driven.
+  The `set_active_display_page(0)`/`set_sprite_table_ptr(0)` … `(1)`/`(1)` UI bracket
+  around `draw_number`+`draw_icon_row` was already 1:1 (verified against the decomp).
+- **BGI text leaves un-misnomered + implemented** (screens.c / host_render.c;
+  engine 1000:9837 / 1000:9804): the recon had these as
+  `text_clip_leaf_9837(clip_w, clip_h)` / `draw_string_glyphs_9804(x, y)` — WRONG
+  semantics.  Overlay disasm: **9837 → 1ab9:1441 = SET TEXT POSITION** (stores x/y to
+  DGROUP 0x6942/0x6944); **9804 → 1ab9:13ec = DRAW STRING** (walks the NUL-terminated
+  far string; per char 1ab9:13bc range-checks against the font object at DGROUP
+  0x68a2 and dispatches the `palette_mode` glyph handler via `[0x541d]*2+0x6952`;
+  pm=2 handler = 1ab9:1607).  `draw_text_at` (1000:07f0) is therefore
+  `{ set_text_pos(x, y); draw_string(str_off, str_seg); }` — the recon's arg ROUTING
+  was already correct, only names/prototypes changed (screens.c/screens.h/level.c
+  agree; default-build stubs stay NOPs, ctest gates unchanged).
+- **The font is game data, loaded at runtime — never embedded**: the runtime font
+  ptr at DGROUP 0x68a2 is bound by `load_graphics_resources` (1000:0a2c) =
+  `open_resource(4)` on the 0x0090 table base (`init_game_session_state`) → entry
+  DGROUP 0x00b8 = **DDFNT2.CAR** (1987 B), bound via 1000:97df → 1ab9:1330.  Font
+  object: `{first, last, px_height, row_count, spacing, pad, BE u16 offs[], glyphs}`;
+  glyph = `{w_px, h_rows, y_skip, 1-bpp rows...}`, box top = `y - px_height + y_skip`
+  (near-baseline), proportional advance `w_px + font[4]`.  The host loads the same
+  file (`host_load_font`, host_resource.c) from the user's own game files.
+- **RECONSTRUCTION FIDELITY (glyph blit collapse + fg colour)**: the engine's pm=2
+  handler expands each glyph into a 16×16-px 4-plane staging buffer (fg expansion at
+  DGROUP 0x68a6, bg at 0x68ae, both runtime-set through a BGI colour op) and blits it
+  through the 1cec:2d15 codec.  The host collapses this into per-row
+  `host_vga_rmw4` writes to the current draw page; the fg colour was not statically
+  traceable (0x68a6/0x68ae are zero in the image; the colour-op entry 1ab9:14ef has
+  no static xref) — **fg assumed white 0x0F, bg transparent**, matching original
+  captures.  Engine-static string far-ptr segs (0x203b) are remapped to the runtime
+  DGROUP in `host_text_draw_string` (the `*_DGROUP_RUNTIME_SEG` convention).
+- **`show_text_screen` renders its real text** (view_setup.c; engine 1000:11eb): the
+  engine copies the far ptr at DGROUP 0x11ae (statically → the "GAME OVER" string at
+  DGROUP 0x1327) into a stack-local and blits 9 sprite glyphs (frame `ch + 0x175`).
+  The recon previously defaulted every char to space (nothing blitted); now a
+  file-static string + far-ptr pair models 0x1327/0x11ae and the glyph loop reads it
+  (blit seg fixed from the static 0x203b literal to `host_dgroup_seg()`).
+
+Validated: both builds `-wx` warning-free; `validate_screens.sh` 5/5 pixel-exact;
+`validate_screen_fns.sh` 884/884 records PASS (FAIL=0, UNPORTED=0).
+
+### GROUNDED+FIXED (P2 move-state dispatch — the DGROUP 0x870 handler table)
+
+The playable P2 opponent went haywire once its scripted move ran out: the 0x870 dispatch
+(`p2_dispatch_move_state_handler`, the `(*DGROUP:0x870[p2_move_state])()` indirect call in
+`p2_tile_move_check` 1000:4c99) was a link-only NOP stub, so nothing ever re-armed the state
+script when `p2_move_steps_left` hit 0 — `p2_step_scripted_move` walked past the script end and
+`p2_pixel` accumulated garbage (observed live: `(-7131, 7297)`) → wild blits on the P2 levels.
+
+**Grounding (supersedes the earlier "handler bytes are engine level-data / unknown" notes):**
+both P2 handler tables are **statically initialized DGROUP data** in the unpacked image — 16-bit
+NEAR code pointers into seg 1000, read by `CALL word ptr [BX+disp]` (1000:5021 / 1000:4db9); an
+opcode scan of the whole code image finds **no runtime writer** of 0x85c..0x884.
+- `0x85c` (p2_run_move_state_handler, 10 entries): `[1..4]` = `p2_cell_move_up/down/left/right`
+  (1000:5025/503f/5059/506f), `[0]`+`[5..9]` = the compiled **empty fn at 1000:7111** — so the
+  playable's all-no-op seeding of the non-move slots (view_setup.c) IS the faithful table; the
+  previously documented "faithful values unknown" divergence is closed.
+- `0x870` (p2_tile_move_check, 11 entries): `[1]`=`p2_pick_move_priority_a` (4dbf),
+  `[2]`=`p2_pick_move_priority_b` (4e44), `[3]`=`p2_pick_move_priority_c` (4ec9),
+  `[4]`=`p2_ai_dispatch_move` (4f4e), `[5..9]`=`p2_pick_move_priority_a`, `[0]`/`[10]`=1000:7111.
+  All four distinct targets were already reconstructed + differentially validated (Phase-4 T4).
+
+**Fix (game_stubs.c):** under `BUMPY_PLAYABLE` the stub is replaced by the real dispatch — a
+`static void (* const gs_p2_move_handler_tbl[11])(void)` mirroring the image table per-index
+(engine 1000:7111 filler → a local no-op) and the 1:1 unbounded `(*tbl[p2_move_state])()` call
+(states are 1..9 by construction: `p2_set_move_state` callers + the 5..9 random picker).
+RECONSTRUCTION FIDELITY: engine = NEAR code ptrs in DGROUP; recon = C fn-ptr table.  The default
+byte-faithful build keeps the historical NOP stub (`#ifndef BUMPY_PLAYABLE`), so BUMPY.EXE and
+the ctest harnesses (which shim the symbol themselves) are unchanged.
+
+### LABELLED+RECONSTRUCTED (high-score default table — DGROUP 0x8f0)
+
+`render_highscore_table` (1000:57e1) / `highscore_enter_name` (1000:59d3) read the 7-entry
+default high-score table at DGROUP `0x8f0` — `g_highscore_default_table` in the live Ghidra
+project, now typed `HighScoreEntry[7]` (`{ name_off:u16, name_seg:u16, score:dword }`, 8 bytes)
+and the 7 name strings at DGROUP `0x11e6..0x121c` labelled `s_hof_name_big_jim` … `s_hof_name_mike`
+(char[9] each). The table ends exactly at `0x928` (the resource-table base), confirming 7 entries.
+Decoded 1:1 from the unpacked image: `BIG JIM.`=5,000,000 / `SUPER JO`=3,000,000 / `STEVE...`=1,000,000
+/ `WILIAM..`=200,000 / `JOHNNY..`=30,000 / `FRANK...`=4,000 / `MIKE....`=500 (`.` padding renders
+blank — 0x2e→space — except on a freshly-inserted qualifying row).
+
+The recon previously mislabelled the DGROUP 0x8f0 storage (`highscore_name_buf`) as a blank
+"name-entry buffer, 8B/row × 16 rows" and left it zero-initialised, so BUMPYP rendered an empty
+table. Corrected: the comments now identify it as `g_highscore_default_table` storage, the size is
+the real 7 entries (`HIGHSCORE_TABLE_ROWS 16 → 7`), and the 7 name strings + scores are
+reconstructed in `screens.c` (`HighScoreEntry`, `s_hof_name_*`).
+
+RECONSTRUCTION FIDELITY: the original stores this as loader-relocated STATIC data (the DOS EXE
+loader fixes up each entry's name far ptr). The recon cannot statically embed relocated far
+pointers into the `highscore_name_buf` byte storage, so the playable build POPULATES the table at
+startup via `init_highscore_default_table()` (called from the playable `main`, exactly like
+`init_move_scripts` / `init_worldmap_data` / `init_anim_data` relocate their static tables). The
+byte storage is kept as `u8[]` so `render_highscore_table`'s `row*8` far-ptr arithmetic and the
+`screens_ctest` opaque-8-byte "name0" round-trip are unchanged; all playable code is
+`#ifdef BUMPY_PLAYABLE` so the default byte-faithful `BUMPY.EXE` keeps the zero-init storage
+(the data is documented here + in Ghidra, but the never-executed build does not run the initializer).
+
+Validated: both builds `-wx` warning-free; `validate_screen_fns.sh` 884/884 records PASS
+(FAIL=0, UNPORTED=0, highscore scenario 52/52).
+
+**Runtime verification (2026-07-04, playable capture).** A DGROUP memdump of `highscore_name_buf`
+at the live highscore screen (patched dosbox-x, `BUMPYCAP_MEMDUMP` at DGROUP 0x4f5c+0x6518)
+confirms `init_highscore_default_table` populates the table 1:1: all 7 entries carry a valid name
+far ptr (seg=DGROUP 0x4f5c, offsets 0x3740/0x3749/… 9 bytes apart) + the exact scores
+(5,000,000 / 3,000,000 / 1,000,000 / 200,000 / 30,000 / 4,000 / 500). The `wdis` disassembly of
+`play/screens.obj` shows the far-pointer relocations + score bytes are correct, and `play/main.obj`
+emits the `call init_highscore_default_table_`. **The entries ARE loaded.**
+
+RENDER FIXED (2026-07-04, `level.c` + `host_render.c`, playable): the highscore names + scores
+(and the menu-select/"password" code screen + the level-intro title — all sharing the
+`p1_sprite[2]=char+0x175` → `blit_sprite` glyph path) now render as legible large-font text.
+Capture-verified: the HALL OF FAME shows BIG JIM 5,000,000 … MIKE 500, matching the reconstructed
+table (shot nonzero 6318 → 12218). The fix has two parts, both matching what the engine does at
+session init (`init_title_graphics` → `process_sprites` loads the main sprite bank once, before the
+menu):
+
+1. `level_preload_session_sprites()` (`level.c`, called from the playable `main` before the menu)
+   loads + transforms `BUMSPJEU.BIN` into `g_bank_buf` and calls `host_render_bind` at BOOT — so
+   `hr_dg` / `hr_bank` are non-NULL for the front-end screens (the recon had deferred the bank load
+   to `start_level`, leaving `hr_blit_obj`'s `if (hr_dg==0) return;` NOP active at the menu). Level
+   buffers are `==0`-guarded, so `start_level` reuses these (no extra peak memory). The 256 KB→64 KB
+   `HOST_FB_16K` framebuffer freed the conventional memory this needs.
+2. `hr_blit_obj` (`host_render.c`) routes by the obj's frame-table ptr (obj +6/+8): the front-end
+   screens carry the engine's DGROUP placeholder ptrs (cursor `0x6c2c` = FLECHE, main-bank source
+   `0xa0c6` = `DAT_a0c6`), whose linear is BELOW the heap bank and is NOT a valid host bank ptr — so
+   `sprite_prepare_frame` computed a wild `ent_off` and every glyph culled. Now: `0x6c2c` → skip
+   (the cursor is drawn by `host_blit_cursor`); any placeholder below `hr_bank_base_lin` → the host
+   main bank via the guard-free `entity_draw_screen_sprite`; a real in-level bank ptr
+   (`ftbl_lin >= hr_bank_base_lin`) → the validated `entity_draw_p1`/`p2` path, byte-for-byte
+   unchanged. RECONSTRUCTION FIDELITY: the recon's single heap main bank stands in for the engine's
+   DGROUP-relative bank; the cursor/main-bank placeholder offsets are mapped to host banks.
+
+The engine's `process_sprites` itself stays a NOP (its palette_mode-2 VGA table transform is done by
+`sprite_bank_load_transform`); task #18's remaining pieces are `play_intro_animation_loop` /
+`wait_50_frames`, not the glyph render. Both builds `-wx` warning-free; `validate_screen_fns` 884/884;
+`validate_integration` PASS.

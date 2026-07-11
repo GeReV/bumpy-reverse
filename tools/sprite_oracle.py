@@ -445,6 +445,7 @@ def main() -> None:
     DGWIN_LEN = 0x2000
     BLIT_ORACLE = bool(os.environ.get("BLIT_ORACLE"))
     MAX_BLIT_CAPS = int(os.environ.get("BLIT_ORACLE_CAPS", "24"))
+    BLIT_MIN_SHIFT = int(os.environ.get("BLIT_MIN_SHIFT", "0"))
     SRC_CHUNK = 0x4000
     blit_caps: list = []
     pending: dict = {}
@@ -475,6 +476,9 @@ def main() -> None:
         ds = uc.reg_read(UC_X86_REG_DS) & 0xFFFF
         si = uc.reg_read(UC_X86_REG_SI) & 0xFFFF
         desc = bytes(uc.mem_read((ds * 16 + si) & 0xFFFFF, 0x20))
+        if desc[0x16] < BLIT_MIN_SHIFT:
+            pending.clear()
+            return
         src_off, src_seg = struct.unpack_from("<HH", desc, 0)
         src_lin = (src_seg * 16 + src_off) & 0xFFFFF
         try:
@@ -496,6 +500,42 @@ def main() -> None:
     uc.hook_add(UC_HOOK_CODE, hook_setup, None, SETUP_LIN, SETUP_LIN)
     uc.hook_add(UC_HOOK_CODE, hook_planar, None, PLANAR_LIN, PLANAR_LIN)
     uc.hook_add(UC_HOOK_CODE, hook_planar_exit, None, PLANAR_EXIT_LIN, PLANAR_EXIT_LIN)
+
+    # --- BLIT DIAG: for EVERY 1cec:10e1 call, tally shift (desc[0x16]), sel
+    # (desc[0x15]), col-count (desc[0x10]) and the template-select flag at
+    # cs:1cec:0x320e & 0x40 (template B == planes 2<->3 swapped).  This is the
+    # decisive probe: does any gameplay blit use shift>=2 and/or template B?
+    FLAG320E_LIN = 0x1100 + (0x1cec - 0x1000) * 16 + 0x320e
+    blit_diag: dict = {}
+    blit_list: list = []          # compact per-blit descriptor log (for BLITLOG diff)
+
+    def hook_planar_diag(uc, addr, size, _) -> None:
+        ds = uc.reg_read(UC_X86_REG_DS) & 0xFFFF
+        si = uc.reg_read(UC_X86_REG_SI) & 0xFFFF
+        try:
+            d = bytes(uc.mem_read((ds * 16 + si) & 0xFFFFF, 0x18))
+            flag = uc.mem_read(FLAG320E_LIN & 0xFFFFF, 1)[0]
+        except UcError:
+            return
+        shift = d[0x16]
+        sel = d[0x15]
+        cols = d[0x10] | (d[0x11] << 8)
+        key = (shift, sel, flag & 0x40)
+        rec = blit_diag.setdefault(key, {"n": 0, "cols": set()})
+        rec["n"] += 1
+        rec["cols"].add(cols)
+        # Compact descriptor record (same 16-byte layout as HOST_BLITLOG BLITLOG.BIN):
+        # voff, dst_stride, full_w, cols, rows, shift, clip, src_lin.
+        if tr.get("watch") and len(blit_list) < 4096:
+            dst_lin = ((d[0x0a] | (d[0x0b] << 8)) * 16 + (d[0x08] | (d[0x09] << 8))) & 0xFFFFF
+            voff = (dst_lin - 0xA0000) & 0xFFFF
+            full_w = d[0x0c] | (d[0x0d] << 8)
+            dst_stride = d[0x0e] | (d[0x0f] << 8)
+            rows = d[0x12] | (d[0x13] << 8)
+            src_lin = (d[2] | (d[3] << 8)) * 16 + (d[0] | (d[1] << 8))
+            blit_list.append((voff, dst_stride, full_w, cols, rows, shift, d[0x17], src_lin & 0xFFFFFF))
+
+    uc.hook_add(UC_HOOK_CODE, hook_planar_diag, None, PLANAR_LIN, PLANAR_LIN)
 
     # --- BG ORACLE (6a): the background TILE build. restore_bg_tile_run
     # (1000:0a90) is called per playfield cell during start_level; it reads the
@@ -861,6 +901,19 @@ def main() -> None:
     for it, args in dec2["samples"]:
         print("   [dec2bpp] args=%s" % args, flush=True)
     print("[sprite_oracle] blit_sprite_vga(1cec:31b7 @%#x) calls=%d" % (BLITVGA_LIN, bvga["calls"]), flush=True)
+    print("[sprite_oracle] BLIT DIAG (shift, sel, 320e&0x40) -> count [cols]:", flush=True)
+    for key in sorted(blit_diag):
+        shift, sel, tflag = key
+        rec = blit_diag[key]
+        print("   shift=%d sel=%d tmplB(320e&40)=%#x  n=%d  cols=%s" % (
+            shift, sel, tflag, rec["n"], sorted(rec["cols"])), flush=True)
+    # Dump the compact engine blit list (BLITLOG.BIN-compatible 16-byte records).
+    bl_path = os.path.join(OUT_DIR, "blitlist_engine.bin")
+    with open(bl_path, "wb") as bf:
+        for (voff, ds, fw, cols, rows, shift, clip, slin) in blit_list:
+            bf.write(struct.pack("<HHHHHBBI", voff & 0xFFFF, ds & 0xFFFF, fw & 0xFFFF,
+                                 cols & 0xFFFF, rows & 0xFFFF, shift & 0xFF, clip & 0xFF, slin & 0xFFFFFFFF))
+    print("[sprite_oracle] wrote %s : %d engine blits" % (bl_path, len(blit_list)), flush=True)
     if bvga.get("dump"):
         ov_path = os.path.join(OUT_DIR, "ov2000.bin")
         with open(ov_path, "wb") as f:

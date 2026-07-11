@@ -42,6 +42,14 @@ typedef int32_t  s32;
 /* host.h hardware constants the host layer references (we are not including the
    real dos.h-backed bumpy.h, so provide what host_render.c needs). */
 #define halloc(count, size)  calloc((size_t)(count), (size_t)(size))
+/* DOS intrinsics host_render.c's playable block uses (BUMPY_H guards the real
+   <i86.h>/<conio.h>/<malloc.h> out): a flat >1 MB arena backs MK_FP so a000-window
+   far writes land in valid host memory; port I/O is a no-op. */
+#define HC_FARMEM_BYTES 0x110000UL
+static u8 hc_far_mem[HC_FARMEM_BYTES];
+#define MK_FP(seg, off) ((void *)(hc_far_mem + (((u32)(u16)(seg) << 4) + (u16)(off))))
+#define _fmemset(p, v, n) memset((void *)(p), (v), (size_t)(n))
+static void outp(u16 port, unsigned val) { (void)port; (void)val; }
 
 #include "../src/bg_render.c"
 #include "../src/sprite_blit.c"
@@ -49,6 +57,21 @@ typedef int32_t  s32;
 #include "../src/sprite_anim.c"
 #include "../src/bgi_overlay.c"
 #include "../src/entity.c"
+
+/* Cross-module symbols host_render.c's playable block references but this harness's
+   compose scope never exercises: the anim-erase leaf inputs (anim.c/view_setup.c) and
+   the playable-only cursor screen-sprite leaf (entity.c compiles WITHOUT the flag
+   here, so its playable-gated body is absent).  Link-only stubs. */
+u8 __far *anim_a_erase_view;
+const u8 __far *host_clean_bg(void) { return (const u8 __far *)0; }
+const u8 __far *host_font_ptr(void) { return (const u8 __far *)0; }  /* text path: NOP (host_resource.c out of scope) */
+struct sprite_view_fwd;   /* matches entity.c's sprite_view by pointer only */
+void entity_draw_screen_sprite(u8 __huge *planes, u16 pixel_x, u16 pixel_y, u16 frame,
+                               u16 ftbl_off, u16 ftbl_seg,
+                               u8 __huge *bank, u32 bank_base_lin,
+                               const sprite_view *view)
+{ (void)planes;(void)pixel_x;(void)pixel_y;(void)frame;(void)ftbl_off;(void)ftbl_seg;
+  (void)bank;(void)bank_base_lin;(void)view; }
 
 /* Pull in the real host render layer under the playable flag.  host.h is included
    by host_render.c; with BUMPY_H defined its #include "bumpy.h" is a no-op, and the
@@ -153,11 +176,14 @@ int main(int argc, char **argv)
     if (host_framebuffer == NULL) { fprintf(stderr, "fb alloc failed\n"); return 2; }
     host_render_bind((u8 *)bank, BANK_BASE_LIN, (const u8 *)dg);
 
-    /* Sanity: page table points page0 → off 0x0000 (a000), page1 → off 0x2000. */
-    if (host_sprite_table_off[1] != 0x0000u || host_sprite_table_off[0] != 0x2000u) {
+    /* Sanity: page table mirrors the engine's sprite_table_base (DGROUP 0x5415):
+       [0] = a200:0000, [1] = a000:0000 — check via the LINEAR page offsets
+       (seg<<4 + off − 0xA0000), the representation the 2026-07-02 double-buffer
+       fix normalized (the old off[0]==0x2000 pairing with seg A200 double-counted). */
+    if (host_page_off_of(1) != 0x0000u || host_page_off_of(0) != 0x2000u) {
         fprintf(stderr, "ASSERT FAIL: page table offsets wrong\n"); rc = 1;
     }
-    if (host_cur_sprite_data_off != 0x0000u || host_cur_sprite_data_seg != 0xa000u) {
+    if (host_draw_page_off() != 0x0000u) {
         fprintf(stderr, "ASSERT FAIL: cur_sprite_data not page0\n"); rc = 1;
     }
 

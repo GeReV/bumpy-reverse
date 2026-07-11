@@ -55,7 +55,7 @@ OBJS=(main.obj game.obj game_stubs.obj
       vec.obj op12.obj video.obj
       sprite.obj sprite_anim.obj sprite_chain.obj sprite_blit.obj
       bg_render.obj entity.obj bgi_overlay.obj
-      dosio.obj prng.obj globals.obj
+      dosio.obj prng.obj globals.obj worldmap_data.obj anim_data.obj
       bvec_buf1.obj bvec_buf2.obj)
 
 # ── CARVE-OUT ALLOWLIST: the ONLY function symbols game_stubs.obj may define ──
@@ -67,7 +67,7 @@ CARVEOUT_ALLOWLIST=(
   set_disk_swap_callback init_timer_resource_table install_interrupt_handler
   init_joystick_handlers mouse_reset init_sound_tables init_misc_7bd7
   init_display_97a4 init_misc_7bbd init_display_97f1 init_crtc_window
-  set_display_page set_palette_mode set_resource_table clear_viewport
+  set_display_page set_text_color set_resource_table clear_viewport
   reset_opaque_session_globals
   # engine standalone loader / never-decompiled round reset
   load_current_level_data reset_round_counters

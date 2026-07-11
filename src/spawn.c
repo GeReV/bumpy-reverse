@@ -117,6 +117,12 @@ extern u16 host_dgroup_seg(void);   /* host_render.c — loaded image's real DGR
 #endif
 #endif
 
+#ifdef BUMPY_PLAYABLE
+extern void host_render_set_spawn(u8 active);   /* host_render.c — suppress the anim
+                                                   clean-bg repaint during the spawn scan
+                                                   (world-2 platform over-paint fix, F1) */
+#endif
+
 /* NOTE: the decomp opens with the Borland stack-overflow-check prologue
    (CMP SP,stack_check_limit; CALL FUN_1000_ab83).  That is a non-semantic
    compiler-emitted guard, omitted here as throughout the reconstruction. */
@@ -133,6 +139,13 @@ void spawn_and_draw_level_entities(void)
     u8         type;             /* the 0x3d3a / 0x4086 remap of cv                  */
     u16 __far *descfar;          /* local_a / local_e — the A/B far-ptr descriptor   */
     u8  __far *p1d;              /* p1_sprite layer-C blit descriptor (0x792e pointee)*/
+
+#ifdef BUMPY_PLAYABLE
+    /* HOST-ONLY (F1): gate the anim clean-bg repaint OFF for the whole spawn scan so a
+       neighbour cell's erase-before-blit cannot over-paint a freshly-blitted layer-A
+       structure (world-2 platform).  Faithful build unaffected.  See host_render.c. */
+    host_render_set_spawn(1u);
+#endif
 
     /* ── 1. CHANNEL RESET / ACTIVATE (asm 2a89..2af1) ──────────────────────────────
        Zero the active byte of the 3 A + 4 B records, then activate slot 0 of each
@@ -238,4 +251,8 @@ void spawn_and_draw_level_entities(void)
     rec_a->active = 0;   /* *local_12 = 0 */
     rec_b->frame  = 0;   /* puVar4[6] = 0 */
     rec_b->active = 0;   /* *local_16 = 0 */
+
+#ifdef BUMPY_PLAYABLE
+    host_render_set_spawn(0u);   /* re-enable the per-tick anim erase (trail-fix) */
+#endif
 }

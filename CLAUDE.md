@@ -16,6 +16,25 @@ clean, runnable rewrite). A from-scratch reimplementation is a legitimate but
 tree — serves documenting the original faithfully; prefer fidelity to the binary over
 convenient abstractions, and **document every deviation** where 1:1 isn't achievable.
 
+### Adhere to the binary — never invent
+
+**Before reconstructing, fixing, or extending ANY behavior, first establish what the
+binary actually does** — decompile/disassemble the relevant function(s) (Ghidra MCP +
+the raw asm) and reproduce *that*. Do **not** invent a mechanism, data layout, buffer
+scheme, or "equivalent" approximation out of convenience or guesswork. Concretely:
+
+- **Ground every change in the asm/decomp.** If you can't point to the original code
+  (or data) a change reproduces, you are inventing — stop and go read the binary.
+- **Match the original's structure and data, not just the observable output.** Reuse
+  the original's buffers, offsets, tables, and control flow; don't substitute your own.
+- **When 1:1 is genuinely impossible** (e.g. the playable host's reduced memory, the
+  self-modifying BGI overlay that doesn't decompile), **surface the constraint and ask
+  / document it** — do not silently swap in an invented workaround. Every unavoidable
+  deviation gets a `RECONSTRUCTION FIDELITY` note + a `docs/reconstruction-fidelity.md`
+  entry, and stays clearly labelled as a deviation.
+- **Don't guess** the ~60 unnamed functions or any uncertain data; verify against the
+  binary instead.
+
 The original game files are copyright and **must never be committed**. They live
 under the git-ignored `local/` tree; users supply their own.
 

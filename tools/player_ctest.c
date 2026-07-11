@@ -65,8 +65,8 @@ static u8 synth_tilemap[TILEMAP_SIZE];
 u8 __far  *tilemap = synth_tilemap;
 
 /* Leaf-call trace: each stub bumps its counter so tests can assert routing. */
-static int n_play_sound, n_step_walk_anim;
-static int n_play_action_sound, n_play_walk_anim_default;
+static int n_play_sound;
+static int n_play_action_sound;
 static int n_fun_4802;
 
 void play_sound(u8 id) { (void)id; n_play_sound++; }
@@ -74,9 +74,10 @@ void play_action_sound(void) { n_play_action_sound++; }
 /* apply_contact_action (1000:6a89) is now RECONSTRUCTED in src/player.c (Phase-9 T1)
    and pulled in via the #include below — no host stub (would be a dup symbol).  The
    E5b routing check asserts it fired by observing anim_b_loop_idx (last_contact_action
-   @ DGROUP 0x8566), which the real fn latches to its action arg on entry. */
-void play_walk_anim_default(void) { n_play_walk_anim_default++; }
-void step_walk_anim(u8 a, u8 p, u16 fo, u16 fs) { (void)a;(void)p;(void)fo;(void)fs; n_step_walk_anim++; }
+   @ DGROUP 0x8566), which the real fn latches to its action arg on entry.
+   Likewise step_walk_anim / play_walk_anim_default and the walk/move-step leaves below
+   are now RECONSTRUCTED in player.c (movement clusters 1-2) — stubs removed; E5a
+   observes step_walk_anim via its real anim_frame_ctr increment. */
 void FUN_1000_4802(void) { n_fun_4802++; }
 /* Phase-2 T3: land_on_tile_below / check_tile_below_ladder_or_land are DEFINED in
  * player.c.  Phase-2 T4: the move-step substates + their two delegates
@@ -86,6 +87,27 @@ void FUN_1000_4802(void) { n_fun_4802++; }
 void apply_cell_animation(u8 fx) { (void)fx; }
 /* run_physics_settle (player.c) reads these cross-module DGROUP bytes (game.c). */
 u8 session_continue_flag, frame_abort_flag, settle_countdown;
+
+/* restore_bg_pending (player.c) now routes its deferred item-erase through the
+   clean-bg leaf (owned by anim.c/host_render.c, not included here) — link stub. */
+void anim_restore_bg_view_leaf(u8 __far *view) { (void)view; }
+
+/* reset_round_counters (player.c, 1000:31de — reconstructed) resets these
+   cross-module globals (game.c / anim.c / items.c / player2.c / game_stubs.c);
+   defined here so the harness links (their values are out of this gate's scope). */
+u8        deferred_contact_countdown;   /* game.c   0x79b7 */
+u8        deferred_contact_buf[16];     /* game.c   0x0886 */
+u8 __far *deferred_contact_ptr;         /* game.c   0x9ba6/0x9ba8 */
+u8        dgroup_flag_a1a9;             /* game_stubs.c 0xa1a9 */
+u8        g_anim_cur_cmd_byte;          /* anim.c   0x8578 */
+u8        anim_b_cur_frame_byte;        /* anim.c   0x8579 */
+u8        g_anim_a_active_mirror;       /* anim.c   0x8e8b */
+u8        g_anim_b_active_mirror;       /* anim.c   0x8e8c */
+u8        level_complete_anim_counter;  /* items.c  0x8550 */
+u8        p2_move_steps_left;           /* player2.c 0xa1b0 */
+u8        p2_step_idx;                  /* player2.c 0x8563 */
+u8        p2_move_toggle;               /* player2.c 0x8243 */
+void      p2_set_pixel_from_cell(void) { }   /* player2.c leaf (out of scope) */
 
 /* Phase-9 T2: cross-module callees pulled in by the move_step_dispatch_tbl resolver +
    handle_gameplay_input (sound.c / items.c / input.c / player2.c / game.c / screens.c).
@@ -109,16 +131,12 @@ u8   pvp_collision_flag;
  * *_walk_contact leaves are now SCOPE functions DEFINED in player.c (6c) — NOT
  * stubbed here. */
 
-/* Out-of-scope handler-table targets (→ T6c) — host stubs so the table links. */
-void move_walk_right_anim_step(void) { }
-void enter_mode_0b_jump_start(void) { }
-void move_anim_step_to_mode0c(void) { }
-void move_step_check_walkable(void) { }
-void move_step_dispatch_input(void) { }
+/* Out-of-scope handler-table targets (→ T6c) — host stubs so the table links.
+   (move_walk_right_anim_step / enter_mode_0b_jump_start / move_anim_step_to_mode0c /
+   move_step_check_walkable / move_step_dispatch_input / p1_input_dispatch_bit10 /
+   advance_physics_freeze are now DEFINED in player.c — stubs removed.) */
 void teleport_to_next_exit_tile(void) { }
-void p1_input_dispatch_bit10(void) { }
 void FUN_1000_4437(void) { }
-void advance_physics_freeze(void) { }
 void FUN_1000_1e3d(void) { }
 
 /* channel-B anim globals apply_contact_action (player.c, Phase-9 T1) references
@@ -369,11 +387,11 @@ int main(void)
        dispatch_move_step, so pre-install a safe step slot for game_mode 1. */
     {
         reset_state();
-        n_step_walk_anim = 0;
+        anim_frame_ctr = 0;            /* real step_walk_anim increments this per call */
         game_mode = 0x23;
         input_state = 0;
         gamemode_23_walk();
-        CHECK(n_step_walk_anim == 1, "E5a walk anim advanced (idle)");
+        CHECK(anim_frame_ctr == 1, "E5a walk anim advanced (idle)");
         reset_state();
         game_mode = 0x23;
         input_state = 2;               /* right held */

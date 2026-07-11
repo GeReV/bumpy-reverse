@@ -94,11 +94,15 @@ void p2_dispatch_move_state_handler(void) {}
 u8 __far *p1_sprite;                          /* anim.c — DGROUP 0x8884 (host backing) */
 void play_sound(u8 id) { (void)id; }
 void play_action_sound(void) {}
-void play_walk_anim_default(void) {}
-void step_walk_anim(u8 a, u8 p, u16 fo, u16 fs) { (void)a;(void)p;(void)fo;(void)fs; }
+/* play_walk_anim_default / step_walk_anim + the walk/move-step leaves below are now
+   RECONSTRUCTED in player.c (movement clusters 1-2) — stubs removed. */
 void FUN_1000_4802(void) {}
 void apply_cell_animation(u8 fx) { (void)fx; }
 u8 session_continue_flag, frame_abort_flag, settle_countdown;
+
+/* restore_bg_pending (player.c) now routes its deferred item-erase through the
+   clean-bg leaf (owned by anim.c/host_render.c, not included here) — link stub. */
+void anim_restore_bg_view_leaf(u8 __far *view) { (void)view; }
 void play_exit_sound(void) {}
 void play_contact_sound(void) {}
 void play_pickup_sound(void) {}
@@ -111,16 +115,23 @@ u8   get_key_state(u8 sc) { (void)sc; return 0; }
 void poll_input(void) {}
 u8   timing_flag_accumulator;
 u8   round_continue_flag;
-void move_walk_right_anim_step(void) {}
-void enter_mode_0b_jump_start(void) {}
-void move_anim_step_to_mode0c(void) {}
-void move_step_check_walkable(void) {}
-void move_step_dispatch_input(void) {}
 void teleport_to_next_exit_tile(void) {}
-void p1_input_dispatch_bit10(void) {}
 void FUN_1000_4437(void) {}
-void advance_physics_freeze(void) {}
 void FUN_1000_1e3d(void) {}
+
+/* reset_round_counters (player.c, 1000:31de — reconstructed) resets these
+   cross-module globals; defined here so the harness links. */
+u8        deferred_contact_countdown;   /* game.c   0x79b7 */
+u8        deferred_contact_buf[16];     /* game.c   0x0886 */
+u8 __far *deferred_contact_ptr;         /* game.c   0x9ba6/0x9ba8 */
+u8        dgroup_flag_a1a9;             /* game_stubs.c 0xa1a9 */
+u8        g_anim_cur_cmd_byte;          /* anim.c   0x8578 */
+u8        anim_b_cur_frame_byte;        /* anim.c   0x8579 */
+u8        g_anim_a_active_mirror;       /* anim.c   0x8e8b */
+u8        g_anim_b_active_mirror;       /* anim.c   0x8e8c */
+u8        level_complete_anim_counter;  /* items.c  0x8550 */
+/* (p2_move_steps_left / p2_step_idx / p2_move_toggle / p2_set_pixel_from_cell come
+   from player2.c, which this harness includes.) */
 
 /* channel-B anim globals apply_contact_action (player.c) references (OWNED by anim.c
    in the real build). */

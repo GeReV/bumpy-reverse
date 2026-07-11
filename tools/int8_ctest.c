@@ -142,8 +142,8 @@ u8 __far *p2_cell_coord_tbl;
  *    invoke them. ───────────────────────────────────────────────────────────────── */
 void play_sound(u8 id) { (void)id; }
 void play_action_sound(void) {}
-void play_walk_anim_default(void) {}
-void step_walk_anim(u8 a, u8 p, u16 fo, u16 fs) { (void)a;(void)p;(void)fo;(void)fs; }
+/* play_walk_anim_default / step_walk_anim are RECONSTRUCTED in player.c (cluster-2);
+   no host stub here — the replay runs the real bodies. */
 void FUN_1000_4802(void) {}
 void play_exit_sound(void) {}
 void play_contact_sound(void) {}
@@ -155,16 +155,16 @@ void play_event_sound_64c1(void) {}
 void input_state_clear(void) { input_state = 0; }
 u8   get_key_state(u8 sc) { (void)sc; return 0; }
 u8   timing_flag_accumulator;
-void move_walk_right_anim_step(void) {}
-void enter_mode_0b_jump_start(void) {}
-void move_anim_step_to_mode0c(void) {}
-void move_step_check_walkable(void) {}
-void move_step_dispatch_input(void) {}
-void p1_input_dispatch_bit10(void) {}
+/* move_walk_right_anim_step / enter_mode_0b_jump_start / move_anim_step_to_mode0c /
+   move_step_check_walkable / move_step_dispatch_input / p1_input_dispatch_bit10 /
+   advance_physics_freeze are RECONSTRUCTED in player.c (cluster-2) — no host stub;
+   the replay runs the real movement/anim bodies (this is what the trace must exercise). */
 void FUN_1000_4437(void) {}
-void advance_physics_freeze(void) {}
 void FUN_1000_1e3d(void) {}
 void p2_dispatch_move_state_handler(void) {}
+/* DGROUP globals owned by game_stubs.c (not included here) that the cluster-2
+   reconstructed bodies now reference — host-define them so the replay links. */
+u8 dgroup_flag_a1a9;     /* 0xa1a9 — round-activate flag */
 u8   pvp_collision_flag;
 u8   mode_script_tbl[0x40 * 4];
 void setup_fullscreen_view(void) {}
@@ -215,18 +215,9 @@ void game_post_input(void);
 #include "int8_extracted.h"
 #endif
 
-/* p1_set_pixel_from_cell (items.c calls it; reconstructed in player.c in the real
-   build, but the host player.c include does not provide it — defined here AFTER the
-   TUs so p1_cell/move_step_count/p1_pixel_* resolve to the included globals).
-   Faithful host model (mirrors items_ctest.c): derives the cell coords analytically. */
-void p1_set_pixel_from_cell(void)
-{
-    u8 row = (u8)(p1_cell >> 3);
-    u8 col = (u8)(p1_cell - (u8)(row * 8));
-    move_step_count = col;
-    p1_pixel_x = (s16)((u16)col * 40u + 8u) + 7;
-    p1_pixel_y = (s16)((u16)row * 32u + 8u) + 0xf;
-}
+/* p1_set_pixel_from_cell is now RECONSTRUCTED in player.c (included above) — the
+   host stub that used to live here (analytical mirror of items_ctest.c) is removed
+   so the replay uses the real reconstructed body. */
 
 /* ════════════════════════════════════════════════════════════════════════════
  *  Far-ptr DESCRIPTOR backing — the view / sprite-object / pos-table DGROUP far

@@ -145,7 +145,7 @@ index 5ec90e1..ee12d0f 100644
 +				FILE *sf = fopen(shot_out, "wb");
 +				if (sf) {
 +					unsigned st = ((unsigned)vga.crtc.start_address_high << 8) | (unsigned)vga.crtc.start_address_low;
-+					unsigned poff = (st << 1) & 0x3FFFu;
++					unsigned poff = st & 0x3FFFu;   /* byte-addressed CRTC start (mode 0x0D): start value == displayed plane byte offset (page0=0x0000, page1=0x2000). The old (st<<1)&0x3FFF was a word-addr bug that always read page 0 -> misread any page-1-displayed frame (e.g. the highscore HALL OF FAME). See src/host/host_video.c CRTC_PAGE1_ADDR. */
 +					const uint32_t pm = vga.mem.memmask ? vga.mem.memmask : 0xFFFFFu;
 +					unsigned plane, i, c;
 +					for (plane = 0; plane < 4u; plane++)

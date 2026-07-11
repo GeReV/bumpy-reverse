@@ -42,6 +42,14 @@ typedef int32_t  s32;
    handler index or null script entry — never on the valid handler 0 path. */
 int dos_abort(void) { fprintf(stderr, "dos_abort reached (unexpected)\n"); exit(3); return 0; }
 
+/* Port-I/O shim for the joystick path (input.c reads game port 0x201 + PIT 0x40 via
+   conio inp(); the keyboard-only replay never enters that path — link-only).  Bit 4
+   alternates so both PIT-edge wait loops in read_joystick_axes terminate if ever
+   called; the joystick probe then times out exactly like hardware with no stick. */
+static unsigned g_inp_toggle;
+static unsigned inp(u16 port) { (void)port; g_inp_toggle ^= 0x10u; return 0xefu | g_inp_toggle; }
+static void     outp(u16 port, unsigned val) { (void)port; (void)val; }
+
 #include "../src/input.c"
 
 /* ── golden-trace layout (see tools/replay_check.py header) ──────────────────── */

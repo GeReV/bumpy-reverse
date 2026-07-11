@@ -210,6 +210,13 @@ void anim_blit_sprite_leaf(u16 obj_off, u16 obj_seg) { (void)obj_off; (void)obj_
 #define FAR_MEM_BYTES  (0x140000u)   /* > 1 MB linear, covers seg<<4 + off */
 static u8 far_mem[FAR_MEM_BYTES];
 #define MK_FP(seg, off) ((void *)(far_mem + (((u32)(u16)(seg) << 4) + (u16)(off))))
+/* FP_OFF/FP_SEG host model (compute_move_descriptor_ptr uses them): split a pointer
+ * INSIDE far_mem into the (seg,off) pair MK_FP round-trips; pointers outside the
+ * arena (e.g. host arrays) yield a truncated pair — only reachable on paths this
+ * gate does not replay (link-only). */
+#define FP_LIN(p)   ((u32)(size_t)((const u8 *)(const void *)(p) - far_mem))
+#define FP_OFF(p)   ((u16)(FP_LIN(p) & 0xfu))
+#define FP_SEG(p)   ((u16)(FP_LIN(p) >> 4))
 
 #include "../src/screens.c"
 
@@ -230,6 +237,41 @@ HOST_UNUSED u16 score_lo;                    /* game.c  0xa0d4 */
 HOST_UNUSED u16 score_hi;                    /* game.c  0xa0d6 */
 HOST_UNUSED u8  frame_abort_flag;            /* game.c  0x928d (SNAP game_state_928d) */
 HOST_UNUSED u8 __far *p1_sprite;             /* anim.c  0x8884 — blit-descriptor far ptr */
+
+/* Cross-module symbols pulled in by the reconstructed level-intro / HUD / anim-seq
+   screen fns (p1_animate_frame, draw_icon_row, intro_start_level, level_intro_screen):
+   engine globals owned by player.c/game.c/anim.c/items.c/sound.c/worldmap_data.c and
+   leaf fns this gate does not replay — link-only host backing. */
+HOST_UNUSED u8        game_mode;                  /* player.c 0x8240 */
+HOST_UNUSED u8        p1_move_steps_left;         /* player.c 0xa1ae */
+HOST_UNUSED u16 __far *p1_move_script;            /* player.c 0xa1ac */
+HOST_UNUSED s16       p1_grid_x_new;              /* player.c 0x9d36 */
+HOST_UNUSED s16       p1_grid_y_new;              /* player.c 0x9d38 */
+/* move_descriptor_table must point INSIDE far_mem (its reads go through the
+   MK_FP/FP_OFF round-trip) at a 0xff-filled region: 0xff is the entry-list
+   TERMINATOR, so the intro move/anim loops see an empty list and terminate
+   (zero-filled memory has no terminator → infinite scan). */
+HOST_UNUSED u8 __far *move_descriptor_table;      /* level.c  0x8246 */
+static void __attribute__((constructor)) hc_init_move_desc_tbl(void)
+{
+    memset(far_mem + 0x100, 0xff, 0x200);
+    move_descriptor_table = (u8 __far *)(far_mem + 0x100);
+}
+HOST_UNUSED u8 __far *hud_icon_sprite_ptr;        /* anim.c   HUD icon obj */
+HOST_UNUSED u8        settle_countdown;           /* game.c   0x791a (icon-row count) */
+HOST_UNUSED s16       sound_device_state;         /* sound.c  0x689c */
+void erase_p1_view(void)                  { }     /* player.c 1000:19e4 */
+char p1_step_scripted_move(void)                       /* player.c 1000:13df */
+{
+    /* Consume one scripted step so intro_start_level's walk loop terminates
+       (the real fn advances the script and decrements p1_move_steps_left). */
+    if (p1_move_steps_left != 0u) { p1_move_steps_left--; }
+    return 0;
+}
+void play_sound(u8 id)                    { (void)id; }  /* sound.c 1000:6e11 */
+void rotate_timing_flags_and_wait(void)   { }     /* game.c 1000:1349 */
+static u16 hc_walk_script[66];
+u16 __far *intro_walk_script(void)        { return hc_walk_script; }  /* worldmap_data.c */
 
 /* ── HOST input-script REPLAY (the run_main_menu cursor STATE MACHINE gate) ─────────
  *  src/screens.c's menu / state-machine loops drive cursor/selection by polling input:
@@ -258,6 +300,10 @@ HOST_UNUSED void present_frame(u8 page) { (void)page; }
 HOST_UNUSED void init_fullscreen_view_desc(u8 mode, u8 flag) { (void)mode; (void)flag; }
 HOST_UNUSED void wait_keypress(void) { }
 HOST_UNUSED void set_resource_table(u16 off, u16 seg) { (void)off; (void)seg; }
+/* process_sprites (default build) now calls the faithful sprite_proc_dispatch
+ * (sprite_anim.c, __far/DOS-only) — the native ctest does not link that module, so
+ * stub the dispatch here (this harness never exercises the load-time sprite prep). */
+HOST_UNUSED void sprite_proc_dispatch(u16 a, u16 b) { (void)a; (void)b; }
 /* show_highscore_screen is now a REAL ported fn in screens.c (T5) — NOT a host leaf. */
 HOST_UNUSED void poll_input(void)
 {
@@ -281,7 +327,7 @@ HOST_UNUSED u16  p1_pixel_x;        /* entity/level player state */
 HOST_UNUSED u16  p1_pixel_y;
 HOST_UNUSED u16  p1_start_x;
 HOST_UNUSED u16  p1_start_y;
-HOST_UNUSED u8   p1_move_anim;
+HOST_UNUSED u16  p1_move_anim;   /* WORD @0x824a (engine 16-bit; see player.c) */
 HOST_UNUSED u8   current_entity_index;
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -780,8 +826,9 @@ static void wrap_draw_number(void)
 static void wrap_draw_text_at(void)
 {
     const record_t *r = g_cur_rec;
-    /* draw_text_at(x, y, clip_w, clip_h) — writes no modeled descriptor (BGI text); the
-     *  descriptor gate confirms it leaves the view/p1 descriptors untouched. */
+    /* draw_text_at(str_off, str_seg, x, y) — writes no modeled descriptor (the BGI text
+     *  leaves are NOPs in the ctest build); the descriptor gate confirms it leaves the
+     *  view/p1 descriptors untouched. */
     draw_text_at(r->args[0], r->args[1], r->args[2], r->args[3]);
 }
 static void wrap_draw_number_sprites(void)
@@ -812,7 +859,7 @@ static void wrap_show_title_background(void)  { show_title_background(); }
 static void wrap_show_title_and_init(void)    { show_title_and_init(); }
 static void wrap_show_menu_select_screen(void)
 {
-    /* show_menu_select_screen now calls the REAL enter_highscore_name (T5), which polls
+    /* show_menu_select_screen now calls the REAL enter_password (T5), which polls
      *  FUN_75a2 — prime the captured input script so its name-entry loop terminates. */
     const record_t *r = g_cur_rec;
     menu_input_q = r->input; menu_input_n = r->n_input; menu_input_i = 0;
@@ -841,7 +888,7 @@ static void wrap_run_main_menu(void)
 void show_highscore_screen(void);
 void render_highscore_table(void);
 void highscore_enter_name(u8 row);
-u8   enter_highscore_name(u8 col, u8 row);
+u8   enter_password(u8 col, u8 row);
 void level_intro_screen(void);
 void show_level_intro_screen(void);
 
@@ -873,12 +920,12 @@ static void wrap_highscore_enter_name(void)
     highscore_enter_name((u8)r->args[0]);   /* A: scripted input -> name buffer + SCRSNAP */
     unprime_input();
 }
-static void wrap_enter_highscore_name(void)
+static void wrap_enter_password(void)
 {
     const record_t *r = g_cur_rec;
     prime_input(r);
-    /* A: enter_highscore_name(col, row) returns the table-match index (captured ret). */
-    g_ret = enter_highscore_name((u8)r->args[0], (u8)r->args[1]);
+    /* A: enter_password(col, row) returns the table-match index (captured ret). */
+    g_ret = enter_password((u8)r->args[0], (u8)r->args[1]);
     unprime_input();
 }
 static void wrap_level_intro_screen(void)
@@ -916,7 +963,7 @@ static const ported_t PORTED[] = {
     /* highscore (T5) — descriptor (B) for the table builds, semantic (A) for name-entry. */
     { 0x5681, "show_highscore_screen",  'B', wrap_show_highscore_screen },
     { 0x57e1, "render_highscore_table", 'B', wrap_render_highscore_table },
-    { 0x5c87, "enter_highscore_name",   'A', wrap_enter_highscore_name },
+    { 0x5c87, "enter_password",   'A', wrap_enter_password },
     { 0x59d3, "highscore_enter_name",   'A', wrap_highscore_enter_name },
     /* level intro (T5) — semantic (A) for the move loop; P (p1_sprite POSITION words) for
      *  the sprite-glyph builder.  RECONSTRUCTION FIDELITY: like show_menu_select_screen,

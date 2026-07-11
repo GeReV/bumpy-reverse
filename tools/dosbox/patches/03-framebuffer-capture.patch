@@ -103,13 +103,13 @@ index db97d69..9735815 100644
 +		fb_armed = 1;
 +	}
 +
-+	/* Displayed page byte offset = CRTC Start Address (word units) * 2.  The
-+	 * original flips between word 0 (page0/A000) and word 0x1000 (page1/A200);
-+	 * mask to the A000 16KB aperture so the read stays in the displayed page. */
++	/* Displayed page byte offset = CRTC Start Address, BYTE-addressed (mode 0x0D):
++	 * start value == plane byte offset -> page0=0x0000, page1=0x2000 (flip XORs the
++	 * start HIGH byte by 0x20).  (Old (start<<1) assumed word units == page-0 bug.) */
 +	if (vga.mem.linear != NULL) {
 +		unsigned start = ((unsigned)vga.crtc.start_address_high << 8)
 +			| (unsigned)vga.crtc.start_address_low;
-+		unsigned page_off = (start << 1) & 0x3FFFu;   /* byte offset within A000 */
++		unsigned page_off = start & 0x3FFFu;   /* byte offset within A000 */
 +		const uint32_t pmask = vga.mem.memmask ? vga.mem.memmask : 0xFFFFFu;
 +
 +		uint8_t buf[BUMPYCAP_VGA_PLANE_BYTES];

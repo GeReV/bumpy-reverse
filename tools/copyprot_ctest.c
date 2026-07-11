@@ -133,7 +133,7 @@ void read_chunked(int h, u16 bo, u16 bs, u16 len, u16 a)
 void c_close(int h)                        { (void)h; }
 void load_palette_byteswapped(void)        { }
 void play_iris_wipe_transition(void)       { }
-void load_palette(void)                    { }
+void load_palette(u16 so, u16 ss)          { (void)so; (void)ss; }  /* engine 1000:08d1 (2-arg) */
 
 /* ── render callees that the present-parts comparator inspects ─────────────────── */
 void blit_sprite(u16 desc_off, u16 desc_seg)

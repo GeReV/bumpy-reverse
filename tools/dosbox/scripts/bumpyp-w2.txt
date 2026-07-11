@@ -1,0 +1,47 @@
+# BUMPYP world-2 gameplay drive: config gates early, then BLANKET FIRE pulses across
+# the menu window (menu appears late due to slow boot) + past level-intro into the
+# per-tick gameplay loop.  current_level forced to 2 via BUMPYCAP_POKE (run_w2.sh).
+# Format: <frame-dec> <scancode-hex> <value>  (1=down, 0=up).
+#
+# Gate 1: gfx_driver_init palette — F3 (0x3d, VGA/palette_mode=2).
+70 3d 1
+90 3d 0
+150 3d 1
+170 3d 0
+# Gate 2: sound_device_select — F5 (0x3f, no sound).
+230 3f 1
+250 3f 0
+320 3f 1
+340 3f 0
+# Blanket FIRE (Enter 0x1c) pulses every ~120 frames to select PLAY once the main
+# menu appears and advance through the level-intro into gameplay. Wide 40-frame holds.
+500 1c 1
+540 1c 0
+660 1c 1
+700 1c 0
+820 1c 1
+860 1c 0
+980 1c 1
+1020 1c 0
+1140 1c 1
+1180 1c 0
+1300 1c 1
+1340 1c 0
+1460 1c 1
+1500 1c 0
+1620 1c 1
+1660 1c 0
+1780 1c 1
+1820 1c 0
+1940 1c 1
+1980 1c 0
+2100 1c 1
+2140 1c 0
+2260 1c 1
+2300 1c 0
+2420 1c 1
+2460 1c 0
+2580 1c 1
+2620 1c 0
+2740 1c 1
+2780 1c 0

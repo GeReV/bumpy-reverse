@@ -63,8 +63,14 @@ several presentation primitives are no-ops.
 >   is a **DAC palette upload** (ports `0x3c8`/`0x3c9`, slots 0–7 & 0x10–0x17). NOT a page flip.
 > - `1ab9:0351` (`bgi_present_dispatch`, `present_frame` `7bdd`, VGA handler `1ab9:0379` →
 >   `1ab9:06c1`) is **the one true CRTC page flip** (`XOR` Start-Address bit 5 = 0x2000 swap).
-> - `1ab9:0179` (`bgi_init_viewport`, thunk `7b4a`) has a **null** VGA blit slot
->   (`0x4dda[2]==0`): it sets the clip/viewport extent only — no pixel blit on VGA.
+> - `1ab9:0179` (`bgi_init_viewport`, thunk `7b4a`) sets the clip/viewport extent, then
+>   dispatches `[pm*2+0x4dda]`. **CORRECTION (2026-07-05): the EGA/VGA slot value `0` is NOT a
+>   null no-op** — `CALL word ptr [BX+0x4dda]`==0 calls near `1ab9:0000`, a secondary dispatcher
+>   → `0x4dcc[view+0x1c]`; `0x4dcc[0]=1ab9:002b` = a **solid black rect fill** (4-plane SEQ
+>   map-mask + `rep stosw`, geometry from `view[+0x14/+0x16/+0x1e/+0x20]`, colour `+0x22..+0x25`).
+>   This is the real **geometric iris** + name-entry cursor erase + code-screen clear (Task 24),
+>   reconstructed in `host_bgi_set_viewport`. The earlier "null slot / iris = timed-hold+blank-DAC"
+>   claim below was a disassembly error, now superseded.
 >
 > ⚠️ **CORRECTION (2026-06-27, Task 2): `upload_vga_dac_palette`/`dispatch_by_palette_mode`
 > were MISNOMERS — they are a vsync WAIT, not a DAC upload.** The thunk `1000:9864`
@@ -92,7 +98,7 @@ decompiles, **except** the innermost self-modifying planar blit cores (the `bgi_
 
 | Addr | Ghidra name | Role | `src/` status | Decompiles? | Action |
 |------|-------------|------|---------------|-------------|--------|
-| `1ab9:0179` | bgi_init_viewport | set viewport 0x14×0x19, dispatch `[pm*2+0x4dda]` | **host-modeled** (thunk `1000:7b4a` → `host_bgi_set_viewport`, `#ifdef BUMPY_PLAYABLE`; default NOP kept) — VGA slot null → no pixel blit; iris = timed hold + blank-DAC (Task 3) | yes | — |
+| `1ab9:0179` | bgi_init_viewport | set viewport 0x14×0x19, dispatch `[pm*2+0x4dda]` → (slot 0) `1ab9:0000` → `0x4dcc[+0x1c]` → `1ab9:002b` **rect fill** | **host-modeled** (thunk `1000:7b4a` → `host_bgi_set_viewport`, `#ifdef BUMPY_PLAYABLE`; default NOP kept) — slot is a **solid black rect fill** = geometric iris + name-entry cursor erase + code-screen clear (Task 24, corrected 2026-07-05; the old "null slot, timed-hold iris" was a disasm error) | yes | — |
 | `1ab9:01e1` | bgi_stage_palette_dispatch | **palette stage** via `[pm*2+0x5435]` (VGA handler `1ab9:0620` = `rep movsw` of 48-byte palette into per-page slot; NOT a pixel putimage — misnomer corrected 2026-06-27) | **host-modeled** (thunk `1000:7b93` → `host_bgi_stage_image_palette`, `#ifdef BUMPY_PLAYABLE`; default NOP kept; Tasks 1–2) | yes | — |
 | `1ab9:01ff` | bgi_cleardevice_dispatch | cleardevice via vector | missing | yes | reconstruct 1:1 |
 | `1ab9:0232` | bgi_device_reset_dispatch | device reset via vector | missing (thunk `7bbd`=NOP) | yes | reconstruct 1:1 |

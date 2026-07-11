@@ -122,3 +122,22 @@ source. No DOSBox fork is vendored — only these patches.
   an image-specific AC). The shot record grows by 16 bytes (`32000 + 768 + 16 = 32784`); the
   decoder detects the section by file size and falls back to the engine's standard BGI AC map
   for older dumps.
+
+- **`06-bumpycap-strided-shot-and-poke.patch`** — two additions to the `VGA_VerticalTimer`
+  hook, applied ON TOP of `01`+`04`+`05` (it only touches `src/hardware/vga_draw.cpp`). Both
+  are gated behind their own env vars, so a run without them behaves exactly as before.
+  1. **Strided multi-shot burst** — extends `05`'s single `BUMPYCAP_SHOT_OUT` dump into a
+     burst. `BUMPYCAP_SHOT_STRIDE=<frames>` + `BUMPYCAP_SHOT_COUNT=<n>` capture `n` shots
+     starting at `BUMPYCAP_SHOT_FRAME`, every `stride` frames, written as
+     `<SHOT_OUT>.000`, `.001`, … (each the full `32784`-byte planes+DAC+AC record). With
+     `count<=1` the behaviour is unchanged — a single shot written to `SHOT_OUT` verbatim.
+     This is what lets a temporal artifact (flicker / anim advance) be caught across a frame
+     span instead of a single frame — a lesson from confirming a "fix" on one frame that
+     could not have shown a per-frame flicker.
+  2. **Per-frame guest DGROUP poke** (`BUMPYCAP_POKE_OFF` hex + `_POKE_VAL` + `_POKE_FSTART`
+     + `_POKE_FEND`) — writes `phys_writeb(DGROUP + off, val)` every frame in the window
+     `[FSTART, FEND]`. Used to force a guest global that is otherwise only reachable through
+     UI (e.g. holding `_current_level` (DGROUP `0x0c26`) `= 2` across the level-load window
+     to reach a world-2 level without navigating the password screen). This is a
+     TEST-HARNESS shortcut, NOT a faithfulness claim — the engine sets `current_level` only
+     via `enter_password`; the poke just reproduces that state deterministically for capture.

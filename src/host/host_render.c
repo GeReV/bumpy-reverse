@@ -124,6 +124,21 @@ void host_render_bind(u8 __huge *bank, u32 bank_base_lin, const u8 __far *dg)
     hr_dg           = dg;
 }
 
+/* ── Spawn-scan gate for the anim clean-bg repaint (host deviation, see
+ *    anim_restore_bg_view_leaf) ────────────────────────────────────────────────
+ *   Set for the duration of spawn_and_draw_level_entities so the anim erase leaves
+ *   do NOT repaint the flat clean-bg over freshly-blitted layer-A structures during
+ *   the one-shot spawn grid scan (the engine's real erase blits a shadow that
+ *   preserves the overlapping layer; the host substitutes a destructive dither
+ *   repaint — harmless per-tick, but clobbering during spawn).  Cleared afterwards
+ *   so per-tick gameplay erases (the layer-B trail-fix) behave exactly as before. */
+static u8 hr_in_spawn = 0u;
+
+void host_render_set_spawn(u8 active)
+{
+    hr_in_spawn = active;
+}
+
 /* Build the active full-screen sprite_view targeting the CURRENT draw page.
  * data_off/data_seg express the page selection (page0 → 0x0000/0xa000,
  * page1 → 0x2000/0xa200) exactly as composite_ctest's view does. */
@@ -582,6 +597,25 @@ void anim_restore_bg_view_leaf(u8 __far *view)
             return;
         }
     }
+
+    /* RECONSTRUCTION FIDELITY (world-2 platform over-paint fix, F1, 2026-07-11).
+       During spawn_and_draw_level_entities the grid scan draws each layer-A/B cell as
+       ERASE-before-BLIT (draw_anim_channels_a/b).  The host models the erase as a flat
+       host_clean_bg (bg-tiles-only) dither repaint over a fixed 4×4-tile rect; that rect
+       reaches into a NEIGHBOUR cell's freshly-blitted layer-A structure (e.g. the D2
+       platform, tilemap layer-A tile 0x11) and destroys it — the "missing platform rows".
+       The engine's real erase (mode-01 restore) blits a pre-composited SHADOW that
+       preserves overlapping layers, so its spawn scan is non-destructive; the host's flat
+       clean-bg substitute is not, and at the spawn one-shot draw there is no previous
+       frame to erase anyway (the cell holds only bg + the just-drawn statics).  So during
+       the spawn scan we suppress the clean-bg repaint entirely: every layer's BLIT still
+       runs, leaving all structures intact, matching the engine's net result.  Cleared for
+       per-tick gameplay so the layer-B trail-fix / P1-P2 erase paths are unchanged.
+       docs/reconstruction-fidelity.md.  Verified good_frac→~1 across all DGROUP bases. */
+    if (hr_in_spawn) {
+        return;
+    }
+
     clean = host_clean_bg();
     if (clean == (const u8 __far *)0) {
         return;

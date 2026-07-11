@@ -92,13 +92,17 @@ int g_play_sound_calls;
 void play_sound(u8 id) { g_last_play_sound_id = id; g_play_sound_calls++; }
 void play_action_sound(void) { }
 /* apply_contact_action (1000:6a89) is now RECONSTRUCTED in src/player.c (Phase-9 T1)
-   and pulled in via the #include below — no host stub here (would be a dup symbol). */
-void play_walk_anim_default(void) { }
-void step_walk_anim(u8 a, u8 p, u16 fo, u16 fs) { (void)a;(void)p;(void)fo;(void)fs; }
+   and pulled in via the #include below — no host stub here (would be a dup symbol).
+   Likewise play_walk_anim_default / step_walk_anim and the walk/move-step leaves
+   below (movement clusters 1-2) — the real reconstructed bodies replay now. */
 void apply_cell_animation(u8 fx) { (void)fx; }                      /* FX allocator → Phase 5/6 */
 void FUN_1000_4802(void) { }                                       /* pending==0x0f teleport leaf */
 /* run_physics_settle (player.c) reads these cross-module DGROUP bytes (game.c). */
 u8 session_continue_flag, frame_abort_flag, settle_countdown;
+
+/* restore_bg_pending (player.c) now routes its deferred item-erase through the
+   clean-bg leaf (owned by anim.c/host_render.c, not included here) — link stub. */
+void anim_restore_bg_view_leaf(u8 __far *view) { (void)view; }
 
 /* ── Phase-9 T2 cross-module callees pulled in by the move_step_dispatch_tbl
    resolver + handle_gameplay_input.  In the real build these live in sound.c /
@@ -121,17 +125,28 @@ void poll_input(void)             { }   /* input.c 1dde (input already seeded fr
 u8   timing_flag_accumulator;           /* screens.c 0x854f */
 u8   round_continue_flag;               /* game.c 0x9d30 */
 u8   pvp_collision_flag;                /* player2.c 0xa1aa (Ghidra players_colliding) */
-/* Out-of-scope handler-table targets — host stubs so the table links. */
-void move_walk_right_anim_step(void) { }
-void enter_mode_0b_jump_start(void) { }
-void move_anim_step_to_mode0c(void) { }
-void move_step_check_walkable(void) { }
-void move_step_dispatch_input(void) { }
+/* Out-of-scope handler-table targets — host stubs so the table links.
+   (The walk/move-step leaves + advance_physics_freeze are now DEFINED in player.c —
+   stubs removed; the real bodies replay.) */
 void teleport_to_next_exit_tile(void) { }
-void p1_input_dispatch_bit10(void) { }
 void FUN_1000_4437(void) { }
-void advance_physics_freeze(void) { }
 void FUN_1000_1e3d(void) { }
+
+/* reset_round_counters (player.c, 1000:31de — reconstructed) resets these
+   cross-module globals; defined here so the harness links. */
+u8        deferred_contact_countdown;   /* game.c   0x79b7 */
+u8        deferred_contact_buf[16];     /* game.c   0x0886 */
+u8 __far *deferred_contact_ptr;         /* game.c   0x9ba6/0x9ba8 */
+u8        dgroup_flag_a1a9;             /* game_stubs.c 0xa1a9 */
+u8        g_anim_cur_cmd_byte;          /* anim.c   0x8578 */
+u8        anim_b_cur_frame_byte;        /* anim.c   0x8579 */
+u8        g_anim_a_active_mirror;       /* anim.c   0x8e8b */
+u8        g_anim_b_active_mirror;       /* anim.c   0x8e8c */
+u8        level_complete_anim_counter;  /* items.c  0x8550 */
+u8        p2_move_steps_left;           /* player2.c 0xa1b0 */
+u8        p2_step_idx;                  /* player2.c 0x8563 */
+u8        p2_move_toggle;               /* player2.c 0x8243 */
+void      p2_set_pixel_from_cell(void) { }   /* player2.c leaf (out of scope) */
 
 /* ── channel-B anim globals apply_contact_action (player.c, Phase-9 T1) references.
    OWNED by anim.c in the real build; defined here for the host replay so the
@@ -221,7 +236,11 @@ static const char *cmp_exit(const snap_t *e, long *got, long *want)
         *got = (long)(lhs); *want = (long)(rhs); return name; } } while (0)
     FLD("px",         p1_pixel_x,        e->px);
     FLD("py",         p1_pixel_y,        e->py);
-    FLD("anim",       p1_move_anim,      e->anim);
+    /* anim: p1_move_anim is the engine's WORD @0x824a (bounce modes 0x3d/0x3f carry
+       0x1d1..0x1d7), but this trace format snapshots only the LOW BYTE — compare
+       through u8.  The word high half is proven by the disasm (1000:1417/1cc9) and
+       by these very records: replay 0x1d3 vs captured 0xd3 = equal low bytes. */
+    FLD("anim",       (u8)p1_move_anim,  e->anim);
     FLD("mode",       game_mode,         e->mode);
     FLD("step",       p1_move_step_idx,  e->step);
     FLD("facing",     p1_facing_left,    e->facing);
@@ -778,9 +797,10 @@ static stitch_result_t run_trajectory_stitch(record_t *recs, long nrec, const ch
             res.stop_step = i;
             return res;
         }
-        /* compare the produced trajectory fields against the captured exit. */
+        /* compare the produced trajectory fields against the captured exit.
+           (anim through u8 — the trace stores only the low byte of the 0x824a word.) */
         if (p1_pixel_x != r->ex.px || p1_pixel_y != r->ex.py ||
-            p1_move_anim != r->ex.anim || game_mode != r->ex.mode) {
+            (u8)p1_move_anim != r->ex.anim || game_mode != r->ex.mode) {
             /* Divergence is EXPECTED once the chain depends on an unported
                substate's side effects; report and stop (localised, not a crash). */
             printf("    STITCH diverge [%s] step %ld (fn %s): "

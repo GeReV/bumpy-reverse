@@ -101,6 +101,7 @@ s16 p1_pixel_x;                  /* player.c — 0x9290 */
 /* FX/sound callees the collect path reaches (game_stubs.c in BUMPY.EXE).  They
    have no effect on the validated semantic state, so the harness stubs them. */
 void play_sound(unsigned char id)        { (void)id; }   /* 1000:6e11 */
+u8 settle_countdown;   /* game.c 0x791a — '#'-item/tries counter (unified) */
 void apply_cell_animation(unsigned char f){ (void)f; }    /* 1000:69aa */
 
 /* Player-spine callees the T4 exit/teleport functions invoke (reconstructed in
