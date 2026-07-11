@@ -156,6 +156,52 @@ int main(void)
     gfx_upload_palette_ega(0u);
     gfx_upload_palette_vga(0u);
 
+    /* ── Task 4: gfx_stage_palette_dispatch — the palette_mode-keyed switch that
+     * mirrors cmdvec_stage_palette_modes[palette_mode] (1ab9:0605/0606/0620). ─────
+     * Uses fresh pages (2/3/4) so these asserts can't be satisfied by residue
+     * left behind by the direct-handler tests above. */
+    {
+        int off2 = gfx_page_slot_offset(2u);   /* 198 */
+        int off3 = gfx_page_slot_offset(3u);   /* 297 */
+        int off4 = gfx_page_slot_offset(4u);   /* 396 */
+
+        /* mode 0 -> CGA no-op: dispatch must NOT touch the page-2 slot at all. */
+        {
+            unsigned char snapshot[256];
+            memcpy(snapshot, obj + off2, sizeof(snapshot));
+            palette_mode = 0u;
+            fill_src(srcbuf, 0xaau);
+            gfx_stage_palette_dispatch(srcbuf, 2u);
+            assert(memcmp(obj + off2, snapshot, sizeof(snapshot)) == 0);
+        }
+
+        /* mode 1 -> EGA: dispatch must stage the 16B AC block at page-2's +0x23. */
+        palette_mode = 1u;
+        fill_src(srcbuf, 0x77u);
+        gfx_stage_palette_dispatch(srcbuf, 2u);
+        assert(memcmp(obj + off2 + 0x23, srcbuf + 0x23, 16) == 0);
+
+        /* mode 2 -> VGA: dispatch must stage the 48B RGB block at page-3's +0x33. */
+        palette_mode = 2u;
+        fill_src(srcbuf, 0x33u);
+        gfx_stage_palette_dispatch(srcbuf, 3u);
+        assert(memcmp(obj + off3 + 0x33, srcbuf + 0x33, 48) == 0);
+
+        /* default (mode 5, which is also gfx_stage_palette_vga's +0x30 special
+         * case) -> VGA: proves the switch's `default:` arm, not just case 2u. */
+        palette_mode = 5u;
+        fill_src(srcbuf, 0xccu);
+        gfx_stage_palette_dispatch(srcbuf, 4u);
+        assert(memcmp(obj + off4 + 0x33 + 0x30, srcbuf + 0x33, 48) == 0);
+    }
+
+    /* ── Task 4: gfx_upload_palette_dispatch — smoke-call every mode (no hardware
+     * to assert against; same rationale as the direct UPLOAD handlers above). */
+    palette_mode = 0u; gfx_upload_palette_dispatch(0u);
+    palette_mode = 1u; gfx_upload_palette_dispatch(0u);
+    palette_mode = 2u; gfx_upload_palette_dispatch(0u);
+    palette_mode = 5u; gfx_upload_palette_dispatch(0u);
+
     printf("gfx_palette_ctest: PASS\n");
     return 0;
 }

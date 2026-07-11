@@ -111,3 +111,29 @@ void gfx_upload_palette_vga(u8 page)
         tbl += 3;
     }
 }
+
+/* gfx_stage_palette_dispatch / gfx_upload_palette_dispatch — palette_mode-keyed
+   dispatch to the STAGE/UPLOAD handlers above.
+
+   RECONSTRUCTION FIDELITY: the engine dispatches via the static DGROUP cmdvec
+   tables (cmdvec_stage_palette_modes 0x5435 = {0605,0606,0620};
+   cmdvec_upload_palette_modes 0x5441 = {0661,0662,0677}); the switch is the
+   1:1 equivalent of that indirection. Tables documented in Ghidra (typed
+   word[3], 2026-07-11). */
+void gfx_stage_palette_dispatch(u8 __far *src, u8 page)
+{
+    switch (palette_mode) {
+    case 0u: gfx_stage_palette_cga(src, page); break;   /* 1ab9:0605 */
+    case 1u: gfx_stage_palette_ega(src, page); break;   /* 1ab9:0606 */
+    default: gfx_stage_palette_vga(src, page); break;   /* 1ab9:0620 (mode 2) */
+    }
+}
+
+void gfx_upload_palette_dispatch(u8 page)
+{
+    switch (palette_mode) {
+    case 0u: gfx_upload_palette_cga(page); break;       /* 1ab9:0661 */
+    case 1u: gfx_upload_palette_ega(page); break;       /* 1ab9:0662 */
+    default: gfx_upload_palette_vga(page); break;       /* 1ab9:0677 (mode 2) */
+    }
+}
