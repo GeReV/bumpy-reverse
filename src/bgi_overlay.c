@@ -3,9 +3,17 @@
 
 /* See bgi_overlay.h.
 
-   Behavioral reconstruction of the two BGI-overlay dispatch wrappers:
-     restore_bg_view   (1000:80bc → 1ab9:0d77)  — bg-tile erase
-     render_player_view (1000:93b8 → 1ab9:1028 → 1ab9:0db0)  — planar copy
+   NAMING (2026-07-11): the "BGI"/`bgi_*` labels on the segment-1ab9 overlay
+   (`bgi_set_mode_00/01/10/11`, `bgi_overlay*`, this file) are a HISTORICAL MISNOMER.
+   The overlay is the game's OWN Loriciel VGA planar driver — NOT stock Borland BGI
+   (verified: no EGAVGA.BGI linked or loaded, no Borland driver banner in the image;
+   only a 42-byte incidental code match).  The names are retained pending a rename;
+   read "bgi" here as "the graphics overlay", not Borland.  See CLAUDE.md +
+   docs/rendering-pipeline.md §1.
+
+   Behavioral reconstruction of the two overlay dispatch wrappers:
+     restore_bg_view   (1000:80bc → 1ab9:0d77)  — bg-tile erase (mode-01)
+     render_player_view (1000:93b8 → 1ab9:1028 → 1ab9:0db0)  — planar copy (mode-10)
 
    Both dispatch guards are SIGNED in the original (asm CMP/JG): the handler
    runs iff the descriptor's guard word (word[0] / word[0x0e]) is < 2 as a

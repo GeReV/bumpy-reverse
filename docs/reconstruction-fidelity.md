@@ -2115,6 +2115,24 @@ single-page composited save is a no-op).  **Zero new memory** (reuses `hv_saveun
 > aliases) — any active layer-B channel far-stored through NULL; both names now bind to
 > the same slots.
 
+> **SUPERSEDED 2026-07-11 (commits `16ca1c3` + `6e0e1f1`) — faithful masked save-under.** The
+> unmasked clean-bg repaint above was retired: over the fixed `+0x0a`×`+0x0c` rect it spilled
+> into the neighbouring STATIC layer-A platform above the B cell (world-2 "missing rows"), and
+> the F1 `hr_in_spawn` gate only masked that during the spawn scan.  The engine's real layer-B
+> erase is a MASKED composite (`bgi_set_mode_00` — the self-modifying **Loriciel** graphics
+> overlay, **NOT Borland BGI**, verified 2026-07-11; it does not decompile).  Reconstructed
+> behaviourally as a **footprint-exact save-under** (`host_animb_*`, `host_render.c`):
+> `entity_blit_object` captures the sprite's EXACT page footprint (`voff+cols×rows` from
+> `sprite_blit_build_desc` — inherently masked to the sprite) BEFORE the blit;
+> `draw_anim_channels_b` restores it to erase the previous frame, leaving the neighbour platform
+> intact.  Single per-channel buffer (matches the engine's one `0x7e3e` shadow/ch; the bg-under is
+> page-independent).  Gameplay-only (`!hr_in_spawn`; spawn draws each layer-B static once via a
+> reused slot → must not enter the save-under).  `anim_b_view1` removed from
+> `anim_restore_bg_view_leaf`'s guard; the layer-A erase (the platform-DISAPPEAR mechanism) is
+> unchanged; the F1 gate is retired.  **Playtest-confirmed:** world-2 platforms animate + disappear
+> cleanly, no residue.  DEVIATION: reproduces the net effect, not the exact undecompilable mode-00
+> pixels.
+
 **Deviation classification.**  This is the same behavior-faithful deviation class as the existing
 player save-under and the single-image framebuffer model: the exact per-frame overlay byte
 sequence lives in the un-decompilable BGI overlay, so the host reproduces the *mechanism* (repaint

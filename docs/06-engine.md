@@ -22,7 +22,7 @@ stubs — deliberately not guessed). Subsystem inventory:
 | Input | `1000` | `poll_input`, `handle_gameplay_input`, `flush_keyboard_buffer`, joystick globals |
 | Sound | `1000` | `play_sound`, `snddrv_dispatch_a`, OPL/MIDI globals |
 | Resources / CRT | `1000` | `open_resource`, `read_chunked`, `xfer_chunked`, `malloc`, heap/atexit/streams |
-| Font / text (BGI) | `1ab9` | `draw_char_glyph`, `draw_string_glyphs`, `measure_string_width`, `font_glyph_ptr`, `bgi_set_mode_*` |
+| Font / text + graphics overlay (Loriciel-custom, NOT Borland BGI — `bgi_*` names are a misnomer) | `1ab9` | `draw_char_glyph`, `draw_string_glyphs`, `measure_string_width`, `font_glyph_ptr`, `bgi_set_mode_*` |
 | Sprite codec | `1cec` | `sprite_rle_decode`, `sprite_rle_encode`, `decode_2bpp_planes`, `blit_sprite_vga` |
 | Vector renderer | `1c28`/`1cda` | `vec_run`, `vec_read_record`, `vec_xform`, `low_nibble` |
 | PRNG | `1ce5` | `prng_seed`, `prng_step` (3-word state, consts `0x2432/0x1c12/0x3812`) |

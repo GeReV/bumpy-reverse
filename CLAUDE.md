@@ -41,8 +41,14 @@ under the git-ignored `local/` tree; users supply their own.
 ## The target binary
 
 - **`BUMPY.EXE`** — 16-bit DOS **real-mode**, segmented (medium/large model),
-  built with **Turbo C++ 1990 (Borland)**, graphics via **BGI**. Originally
-  **TinyProg-packed** (CRC-keyed anti-tamper + LZSS); unpacking is done & verified.
+  built with the **Turbo C++ 1990 (Borland)** C runtime. Graphics go through the
+  game's **own VGA planar overlay** at segment `1ab9` — **NOT stock Borland BGI**
+  (verified 2026-07-11: no `EGAVGA.BGI` linked or loaded, no driver banner in the
+  image; only a 42-byte incidental match). The `bgi_*` / "BGI" labels on that overlay
+  (`bgi_set_mode_00/01/10/11`, `bgi_overlay*`, etc.) are a **historical misnomer** from
+  an early naming pass — a Loriciel-custom engine, not Borland BGI (symbol rename
+  pending). Originally **TinyProg-packed** (CRC-keyed anti-tamper + LZSS); unpacking
+  is done & verified.
 - Work against the **unpacked** image: `local/build/unpack/BUMPY_unpacked.exe`
   (also at `local/originals/unpacked/BUMPY_unpacked.exe`).
 - ~399 functions total. Far-pointer / 32-bit global pairs (`_off`/`_seg`,

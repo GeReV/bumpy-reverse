@@ -1,14 +1,21 @@
 # Rendering pipeline — BGI overlay dispatch, VGA double-buffer, blit paths
 
 Faithful documentation of how the engine puts pixels on screen, reconstructed from the
-`BumpyDecomp` Ghidra decomp + raw disassembly of the non-decompiling BGI overlay
+`BumpyDecomp` Ghidra decomp + raw disassembly of the non-decompiling graphics overlay
 blitters. Addresses are `segment:offset` in the unpacked image (or `DGROUP:off`, DGROUP
 segment `0x203b`). This documents the **original**; the `src/` reconstruction mirrors it
 (with deviations recorded in [reconstruction-fidelity.md](reconstruction-fidelity.md)).
 
-## 1. BGI graphics-driver overlay
+## 1. Graphics-driver overlay (Loriciel-custom, NOT Borland BGI)
 
-Graphics output goes through a Borland-BGI-style **overlay** loaded at segment `1ab9`.
+> **Naming note.** The overlay at `1ab9` and its `bgi_*` symbols (`bgi_set_mode_*`,
+> `bgi_overlay*`, …) are labelled "BGI" only for historical reasons — an early naming
+> pass assumed Borland BGI. **It is not**: verified 2026-07-11 there is no `EGAVGA.BGI`
+> linked or loaded and no Borland driver banner in the image (only a 42-byte incidental
+> code match). It is the game's **own Loriciel VGA planar driver**. The `bgi_*` symbol
+> names are retained pending a rename; read them as "the graphics overlay", not Borland.
+
+Graphics output goes through the game's **VGA planar overlay** loaded at segment `1ab9`.
 Two engine entry thunks dispatch into it by "mode":
 
 | Engine fn | Addr | Calls | Purpose |
