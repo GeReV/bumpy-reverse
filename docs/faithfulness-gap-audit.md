@@ -100,9 +100,16 @@ decompiles, **except** the innermost self-modifying planar blit cores (the `gfx_
 |------|-------------|------|---------------|-------------|--------|
 | `1ab9:0179` | gfx_init_viewport | set viewport 0x14×0x19, dispatch `[pm*2+0x4dda]` → (slot 0) `1ab9:0000` → `0x4dcc[+0x1c]` → `1ab9:002b` **rect fill** | **host-modeled** (thunk `1000:7b4a` → `host_gfx_set_viewport`, `#ifdef BUMPY_PLAYABLE`; default NOP kept) — slot is a **solid black rect fill** = geometric iris + name-entry cursor erase + code-screen clear (Task 24, corrected 2026-07-05; the old "null slot, timed-hold iris" was a disasm error) | yes | — |
 | `1ab9:01e1` | gfx_stage_palette_dispatch | **palette stage** via `[pm*2+0x5435]` (VGA handler `1ab9:0620` = `rep movsw` of 48-byte palette into per-page slot; NOT a pixel putimage — misnomer corrected 2026-06-27) | **host-modeled** (thunk `1000:7b93` → `host_gfx_stage_image_palette`, `#ifdef BUMPY_PLAYABLE`; default NOP kept; Tasks 1–2) | yes | — |
+| `1ab9:05b6` | gfx_page_slot_offset | shared helper: per-page draw-object slot = `page*99` | **reconstructed** (`gfx_page_slot_offset`, `src/gfx_palette.c`; host-unit-tested via `tools/gfx_palette_ctest.c`) | yes | — |
+| `1ab9:0605` | gfx_stage_palette_cga | CGA palette-stage slot (`cmdvec_stage_palette_modes[0]`) | **reconstructed** (`gfx_stage_palette_cga`, `src/gfx_palette.c`) — bare `RET`, no-op | yes | — |
+| `1ab9:0606` | gfx_stage_palette_ega | **EGA palette stage** (`cmdvec_stage_palette_modes[1]`) — `rep movsw` 16-byte AC-index palette from `img+0x23` into the draw-object's per-page slot | **reconstructed** (`gfx_stage_palette_ega`, `src/gfx_palette.c`, 2026-07-11; host-unit-tested byte-exact); playable host models it via `host_gfx_stage_image_palette`'s `palette_mode==1` branch (`host_gfx.c`) | yes | — |
+| `1ab9:0620` | gfx_stage_palette_vga | VGA palette stage (`cmdvec_stage_palette_modes[2]`) — same handler `01e1` dispatches to for `palette_mode==2` | **reconstructed** (`gfx_stage_palette_vga`, `src/gfx_palette.c`) | yes | — |
 | `1ab9:01ff` | gfx_cleardevice_dispatch | cleardevice via vector | missing | yes | reconstruct 1:1 |
 | `1ab9:0232` | gfx_device_reset_dispatch | device reset via vector | missing (thunk `7bbd`=NOP) | yes | reconstruct 1:1 |
 | `1ab9:02b1` | gfx_upload_palette_to_dac_dispatch | **DAC palette upload** via `[pm*2+0x5441]` (VGA handler `1ab9:0677` = DAC write to ports `0x3c8`/`0x3c9`, slots 0–7 & 0x10–0x17; NOT a page flip — misnomer corrected 2026-06-27) | **host-modeled** (thunk `1000:7bca` → `host_gfx_upload_palette_to_dac`, `#ifdef BUMPY_PLAYABLE`; default NOP kept; Tasks 1–2) | yes | — |
+| `1ab9:0661` | gfx_upload_palette_cga | CGA palette-upload slot (`cmdvec_upload_palette_modes[0]`) | **reconstructed** (`gfx_upload_palette_cga`, `src/gfx_palette.c`) — bare `RET`, no-op | yes | — |
+| `1ab9:0662` | gfx_upload_palette_ega | **EGA palette upload** (`cmdvec_upload_palette_modes[1]`) — `INT 10h AX=1002h`, programs the 16 Attribute Controller registers + overscan from the staged `+0x23` table | **reconstructed** (`gfx_upload_palette_ega`, `src/gfx_palette.c`, 2026-07-11); playable host models it via the equivalent direct `0x3c0` AC-port sequence (`host_gfx_upload_palette_to_dac`'s `palette_mode==1` branch, `host_gfx.c`) | yes | — |
+| `1ab9:0677` | gfx_upload_palette_vga | VGA palette upload (`cmdvec_upload_palette_modes[2]`) — same handler `02b1` dispatches to for `palette_mode==2` | **reconstructed** (`gfx_upload_palette_vga`, `src/gfx_palette.c`) | yes | — |
 | `1ab9:0351` | gfx_present_dispatch | **CRTC page flip** via `[pm*2+0x5475]` (VGA handler `1ab9:0379` → `1ab9:06c1` = XOR Start-Address bit 5, 0x2000 swap; the ONE true frame present) | **host-modeled** (thunk `1000:7bdd` → `present_frame`, `src/host/host_video.c`; Tasks 1–2) | yes | — |
 | `1ab9:0384` | gfx_device_inc_dispatch | device-inc via vector | missing (thunk `7bea`=NOP) | yes | reconstruct 1:1 |
 | `1ab9:01c0` | gfx_driver_nop | driver no-op slot | missing | yes | reconstruct 1:1 (trivial) |
@@ -132,9 +139,19 @@ VGA (`palette_mode==2`) path**: `7b4a` → `host_gfx_set_viewport`, `7b93` →
 `host_gfx_stage_image_palette`, `7bca` → `host_gfx_upload_palette_to_dac`, `7bdd` →
 `present_frame`; their default-build NOP stubs remain. The remaining thunks (`7b76`/`7b86`/
 `7ba7`/`7bbd`/`7bea`) are still NOP. The per-`palette_mode` **vector tables** (DGROUP
-`0x4dda/0x5435/0x5441/0x5475/0x555e`) and the **graphics-overlay init code that populates them** (currently
-absent — `init_misc_7bd7`/`init_misc_7bbd` are NOP) remain unresolved for the 1:1 path;
-the host bypass avoids the table indirection entirely.
+`0x4dda/0x5435/0x5441/0x5475/0x555e`) remain unresolved for the 1:1 path in the sense that
+nothing routes the reconstructed dispatch through them yet (the host bypass avoids the
+table indirection entirely). **Correction (2026-07-11):** the earlier framing here —
+"graphics-overlay init code that populates them (currently absent)" — was wrong for
+`0x4dda`/`0x5435`/`0x5441`/`0x5475` (and their sibling `0x545d`/`0x5469`/`0x5481`): a raw
+disasm read of the unpacked image (`local/build/unpack/BUMPY_unpacked.exe`) shows these are
+**static initialised data**, not runtime-populated — `init_misc_7bd7`/`init_misc_7bbd`
+being NOP is consistent with that (there is nothing left for them to populate). The
+`0x5435`/`0x5441` (palette stage/upload) pair is now typed `word[3]` in Ghidra with
+CGA/EGA/VGA slot annotations and its three handlers per slot are reconstructed 1:1 in
+`src/gfx_palette.c` (see the `0605/0606/0620` and `0661/0662/0677` rows above); `0x555e`
+(the `gfx_set_mode_01`/`restore_bg_view` dispatch table — a different family, see
+[rendering-pipeline.md](rendering-pipeline.md) §1) is untouched by this correction.
 
 ---
 
@@ -143,6 +160,13 @@ the host bypass avoids the table indirection entirely.
 The blit chain is reconstructed (`sprite.c`/`sprite_blit.c`/`sprite_chain.c`); the decode/
 dispatch front-end is not. `sprite_chain` **merges** `object_list`+`clip`+`setup` (a documented
 deviation to un-merge).
+
+**EGA note (2026-07-11):** the `1cec` per-`palette_mode` sprite-op vector tables adjacent to
+the dispatch functions below (`0x2d37/2d61/2d9c/2dc6`) have an **EGA slot identical to their
+VGA slot** in every case — read directly from the unpacked image, same method as the palette
+cmdvec tables in §1. The sprite/blit path therefore has **no EGA-specific divergence**:
+reconstructing the VGA dispatch (the `Action` column below) automatically covers EGA too: no
+separate EGA reconstruction is needed here.
 
 | Addr | Ghidra name | `src/` status | Decompiles? | Action |
 |------|-------------|---------------|-------------|--------|

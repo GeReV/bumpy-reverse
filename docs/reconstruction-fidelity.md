@@ -1591,12 +1591,88 @@ so the original EGA menu correctly decodes as a black background + red/white log
 look), where the old hard-coded graphics-overlay map would have rainbowed it.  No game code changed; `BUMPY.EXE`
 and `BUMPYP.EXE` are untouched.
 
-**Remaining (documented, out of scope).** Booted in EGA mode (`F2`), the *playable* still uploads
-`TITRE.VEC`'s VGA palette (its `dispatch_by_palette_mode` host shim — the playable-only vsync/dispatch
-shim, distinct from the renamed engine dispatcher `wait_vretrace_dispatch` at 2036:0000 — always reads
-`+0x33`) and uses the fixed overlay AC, so it shows the VGA gold look rather than the original's EGA
-black/red.  The playable's default and validated path is VGA (`F3` → `palette_mode=2`), where it
-matches; the EGA-mode palette divergence is a non-default corner case left as-is.
+### RECONSTRUCTED (2026-07-11) — the EGA palette path (title/menu)
+
+The EGA path (`palette_mode==1`) was previously documented as out of scope; it is now
+**reconstructed and working** for the title/menu front end. Grounded RE (raw disasm of the
+non-decompiling graphics overlay, `1ab9`) shows the *entire* EGA-specific behaviour is
+exactly **two handlers**: `1ab9:0606` (palette stage — copy the 16-byte AC-index palette
+from the decoded image's `+0x23` region) and `1ab9:0662` (palette upload — `INT 10h
+AX=1002h`, program the 16 Attribute Controller registers). CGA's stage/upload slots
+(`0605`/`0661`) are bare `RET` no-ops; present/cleardevice/device-reset/setvisualpage are
+mode-independent (all three per-mode slots point at the same handler); and every `1cec`
+sprite-op table's EGA slot equals its VGA slot — the sprite/blit path has **no** EGA
+divergence at all (see `docs/faithfulness-gap-audit.md` §1/§2). So the EGA/VGA split is
+entirely the palette pipeline: EGA maps a pixel through a 16-entry, per-image Attribute
+Controller table onto the fixed BIOS EGA DAC ramp (`DAC[AC[pixel]]`); VGA instead uploads a
+fresh 48-byte 6-bit-RGB palette straight into the DAC per image, over a fixed AC. See
+[rendering-pipeline.md](rendering-pipeline.md) §1a for the full DAC-vs-AC mechanism.
+
+**Faithful decomp (`src/gfx_palette.c`/`.h`).** The 6 STAGE/UPLOAD handlers
+(`gfx_stage_palette_{cga,ega,vga}` = `0605/0606/0620`, `gfx_upload_palette_{cga,ega,vga}` =
+`0661/0662/0677`) plus `gfx_page_slot_offset` (`1ab9:05b6`, `page*99`) are transcribed 1:1
+from the raw disassembly, dispatched by `gfx_stage_palette_dispatch`/
+`gfx_upload_palette_dispatch` — the 1:1 equivalent of the engine's own static DGROUP cmdvec
+tables (`cmdvec_stage_palette_modes` `0x5435` = `{0605,0606,0620}`,
+`cmdvec_upload_palette_modes` `0x5441` = `{0661,0662,0677}`; typed `word[3]` data in Ghidra,
+2026-07-11, with CGA/EGA/VGA slot annotations). **Correction to the pre-2026-07-11
+record:** these tables are *static initialised data* in the unpacked image, not
+runtime-populated as an earlier gap-audit note assumed — see
+`docs/faithfulness-gap-audit.md` §1. The EGA palette-*patch* source data the title/menu
+builders overwrite the decoded image's embedded `+0x23` palette from
+(`dgroup_pal_patch_63a/72e/64a/71e`, `copyprot_palette_src`) is now populated from the
+binary-verified bytes via `init_ega_palette_patch_tables` (`src/screens.c`), the same
+pattern as `init_password_table`/`init_highscore_default_table`.
+
+**Playable host render (`src/host/host_gfx.c`, `palette_mode==1` branch).**
+`host_gfx_stage_image_palette`/`host_gfx_upload_palette_to_dac` now branch on
+`palette_mode`: EGA copies the staged 16-byte `+0x23` AC-index table into a per-page
+side-store (`host_gfx_page_ac[2][16]`, new alongside the existing
+`host_gfx_page_palette[2][48]`) and programs it via the direct `0x3c0` Attribute
+Controller port sequence (reset the index/data flip-flop via a read of `0x3DA`, then
+`OUT 0x3C0=index`/`OUT 0x3C0=value` per register, then `OUT 0x3C0=0x20` to re-enable
+video) — the equivalent of `INT 10h AX=1002h` under the host's real VGA hardware. This is
+the same documented side-store deviation the existing VGA branch already has
+(`host_gfx_page_ac`/`host_gfx_page_palette` vs the engine's live `*0x5311` draw-object
+descriptor slot — see the `gfx_palette.c` module-audit entry above). The DAC itself is left
+untouched by this branch — it stays whatever the BIOS EGA ramp / boot mode-set programmed.
+
+**Reachability.** `init_display_97a4` (`src/host/host_video.c`) previously forced
+`palette_mode = 2` unconditionally on every boot, silently discarding an F2/EGA selection
+the player had just made at `gfx_driver_init()` — the EGA runtime path was unreachable in
+the playable no matter what the player chose. REVERSED (2026-07-11) to a guard: it now only
+supplies `2` as the default when nothing has selected a mode yet, so a live F2 choice
+survives to gameplay. `init_display_97f1`'s fixed VGA pixel→DAC Attribute Controller map
+(`host_set_gfx_attribute_palette`) is likewise gated to `palette_mode != 1`, so it no longer
+clobbers the per-image AC the EGA upload path just programmed. VGA (`palette_mode==2`)
+stays the default and the only byte-for-byte validated path; both gates are additive `if`s
+wrapped around otherwise-unchanged VGA code.
+
+**Honest verification state.** The playable, booted in EGA (`F2`), renders the intended EGA
+look — black background, red/white/orange title art — confirmed by a live DOSBox-X capture
+of the title screen (not the VGA-gold look). An independent same-build EGA-vs-VGA
+self-check (`tools/validate_ega.sh` "Phase 0") confirms the palette gating actually changes
+what's drawn: **62999/64000 pixels (98.4%) differ** between the EGA and VGA renders of the
+identical title-screen build. What is **not yet established** is pixel-exact parity against
+the real original `BUMPY.EXE` in EGA mode: `tools/validate_ega.sh`'s original-vs-playable
+compare is written and wired to the real AC-dump/decode pipeline, but is currently
+**ENV-BLOCKED** — the instrumented DOSBox-X build triple-faults booting the real original
+exe within its first ~60 frames (`CS:IP=0824:994e`), reproducing with zero capture
+instrumentation and independent of CPU config. This is a **pre-existing**
+DOSBox-X/original-boot incompatibility (it also identically blocks
+`tools/validate_playable.sh`'s own original-side capture) — **not** a defect of the EGA
+work. The definitive original-match run is pending that infrastructure fix, or an
+interactive playtest.
+
+**Remaining deferral.** The level-intro / in-level EGA palette is **not yet done** — only
+the title/menu/highscore front end has the faithful EGA palette. `level_palette_ptr_table`
+(the per-level palette far-pointer table `level_intro_screen` reads, DGROUP `0x6e6`) is
+declared but left unpopulated — filling it needs the per-level palette source table RE'd
+separately (a follow-up, not invented here); and `load_palette`'s level-palette staging
+(`src/host/host_video.c`) still runs its unconditional VGA-style decode/upload, not yet
+gated on `palette_mode`. So a gameplay level booted in EGA mode still renders with the
+VGA-style level palette; this is a known, explicitly out-of-scope-for-this-pass gap, not an
+oversight.
 
 ### Task 11 — scripted pixel frame-compare gate (`tools/validate_playable.sh`)
 

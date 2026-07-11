@@ -68,6 +68,54 @@ This overlay routine does not decompile (self-modifying, jump-table — same fam
 So mode-10 is a **planar rectangular copy** between a VGA page and a destination buffer —
 used for save-unders, read-backs, and buffer presents, **not** for drawing a sprite.
 
+## 1a. Palette pipeline — DAC vs Attribute Controller (CGA / EGA / VGA)
+
+A mode-0x0D pixel value (0..15) never maps to RGB directly. It first indexes the
+**Attribute Controller** (AC, 16 registers), whose *value* then indexes the **DAC** (256
+registers, 6-bit RGB): `RGB = DAC[ AC[pixel] ]`. `palette_mode` (`0=CGA/1=EGA/2=VGA`,
+DGROUP `0x541d`, selected at boot by `gfx_driver_init` — F2→EGA, F3→VGA) changes *which
+half* of that chain a decoded image's embedded palette patches:
+
+| | Attribute Controller | DAC |
+|---|---|---|
+| **VGA** (`palette_mode==2`) | fixed: `AC[v]=v` for `v<8`, `AC[v]=0x10+(v-8)` for `v>=8` | per-image: 48-byte 6-bit RGB palette (`img+0x33`) uploaded to DAC slots `0..7`/`0x10..0x17` |
+| **EGA** (`palette_mode==1`) | per-image: 16-byte AC-index table (`img+0x23`) | fixed: the BIOS mode-0x0D EGA DAC ramp (never re-uploaded) |
+
+So VGA repaints the *colours* every image (fixed pixel→AC, moving AC-index→DAC); EGA
+repaints the *mapping* every image (moving pixel→AC, fixed AC-index→DAC). The same plane
+data can therefore resolve to very different RGB depending on `palette_mode`, even though
+every other stage — pixel/plane transforms, the blit paths in §1/§3/§4 above — is
+EGA==VGA (every `1cec` sprite-op table's EGA slot equals its VGA slot; see
+[faithfulness-gap-audit.md](faithfulness-gap-audit.md) §2). The palette pipeline is the
+*only* axis on which EGA and VGA diverge.
+
+**Dispatch.** Each palette op indirects through a static per-mode vector table (3 slots:
+CGA, EGA, VGA) — confirmed **static initialised data** in the unpacked image, read directly,
+not built at runtime:
+
+| Table (DGROUP) | Op | CGA | EGA | VGA |
+|---|---|---|---|---|
+| `cmdvec_stage_palette_modes` `0x5435` | stage | `1ab9:0605` (RET) | `1ab9:0606` | `1ab9:0620` |
+| `cmdvec_upload_palette_modes` `0x5441` | upload | `1ab9:0661` (RET) | `1ab9:0662` | `1ab9:0677` |
+
+- **Stage** (`1ab9:0606`, EGA): `rep movsw` copies 16 bytes from the decoded image's `+0x23`
+  region into the current draw-object's per-page slot (`*0x5311 + page*99 + 0x23`). The
+  title/menu/level builders first *patch* the image's embedded `+0x23` bytes from a
+  per-screen source table (e.g. `show_title_background`'s `dgroup_pal_patch_63a`) before
+  stage runs — so the AC table staged is screen-specific, not baked into the raw
+  `.VEC`/`.PAV` asset.
+- **Upload** (`1ab9:0662`, EGA): `INT 10h AX=1002h`, `ES:DX` → the staged 16-byte table —
+  programs all 16 AC palette registers + overscan in one BIOS call. (VGA's upload,
+  `1ab9:0677`, instead writes the staged 48-byte RGB table to DAC ports `0x3c8`/`0x3c9`.)
+
+Faithful 1:1 transcription of all six CGA/EGA/VGA stage+upload handlers:
+`src/gfx_palette.c`. Playable host render (EGA branch, `palette_mode==1`):
+`src/host/host_gfx.c` programs the AC via the equivalent direct `0x3c0` port sequence
+(models `INT 10h AX=1002h`); the DAC is left at the BIOS EGA ramp. See
+[reconstruction-fidelity.md](reconstruction-fidelity.md) ("RECONSTRUCTED — the EGA palette
+path") for the reconstruction's side-store deviation, the verification state, and the
+current coverage (title/menu done; in-level EGA palette deferred).
+
 ## 2. VGA double-buffer (two pages, a000 / a200)
 
 The engine keeps two VGA pages within the 64 KB plane window:
