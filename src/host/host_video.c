@@ -194,8 +194,9 @@ extern const u8 __far *level_packed_palette(void);
  * (host_gfx_upload_palette_to_dac → port 0x3c9), so e.g. packed word 0x0750 →
  * (R,G,B bytes) (0x38,0xa8,0x80) → DAC (56,40,0).  It then runs the palette tail,
  * REUSING the Task-1 graphics-overlay primitives: gfx_stage_image_palette(0x6c42,DS,0) →
- * gfx_upload_palette_to_dac(0) → the vsync wait (1000:9864).  (Mode-1 is the EGA
- * fixed-palette patch path, not taken on the VGA boot.)
+ * gfx_upload_palette_to_dac(0) → the vsync wait (1000:9864).  Mode-1 is the EGA
+ * fixed-palette path (copies the fixed AC table at DGROUP 0x70e into +0x23 instead of the
+ * RGB decode; see the palette_mode==1 branch below) — reconstructed 2026-07-11.
  *
  * RECONSTRUCTION FIDELITY — HOST DATA SOURCE (RE'd 2026-06-27):
  * the host sources cur_level_ptr from g_dec_buf (the decoded .DEC) via
@@ -213,7 +214,18 @@ extern const u8 __far *level_packed_palette(void);
  * (host_set_gfx_attribute_palette: pixel i → DAC i<8?i:0x10+(i-8)) reads.  This is what
  * makes gameplay colours 8..15 correct; render_level's video_set_palette6 (DAC 0..15
  * contiguous) only covers the AC's low 8 slots.  See the audit + the report. */
-static u8 host_palette_staging[0x33u + 48u];   /* mirrors the engine 0x6c42 buffer: palette @ +0x33 */
+static u8 host_palette_staging[0x33u + 48u];   /* mirrors the engine 0x6c42 buffer: EGA AC @ +0x23, VGA RGB @ +0x33 */
+
+/* ingame_ega_ac_70e — the FIXED 16-byte in-game EGA Attribute-Controller palette load_palette
+ * (1000:08d1) copies over the staging buffer at +0x23 when palette_mode==1.  Unlike the
+ * per-world overworld tables (level_palette_ptr_table, screens.c), this ONE table is used for
+ * ALL in-level gameplay frames in every world — in EGA the playfield uses a single fixed
+ * 16-colour assignment onto the BIOS mode-0Dh EGA DAC ramp.
+ * RECONSTRUCTION FIDELITY: the binary's DGROUP 0x70e static data (extracted by
+ * tools/extract/ega_palette_patch.py — NOT invented). */
+static const u8 ingame_ega_ac_70e[16] = {
+    0x00u,0x01u,0x09u,0x0eu,0x0au,0x05u,0x04u,0x06u,0x0cu,0x02u,0x0au,0x09u,0x0bu,0x05u,0x07u,0x00u
+};
 
 void load_palette(u16 src_off, u16 src_seg)
 {
@@ -230,20 +242,33 @@ void load_palette(u16 src_off, u16 src_seg)
         return;   /* no level loaded yet (e.g. boot-time init_display_97f1) — faithful NOP */
     }
 
-    /* load_palette_byteswapped + load_palette decode, idx 0..15.  Read each packed
-     * word little-endian from cur_level_ptr, byte-swap (→ engine 0x578 word), then
-     * split each nibble << 3 into the staging palette region (+0x33).  Full bytes are
-     * stored; the DAC masks to 6 bits on upload (biases DAT_75eb/75ec = 0). */
-    for (i = 0u; i < 16u; i++) {
-        le = (u16)cur[(u16)i * 2u] | ((u16)cur[(u16)i * 2u + 1u] << 8);
-        w  = (u16)((le << 8) | (le >> 8));
-        host_palette_staging[0x33u + (u16)i * 3u + 0u] = (u8)((u16)(w >> 8) << 3);
-        host_palette_staging[0x33u + (u16)i * 3u + 1u] = (u8)((u16)(w >> 4) << 3);
-        host_palette_staging[0x33u + (u16)i * 3u + 2u] = (u8)((u16)(w & 0xffu) << 3);
+    if (palette_mode == 1u) {
+        /* EGA (1000:08d1, palette_mode==1 branch): copy the FIXED in-game 16-byte AC-index
+         * palette (DGROUP 0x70e) into the staging buffer's AC region (+0x23).  The packed
+         * level palette (cur) is NOT used in EGA — the DAC stays the BIOS mode-0Dh EGA ramp
+         * and only the Attribute-Controller indices change.  The host stage/upload
+         * (host_gfx_*) read +0x23 and program the 16 AC regs when palette_mode==1. */
+        for (i = 0u; i < 16u; i++) {
+            host_palette_staging[0x23u + (u16)i] = ingame_ega_ac_70e[i];
+        }
+    } else {
+        /* VGA/default (1000:08d1, else branch): load_palette_byteswapped + load_palette
+         * decode, idx 0..15.  Read each packed word little-endian from cur_level_ptr,
+         * byte-swap (→ engine 0x578 word), then split each nibble << 3 into the staging
+         * palette region (+0x33).  Full bytes are stored; the DAC masks to 6 bits on upload
+         * (biases DAT_75eb/75ec = 0). */
+        for (i = 0u; i < 16u; i++) {
+            le = (u16)cur[(u16)i * 2u] | ((u16)cur[(u16)i * 2u + 1u] << 8);
+            w  = (u16)((le << 8) | (le >> 8));
+            host_palette_staging[0x33u + (u16)i * 3u + 0u] = (u8)((u16)(w >> 8) << 3);
+            host_palette_staging[0x33u + (u16)i * 3u + 1u] = (u8)((u16)(w >> 4) << 3);
+            host_palette_staging[0x33u + (u16)i * 3u + 2u] = (u8)((u16)(w & 0xffu) << 3);
+        }
     }
 
-    /* Engine tail (1000:09e9): stage the staged palette into the per-page graphics-overlay slot,
-     * upload it to the DAC, then wait for vertical retrace. */
+    /* Engine tail (1000:09e9): stage the staged palette into the per-page graphics-overlay slot
+     * (EGA: +0x23 AC / VGA: +0x33 RGB, per palette_mode), upload it (EGA: program 16 AC regs /
+     * VGA: DAC 3c8/3c9), then wait for vertical retrace. */
     stage_fp = (u8 __far *)host_palette_staging;
     host_gfx_stage_image_palette(FP_OFF(stage_fp), FP_SEG(stage_fp), 0u);
     host_gfx_upload_palette_to_dac(0u);

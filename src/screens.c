@@ -828,14 +828,27 @@ u8 dgroup_pal_patch_64a[16];   /* DGROUP 0x64a  (run_main_menu)            */
 u8 dgroup_pal_patch_71e[16];   /* DGROUP 0x71e  (show_menu_select_screen)  */
 
 #ifdef BUMPY_PLAYABLE
-/* init_ega_palette_patch_tables — populate the four dgroup_pal_patch_* tables above with
- *  the real EGA->VGA AC palette bytes.
- *  RECONSTRUCTION FIDELITY: these 16-byte tables are the binary's DGROUP 0x63a/0x72e/
- *  0x64a/0x71e (extracted, not invented); the original loads them as static initialised
- *  data.  Same loader-relocated-static-data constraint as init_password_table /
- *  init_highscore_default_table — the playable build fills the tables at startup; the
- *  default BUMPY.EXE keeps the zero-init storage (this path is inert there anyway, since
- *  the boot palette_mode is 2, not 1). */
+/* level_palette_ptr_table (DGROUP 0x6e6): the per-level far-ptr array level_intro_screen
+ *  (the overworld map) indexes by current_level (1..9) to reach each world's 16-byte AC
+ *  palette; defined later in this file, forward-declared here so the init below can fill it.
+ *  Kept INSIDE the BUMPY_PLAYABLE guard so the default BUMPY.EXE translation unit is
+ *  unchanged (an earlier extern reference would reorder its DGROUP BSS and shift the image). */
+extern u16 level_palette_ptr_table[16 * 2];
+
+/* init_ega_palette_patch_tables — populate the EGA AC-index palette tables the playable
+ *  build needs when palette_mode==1:
+ *   (a) the four per-screen title/menu dgroup_pal_patch_* tables (DGROUP 0x63a/0x72e/0x64a/
+ *       0x71e), copied over img+0x23 by the title/menu builders; and
+ *   (b) the nine per-level/world overworld tables (DGROUP 0x65a..0x6da, stride 0x10), wired
+ *       into level_palette_ptr_table[1..9] so level_intro_screen's img+0x23 patch resolves.
+ *  RECONSTRUCTION FIDELITY: every byte below is the binary's own static DGROUP data
+ *  (extracted by tools/extract/ega_palette_patch.py — NOT invented).  The original stores the
+ *  per-level tables as static data and points level_palette_ptr_table at them at link time
+ *  (seg 0x103b); the reconstruction can't use the original link-time segment, so — exactly
+ *  like init_worldmap_data / init_password_table — it RELOCATES the pointers to the
+ *  reconstructed storage at startup via FP_OFF/FP_SEG.  Same loader-relocated-static-data
+ *  constraint; the default BUMPY.EXE keeps the zero-init storage (inert there — the boot
+ *  palette_mode is 2, not 1). */
 void init_ega_palette_patch_tables(void)
 {
     static const u8 s_63a[16] = { 0x00u,0x00u,0x00u,0x04u,0x06u,0x0cu,0x0cu,0x0bu,
@@ -846,12 +859,35 @@ void init_ega_palette_patch_tables(void)
                                   0x0au,0x04u,0x06u,0x06u,0x0cu,0x0eu,0x0fu,0x0fu };
     static const u8 s_71e[16] = { 0x00u,0x01u,0x08u,0x08u,0x07u,0x0bu,0x0bu,0x09u,
                                   0x01u,0x09u,0x04u,0x04u,0x06u,0x0cu,0x0cu,0x01u };
+    /* level_ega_ac_tables[L-1] = the AC palette level_palette_ptr_table[L] points at, for
+     * current_level L = 1..9 (DGROUP 0x65a..0x6da).  Level 1 (0x65a) equals copyprot_palette_src. */
+    static const u8 level_ega_ac_tables[9][16] = {
+        { 0x00u,0x00u,0x01u,0x09u,0x0bu,0x05u,0x04u,0x06u,0x0cu,0x02u,0x0au,0x09u,0x0bu,0x05u,0x07u,0x00u }, /* L1 @0x65a */
+        { 0x00u,0x00u,0x06u,0x0eu,0x07u,0x08u,0x04u,0x06u,0x0bu,0x02u,0x0au,0x01u,0x09u,0x07u,0x0bu,0x00u }, /* L2 @0x66a */
+        { 0x00u,0x00u,0x04u,0x0bu,0x07u,0x08u,0x04u,0x06u,0x0cu,0x02u,0x0au,0x01u,0x09u,0x07u,0x07u,0x00u }, /* L3 @0x67a */
+        { 0x00u,0x00u,0x06u,0x0eu,0x0bu,0x01u,0x0cu,0x06u,0x0cu,0x02u,0x0au,0x09u,0x0bu,0x09u,0x07u,0x00u }, /* L4 @0x68a */
+        { 0x00u,0x08u,0x04u,0x07u,0x09u,0x01u,0x04u,0x06u,0x0cu,0x02u,0x0au,0x01u,0x09u,0x09u,0x07u,0x00u }, /* L5 @0x69a */
+        { 0x00u,0x01u,0x09u,0x08u,0x07u,0x09u,0x04u,0x06u,0x0cu,0x02u,0x0au,0x09u,0x0bu,0x0bu,0x07u,0x00u }, /* L6 @0x6aa */
+        { 0x00u,0x08u,0x09u,0x07u,0x01u,0x09u,0x04u,0x06u,0x0cu,0x02u,0x0au,0x08u,0x01u,0x0bu,0x07u,0x00u }, /* L7 @0x6ba */
+        { 0x00u,0x04u,0x06u,0x0cu,0x0cu,0x01u,0x04u,0x06u,0x0cu,0x02u,0x0au,0x09u,0x09u,0x09u,0x07u,0x00u }, /* L8 @0x6ca */
+        { 0x00u,0x07u,0x09u,0x09u,0x0du,0x00u,0x04u,0x06u,0x09u,0x02u,0x0au,0x07u,0x09u,0x05u,0x07u,0x00u }, /* L9 @0x6da */
+    };
     u8 i;
     for (i = 0u; i < 16u; i++) {
         dgroup_pal_patch_63a[i] = s_63a[i];
         dgroup_pal_patch_72e[i] = s_72e[i];
         dgroup_pal_patch_64a[i] = s_64a[i];
         dgroup_pal_patch_71e[i] = s_71e[i];
+    }
+    /* Relocate the per-level far pointers to the reconstructed storage (as {off,seg}, the
+     * same stride-2 layout password_table uses).  level_intro_screen reads current_level
+     * 1..9; entry 0 is never a real level (the original's entry 0 overlaps the tail of the
+     * last AC table) — point it at L1 defensively so an out-of-range read can't deref NULL. */
+    level_palette_ptr_table[0] = FP_OFF((const u8 __far *)level_ega_ac_tables[0]);
+    level_palette_ptr_table[1] = FP_SEG((const u8 __far *)level_ega_ac_tables[0]);
+    for (i = 1u; i <= 9u; i++) {
+        level_palette_ptr_table[(u16)i * 2u]      = FP_OFF((const u8 __far *)level_ega_ac_tables[i - 1u]);
+        level_palette_ptr_table[(u16)i * 2u + 1u] = FP_SEG((const u8 __far *)level_ega_ac_tables[i - 1u]);
     }
 }
 #endif /* BUMPY_PLAYABLE */
@@ -2133,13 +2169,13 @@ void show_level_intro_screen(void)
  *  (DGROUP 0x974 length, 0x6e6 palette ptr — both indexed by current_level).  Owned
  *  here; harness-seeded.  Under the boot palette_mode==2 the palette path is skipped.
  *
- *  DESCOPE (Task 2, EGA palette-patch data): level_palette_ptr_table is NOT populated by
- *  any existing init.  Filling it needs the per-level palette far-pointer SOURCE table
- *  RE'd separately (locate via xrefs to the level_intro_screen load site) — out of scope
- *  here; do not invent pointers.  Deferred; the level-intro EGA palette is secondary to
- *  the title/menu EGA path this task fills (dgroup_pal_patch_* / copyprot_palette_src). */
+ *  level_palette_ptr_table (DGROUP 0x6e6) is now populated (2026-07-11): the per-level EGA
+ *  AC-palette SOURCE tables (DGROUP 0x65a..0x6da) were RE'd + extracted + wired into it by
+ *  init_ega_palette_patch_tables (relocated to reconstructed storage, like init_worldmap_data).
+ *  See that init for the fidelity note.  The engine reads level_palette_ptr_table[current_level]
+ *  (1..9) in the palette_mode==1 branch of level_intro_screen below. */
 u16 level_img_len_table[16 * 5];    /* DGROUP 0x974 (stride 10 = 5 words/level)         */
-u16 level_palette_ptr_table[16 * 2];/* DGROUP 0x6e6 (stride 4 = far ptr/level) — DEFERRED */
+u16 level_palette_ptr_table[16 * 2];/* DGROUP 0x6e6 (stride 4 = far ptr/level 1..9)     */
 
 /* ════════════════════════════════════════════════════════════════════════════
  *  level_intro_screen — 1000:3852

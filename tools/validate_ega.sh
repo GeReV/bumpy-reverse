@@ -34,12 +34,16 @@
 #            tools/dosbox/cap_w2.sh uses. INFORMATIONAL ONLY (see KNOWN GAP
 #            below) — never fails the gate.
 #
-# KNOWN GAP (documented in .superpowers/sdd/task-6-report.md and
-# docs/reconstruction-fidelity.md): load_palette()'s level-palette staging
-# (src/host/host_video.c ~205-238) is unconditional VGA-style decode/upload,
-# NOT gated on palette_mode. So an in-level EGA frame is EXPECTED to mismatch
-# the original until that gap is closed by a future task — the world1/2/3/9
-# checks are informational precisely because of this, not a script bug.
+# CLOSED GAP (2026-07-11, was: load_palette level-palette staging not gated on
+# palette_mode): load_palette (src/host/host_video.c) now has the EGA branch that
+# copies the fixed in-game AC table (DGROUP 0x70e) into staging +0x23, and
+# level_palette_ptr_table (the per-world overworld tables) is populated — so in-level
+# and overworld EGA frames now program the correct AC. Verified out-of-band (not via
+# this gate's original-vs-playable path, which stays ENV-BLOCKED — see below): a
+# DOSBox-X EGA boot capture showed the programmed AC registers match the binary tables
+# byte-for-byte (overworld -> 0x65a world 1, in-level -> 0x70e), vs pre-fix garbage
+# (overworld) / all-zero (in-level). The world1/2/3/9 checks below remain informational
+# only because the ORIGINAL-side capture is still env-blocked, NOT because of a code gap.
 #
 # PHASE 0 (self-contained, no original required, no ENV-BLOCK risk): boots
 # the SAME freshly-built playable in EGA and in VGA at the same title-frame
@@ -314,9 +318,10 @@ for screen in "${WANT[@]}"; do
         *)
             case " $WORLD_SCREENS " in
                 *" $screen "*)
-                    echo "== [$screen] informational only -- KNOWN GAP: load_palette() level-palette staging"
-                    echo "            is not gated on palette_mode yet (see header + task-6-report.md);"
-                    echo "            an in-level EGA mismatch here is EXPECTED, not a regression." ;;
+                    echo "== [$screen] informational only -- the ORIGINAL-side EGA capture is"
+                    echo "            env-blocked (triple-fault, see header). The in-level EGA palette"
+                    echo "            path is now reconstructed (load_palette 0x70e branch + populated"
+                    echo "            level_palette_ptr_table, 2026-07-11) and AC-verified out-of-band." ;;
                 *) echo "validate_ega: unknown screen '$screen' (expected: title menu $WORLD_SCREENS)" >&2; exit 2 ;;
             esac
             run_screen "$screen" 0

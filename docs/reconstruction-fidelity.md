@@ -1923,6 +1923,21 @@ menu text).  Default BUMPY.EXE byte-identical (cac9ff23); all changes are host-o
    initial level frame and the world-map/iris that precede `game_loop`'s own `apply_level_palette`
    use the real palette; the non-playable differential harness keeps `video_set_palette6` (its
    frame compare uses the captured palette, not this DAC write).
+   **EGA BRANCH (`palette_mode==1`) reconstructed 2026-07-11 (closes the KNOWN GAP):** the
+   engine `load_palette` (`1000:08d1`) has a `palette_mode==1` branch that IGNORES the packed
+   level palette and instead copies a FIXED 16-byte Attribute-Controller table from DGROUP
+   `0x70e` into the staging buffer at +0x23 (then the common stage→upload→vsync tail; in EGA the
+   host stage/upload read +0x23 and program the 16 AC regs).  The host `load_palette` previously
+   did the VGA RGB decode unconditionally, so in EGA the +0x23 AC region stayed zero → every
+   in-level frame was BLACK.  Now reconstructed 1:1 (the `0x70e` bytes extracted by
+   `tools/extract/ega_palette_patch.py`, NOT invented).  The per-WORLD overworld palette is a
+   separate path: `level_intro_screen` (`1000:3852`) patches the decoded MONDE<n>.VEC image at
+   +0x23 from `level_palette_ptr_table[current_level]` (DGROUP `0x6e6` → per-level tables `0x65a..
+   0x6da`); that table was a zeroed placeholder (overworld read a NULL far ptr → garbage AC), now
+   populated + relocated by `init_ega_palette_patch_tables` (like `init_worldmap_data`).  VERIFIED
+   end-to-end under DOSBox-X (EGA boot): the programmed AC registers now match the binary tables
+   byte-for-byte — overworld → `0x65a` (world 1), in-level → `0x70e` — vs the pre-fix garbage
+   (overworld) / all-zero (in-level).  Default `BUMPY.EXE` md5 unchanged (`e8957fa0…`).
 
 REMAINING (not yet fixed): `run_main_menu` returns 1 almost immediately on its first poll
 (so the normal flow falls into a blank `show_highscore_screen` instead of holding the menu) —
