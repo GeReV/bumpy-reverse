@@ -45,7 +45,7 @@ BUMPY_OBJS = main.obj game.obj game_stubs.obj &
              level.obj input.obj player.obj player2.obj items.obj anim.obj spawn.obj sound.obj screens.obj &
              vec.obj op12.obj video.obj &
              sprite.obj sprite_anim.obj sprite_chain.obj sprite_blit.obj &
-             bg_render.obj entity.obj gfx_overlay.obj &
+             bg_render.obj entity.obj gfx_overlay.obj gfx_palette.obj &
              dosio.obj prng.obj globals.obj worldmap_data.obj anim_data.obj &
              bvec_buf1.obj bvec_buf2.obj
 
@@ -94,6 +94,7 @@ PLAY_OBJS = &
     $(PLAYDIR)/sprite.obj $(PLAYDIR)/sprite_anim.obj $(PLAYDIR)/sprite_chain.obj &
     $(PLAYDIR)/sprite_blit.obj &
     $(PLAYDIR)/bg_render.obj $(PLAYDIR)/entity.obj $(PLAYDIR)/gfx_overlay.obj &
+    $(PLAYDIR)/gfx_palette.obj &
     $(PLAYDIR)/dosio.obj $(PLAYDIR)/prng.obj $(PLAYDIR)/globals.obj &
     $(PLAYDIR)/move_scripts.obj $(PLAYDIR)/worldmap_data.obj $(PLAYDIR)/anim_data.obj &
     $(PLAYDIR)/bvec_buf1.obj $(PLAYDIR)/bvec_buf2.obj
@@ -174,6 +175,8 @@ $(PLAYDIR)/entity.obj: entity.c
 	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/entity.obj entity.c
 $(PLAYDIR)/gfx_overlay.obj: gfx_overlay.c
 	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/gfx_overlay.obj gfx_overlay.c
+$(PLAYDIR)/gfx_palette.obj: gfx_palette.c gfx_palette.h
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/gfx_palette.obj gfx_palette.c
 $(PLAYDIR)/dosio.obj: dosio.c
 	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/dosio.obj dosio.c
 $(PLAYDIR)/prng.obj: prng.c
