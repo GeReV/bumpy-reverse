@@ -106,14 +106,14 @@ def load_frame4(path: str) -> Dict:
         fullscreen_buf (bytes)    — 32000 B, 4 planes * 8000 B each
                                     (save-under captured at level start:
                                      setup_fullscreen_view copies a000→fullscreen_buf)
-        present_calls (list)      — list of dicts, one per active bgi_set_mode_10 call:
+        present_calls (list)      — list of dicts, one per active gfx_set_mode_10 call:
             desc_seg (int)         — view descriptor seg
             desc_off (int)         — view descriptor off
             w0 (int)               — view->word[0]: 0=src a200, 1=src a000
             dest_seg (int)         — dest far ptr seg (view+0x12)
             dest_off (int)         — dest far ptr off (view+0x10)
             sh_idx (int)           — sub-handler index (view+0x1c)
-            n_all (int)            — total bgi_set_mode_10 calls so far at this point
+            n_all (int)            — total gfx_set_mode_10 calls so far at this point
             call_ord (int)         — ordinal of this record in present_calls list
         csd_obs (list)            — list of dicts, one per blit_sprite_vga call:
             csd_seg (int)          — cur_sprite_data seg

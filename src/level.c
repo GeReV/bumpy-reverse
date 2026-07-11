@@ -604,7 +604,7 @@ const u8 __far *level_packed_palette(void)
        loop — always AFTER load_current_level_data — and (b) init_display_97f1 at
        boot, where cur_level_ptr is still NULL and the NULL guard below no-ops
        exactly as it did for the old g_dec_buf==NULL case.  The overworld/world-map
-       palette flows through host_bgi_stage_image_palette + fun_7bca_flip instead
+       palette flows through host_gfx_stage_image_palette + fun_7bca_flip instead
        and never touches this accessor. */
     if (cur_level_ptr == (u8 __far *)0) {
         return (const u8 __far *)0;

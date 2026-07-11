@@ -216,7 +216,7 @@ void set_disk_swap_callback(u16 int24_handler, u16 callback)
     (void)int24_handler; (void)callback;
 }
 
-/* 1000:7bad bgi_overlay_thunk_adab — timer/resource-table init (off,seg). */
+/* 1000:7bad gfx_overlay_thunk_adab — timer/resource-table init (off,seg). */
 void init_timer_resource_table(u16 off, u16 seg)
 {
     (void)off; (void)seg;
@@ -244,7 +244,7 @@ void init_sound_tables(u16 a, u16 b, u16 seg)
 }
 #endif /* !BUMPY_PLAYABLE */
 
-/* 1000:7bd7 bgi_overlay_thunk_gfx_init — misc subsystem init. */
+/* 1000:7bd7 gfx_overlay_thunk_gfx_init — misc subsystem init. */
 void init_misc_7bd7(void)
 {
 }
@@ -257,7 +257,7 @@ void init_display_97a4(void)
 }
 #endif /* !BUMPY_PLAYABLE */
 
-/* 1000:7bbd bgi_overlay_thunk_0232 — misc init (one byte arg). */
+/* 1000:7bbd gfx_overlay_thunk_0232 — misc init (one byte arg). */
 void init_misc_7bbd(u8 mode)
 {
     (void)mode;
@@ -394,7 +394,7 @@ void init_fullscreen_view_desc(u8 mode, u8 flag) { (void)mode; (void)flag; }
 
 /* setup_fullscreen_view 1000:483c — CARVE-OUT (render-core leaf): the per-load
    fullscreen view/page restore the spawn orchestrator runs once before the grid scan
-   (the fullscreen_buf -> page copy bgi_overlay.c models for sub-handler 0).  Not
+   (the fullscreen_buf -> page copy gfx_overlay.c models for sub-handler 0).  Not
    reconstructed; faithful no-op stub for linkability (called by spawn.c).
    BUMPY_PLAYABLE: owned by src/host/host_view.c in the playable build. */
 #ifndef BUMPY_PLAYABLE

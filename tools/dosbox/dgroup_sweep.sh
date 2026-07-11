@@ -63,12 +63,12 @@ bash "$SRC/build.sh" play >"$OUTDIR/build.log" 2>&1 || {
 # canonical object order (matches Makefile PLAY_OBJS)
 OBJLIST="play/main.obj play/game.obj play/game_stubs.obj play/host_video.obj \
 play/host_render.obj play/host_timer.obj play/host_input.obj play/view_setup.obj \
-play/host_boot.obj play/host_resource.obj play/host_bgi.obj play/config_screens.obj \
+play/host_boot.obj play/host_resource.obj play/host_gfx.obj play/config_screens.obj \
 play/level.obj play/input.obj play/player.obj play/player2.obj play/items.obj \
 play/anim.obj play/spawn.obj play/sound.obj play/screens.obj play/vec.obj \
 play/op12.obj play/video.obj play/sprite.obj play/sprite_anim.obj \
 play/sprite_chain.obj play/sprite_blit.obj play/bg_render.obj play/entity.obj \
-play/bgi_overlay.obj play/dosio.obj play/prng.obj play/globals.obj \
+play/gfx_overlay.obj play/dosio.obj play/prng.obj play/globals.obj \
 play/move_scripts.obj play/worldmap_data.obj play/anim_data.obj play/bvec_buf1.obj \
 play/bvec_buf2.obj"
 

@@ -160,7 +160,7 @@ void play_iris_wipe_transition(void);
  *  whose mode-2 overlay handler (2036:0015) is a VERTICAL-RETRACE (vsync) WAIT — poll
  *  Input Status #1 (0x3da) bit 3 until the retrace starts, then ends.  FORMERLY mis-named
  *  upload_vga_dac_palette: it is NOT a DAC upload (Task-2 misnomer correction).  The real
- *  DAC upload is host_bgi_upload_palette_to_dac / vga_dac_upload_from_buffer. */
+ *  DAC upload is host_gfx_upload_palette_to_dac / vga_dac_upload_from_buffer. */
 void wait_vretrace_thunk(void);
 
 /* wait_vretrace_dispatch (2036:0000): the vsync-wait dispatch wait_vretrace_thunk CALLFs

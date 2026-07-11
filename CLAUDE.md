@@ -28,7 +28,8 @@ scheme, or "equivalent" approximation out of convenience or guesswork. Concretel
 - **Match the original's structure and data, not just the observable output.** Reuse
   the original's buffers, offsets, tables, and control flow; don't substitute your own.
 - **When 1:1 is genuinely impossible** (e.g. the playable host's reduced memory, the
-  self-modifying BGI overlay that doesn't decompile), **surface the constraint and ask
+  self-modifying graphics overlay — `gfx_*`, Loriciel-custom, not Borland BGI — that
+  doesn't decompile), **surface the constraint and ask
   / document it** — do not silently swap in an invented workaround. Every unavoidable
   deviation gets a `RECONSTRUCTION FIDELITY` note + a `docs/reconstruction-fidelity.md`
   entry, and stays clearly labelled as a deviation.
@@ -44,11 +45,11 @@ under the git-ignored `local/` tree; users supply their own.
   built with the **Turbo C++ 1990 (Borland)** C runtime. Graphics go through the
   game's **own VGA planar overlay** at segment `1ab9` — **NOT stock Borland BGI**
   (verified 2026-07-11: no `EGAVGA.BGI` linked or loaded, no driver banner in the
-  image; only a 42-byte incidental match). The `bgi_*` / "BGI" labels on that overlay
-  (`bgi_set_mode_00/01/10/11`, `bgi_overlay*`, etc.) are a **historical misnomer** from
-  an early naming pass — a Loriciel-custom engine, not Borland BGI (symbol rename
-  pending). Originally **TinyProg-packed** (CRC-keyed anti-tamper + LZSS); unpacking
-  is done & verified.
+  image; only a 42-byte incidental match). The overlay's `gfx_*` symbols
+  (`gfx_set_mode_00/01/10/11`, `gfx_overlay*`, `gfx_view_desc`, etc.) were **renamed
+  from `bgi_*` (2026-07-11)** — an early naming pass wrongly assumed Borland BGI; it is
+  a Loriciel-custom engine. Originally **TinyProg-packed** (CRC-keyed anti-tamper +
+  LZSS); unpacking is done & verified.
 - Work against the **unpacked** image: `local/build/unpack/BUMPY_unpacked.exe`
   (also at `local/originals/unpacked/BUMPY_unpacked.exe`).
 - ~399 functions total. Far-pointer / 32-bit global pairs (`_off`/`_seg`,
@@ -98,7 +99,8 @@ a reimplementation.
   (`docs/reconstruction-fidelity.md`). Known reimplementation-leaning deviations to
   flag and, where feasible, bring back toward 1:1: the two planar blitters
   (`sprite_blit`, `bg_render`) are *behavior*-faithful semantic reconstructions of
-  self-modifying BGI-overlay code that does not decompile; `sprite_chain` merges
+  self-modifying graphics-overlay code (`gfx_*`, Loriciel-custom, not Borland BGI) that
+  does not decompile; `sprite_chain` merges
   `object_list`+`clip`+`setup`; the composite/oracle host models a 4-plane *memory
   image* rather than the engine's VGA-hardware port writes + a000/a200 double-buffer.
   These are validation/reimplementation tools, kept clearly labeled as such.
@@ -121,8 +123,9 @@ a reimplementation.
 - `docs/README.md` — documentation index.
 - `docs/06-engine.md` — engine internals (game loop, two-player pipeline, physics
   state machine, anim channels). To be rewritten from the reconstructed source.
-- `docs/rendering-pipeline.md` — how the engine draws: BGI overlay dispatch, the
-  a000/a200 VGA double-buffer, background/sprite/entity blit paths.
+- `docs/rendering-pipeline.md` — how the engine draws: the (Loriciel-custom, `gfx_*`)
+  graphics-overlay dispatch, the a000/a200 VGA double-buffer, background/sprite/entity
+  blit paths.
 - `docs/reconstruction-fidelity.md` — per-module audit of where `src/` deviates from
   the original's structure (the deviations to keep labeled / bring toward 1:1).
 - `docs/formats/` — file-format specs.

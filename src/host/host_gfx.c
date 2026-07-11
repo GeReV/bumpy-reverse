@@ -2,10 +2,10 @@
 #include <i86.h>       /* MK_FP */
 #include <conio.h>     /* outp */
 #include "host.h"
-#include "host_bgi.h"
+#include "host_gfx.h"
 
 /* ============================================================================
- * host_bgi.c — BGI overlay primitive host reimplementation (BUMPY_PLAYABLE)
+ * host_gfx.c — BGI overlay primitive host reimplementation (BUMPY_PLAYABLE)
  * ============================================================================
  *
  * RECONSTRUCTION FIDELITY — BGI OVERLAY PRIMITIVES (FUNCTIONAL EQUIVALENCE)
@@ -37,64 +37,64 @@
  * RECONSTRUCTION FIDELITY — PALETTE SIDE-STORE DEVIATION
  * The engine stores staged palettes in *0x5311 + page*99 + 0x33 (a slot in the
  * descriptor heap keyed by page).  The host keeps a two-entry side-store
- * host_bgi_page_palette[2][48] instead — behaviorally equivalent (stage writes
+ * host_gfx_page_palette[2][48] instead — behaviorally equivalent (stage writes
  * it, upload reads it, same 48-byte content) but does not model the full
  * *0x5311 descriptor heap layout.  Deviation cited for handler addresses
  * 1ab9:0620 (stage) and 1ab9:0677 (DAC upload).
  * ============================================================================ */
 
 /* Per-page staged palette store — 2 pages × 16 colours × 3 bytes (6-bit RGB).
- * Filled by host_bgi_stage_image_palette (mirrors 1ab9:0620 rep-movsw); read by
- * host_bgi_upload_palette_to_dac (mirrors 1ab9:0677 DAC write loop). */
-static u8 host_bgi_page_palette[2][48];
+ * Filled by host_gfx_stage_image_palette (mirrors 1ab9:0620 rep-movsw); read by
+ * host_gfx_upload_palette_to_dac (mirrors 1ab9:0677 DAC write loop). */
+static u8 host_gfx_page_palette[2][48];
 
-/* bgi_write_mode_flag_a / bgi_write_mode_flag_b — DGROUP 0x541f / 0x5420.
- * Engine globals set by bgi_init_viewport (1ab9:0179), restore_bg_view (1ab9:0d77),
+/* gfx_write_mode_flag_a / gfx_write_mode_flag_b — DGROUP 0x541f / 0x5420.
+ * Engine globals set by gfx_init_viewport (1ab9:0179), restore_bg_view (1ab9:0d77),
  * and render_player_view (1ab9:1028) to select source/dest addressing mode for the
- * subsequent blit handler.  In the VGA playable path only bgi_init_viewport writes
+ * subsequent blit handler.  In the VGA playable path only gfx_init_viewport writes
  * them (a=2, b=1); the overlay blit handlers that READ them are not reconstructed
- * (VGA slot = null handler; see host_bgi_set_viewport).
+ * (VGA slot = null handler; see host_gfx_set_viewport).
  *
  * Declared here because these globals are only needed under #ifdef BUMPY_PLAYABLE:
  * the default BUMPY.EXE NOP stub for fun_7b4a never reaches them. */
-u8 bgi_write_mode_flag_a;   /* DGROUP 0x541f */
-u8 bgi_write_mode_flag_b;   /* DGROUP 0x5420 */
+u8 gfx_write_mode_flag_a;   /* DGROUP 0x541f */
+u8 gfx_write_mode_flag_b;   /* DGROUP 0x5420 */
 
-/* ── host_bgi_stage_image_palette ───────────────────────────────────────────
+/* ── host_gfx_stage_image_palette ───────────────────────────────────────────
  * Functional equivalent of the BGI VGA palette-stage handler (1ab9:0620).
  *
  * The original handler copies 0x18 words (48 bytes = 16 colours × 3 bytes) from
  * DS:SI = [buf_seg:buf_off]+0x33 to ES:DI = *0x5311 + page*99 + 0x33 via
- * "rep movsw".  The host copies to host_bgi_page_palette[page & 1] instead of
+ * "rep movsw".  The host copies to host_gfx_page_palette[page & 1] instead of
  * the full descriptor slot — see the fidelity note above.
  *
  * Called from fun_7b93_present_blank (screens.c) under #ifdef BUMPY_PLAYABLE. */
-void host_bgi_stage_image_palette(u16 buf_off, u16 buf_seg, u16 page)
+void host_gfx_stage_image_palette(u16 buf_off, u16 buf_seg, u16 page)
 {
     u8 __far *src = (u8 __far *)MK_FP(buf_seg, buf_off) + 0x33;
-    u8 *dst = host_bgi_page_palette[page & 1u];
+    u8 *dst = host_gfx_page_palette[page & 1u];
     u8 i;
     for (i = 0u; i < 48u; i++) {
         dst[i] = src[i];
     }
 }
 
-/* ── host_bgi_upload_palette_to_dac ─────────────────────────────────────────
+/* ── host_gfx_upload_palette_to_dac ─────────────────────────────────────────
  * Functional equivalent of the BGI VGA DAC-upload handler (1ab9:0677).
  *
  * The original handler reads *0x5311 + page*99 + 0x33 (the staged palette slot)
  * and emits the canonical VGA-DAC write sequence: OUT 0x3c8=0x00, 8×RGB to
  * 0x3c9, OUT 0x3c8=0x10, 8×RGB to 0x3c9 (BGI colour indices 0..7 at DAC 0..7,
- * indices 8..15 at DAC 0x10..0x17).  The host reads from host_bgi_page_palette
+ * indices 8..15 at DAC 0x10..0x17).  The host reads from host_gfx_page_palette
  * [page & 1] and emits the identical port sequence.
  *
  * The (port,value) sequence is the hard contract the DAC port-write gate
  * validates; it must match vga_dac_upload_from_buffer (screens.c) byte-for-byte.
  *
  * Called from fun_7bca_flip (screens.c) under #ifdef BUMPY_PLAYABLE. */
-void host_bgi_upload_palette_to_dac(u16 page)
+void host_gfx_upload_palette_to_dac(u16 page)
 {
-    const u8 *pal = host_bgi_page_palette[page & 1u];
+    const u8 *pal = host_gfx_page_palette[page & 1u];
     u8 i;
     outp(0x3c8, 0x00);                 /* DAC write index 0 */
     for (i = 0u; i < 8u; i++) {
@@ -112,15 +112,15 @@ void host_bgi_upload_palette_to_dac(u16 page)
     }
 }
 
-/* ── host_bgi_set_viewport ───────────────────────────────────────────────────
- * Functional equivalent of BGI overlay bgi_init_viewport (1ab9:0179), called
- * via main-segment thunk 1000:7b4a (Ghidra: bgi_set_viewport_thunk).
+/* ── host_gfx_set_viewport ───────────────────────────────────────────────────
+ * Functional equivalent of BGI overlay gfx_init_viewport (1ab9:0179), called
+ * via main-segment thunk 1000:7b4a (Ghidra: gfx_set_viewport_thunk).
  *
  * Engine disassembly (1ab9:0179):
  *   *(u16*)(view + 0x18) = 0x14;         -- clip extent width  = 20 (constant)
  *   *(u16*)(view + 0x1a) = 0x19;         -- clip extent height = 25 (constant)
- *   bgi_write_mode_flag_a = 2;           -- DGROUP 0x541f
- *   bgi_write_mode_flag_b = 1;           -- DGROUP 0x5420
+ *   gfx_write_mode_flag_a = 2;           -- DGROUP 0x541f
+ *   gfx_write_mode_flag_b = 1;           -- DGROUP 0x5420
  *   CALL [palette_mode*2 + 0x4dda]       -- EGA/VGA slot = 0x0000
  *
  * ── CORRECTION (2026-07-05): the 0x4dda EGA/VGA slot is a RECT FILL, not a no-op ──
@@ -135,7 +135,7 @@ void host_bgi_upload_palette_to_dac(u16 page)
  *              SEQ map-mask + `rep stosw`).  Fill value = the per-plane colour built
  *              from `view[+0x22..+0x25]` (1ab9:05cf); for the iris and the name-entry
  *              cursor those bytes are 0 → BLACK.
- *   Geometry (1ab9:0427, with bgi_write_mode_flag_a==2 → dest-only, no source copy):
+ *   Geometry (1ab9:0427, with gfx_write_mode_flag_a==2 → dest-only, no source copy):
  *     dest byte-x = view[+0x14] * 2   (0x5421)
  *     dest row    = view[+0x16] * 8   (0x542d)     stride = 40 (0x5429, flag_b==1)
  *     width bytes = view[+0x1e] * 2   (0x5431)
@@ -157,7 +157,7 @@ void host_bgi_upload_palette_to_dac(u16 page)
  * reconstruction-fidelity.md ("playable host: BGI overlay primitives").
  *
  * Called from fun_7b4a_view_blit (screens.c) under #ifdef BUMPY_PLAYABLE. */
-void host_bgi_set_viewport(u8 __far *view, u16 seg)
+void host_gfx_set_viewport(u8 __far *view, u16 seg)
 {
     u16 dx_t, dy_t, w_t, h_t;
     u16 wb, hr, base, r, c;
@@ -166,8 +166,8 @@ void host_bgi_set_viewport(u8 __far *view, u16 seg)
     (void)seg;
     *(u16 __far *)(view + 0x18) = 0x14u;   /* clip extent width  = 20 (constant) */
     *(u16 __far *)(view + 0x1a) = 0x19u;   /* clip extent height = 25 (constant) */
-    bgi_write_mode_flag_a = 2u;             /* DGROUP 0x541f */
-    bgi_write_mode_flag_b = 1u;             /* DGROUP 0x5420 */
+    gfx_write_mode_flag_a = 2u;             /* DGROUP 0x541f */
+    gfx_write_mode_flag_b = 1u;             /* DGROUP 0x5420 */
 
     /* Secondary dispatch (1ab9:0000 → 0x4dcc[view+0x1c]); only sub-mode 0 = rect fill
        is reached by the recon (iris + name-entry cursor). */

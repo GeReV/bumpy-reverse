@@ -1,12 +1,12 @@
-#ifndef BGI_OVERLAY_H
-#define BGI_OVERLAY_H
+#ifndef GFX_OVERLAY_H
+#define GFX_OVERLAY_H
 
 #include "bumpy.h"
 
 /* Faithful C reconstructions of the two BGI-overlay dispatch functions used
    by the entity draw pipeline:
 
-   restore_bg_view   (1000:80bc) → bgi_set_mode_01 (1ab9:0d77)
+   restore_bg_view   (1000:80bc) → gfx_set_mode_01 (1ab9:0d77)
      Background / erase blit.  Mode-01 dispatcher: keys on view->word[0x0e];
      if > 1 → NOP.  When active: [0x541f]=0 (source from view+0x02), [0x5420]=1
      (dest from pointer table[view+0x0e]), then calls the mode-01 VGA handler
@@ -14,7 +14,7 @@
      Used in the engine's erase phase to restore fullscreen_buf over the old
      entity cell before blitting the new position.
 
-   render_player_view (1000:93b8) → bgi_set_mode_10 (1ab9:1028)
+   render_player_view (1000:93b8) → gfx_set_mode_10 (1ab9:1028)
      Planar rectangular COPY between a VGA page and a destination buffer.
      Mode-10 dispatcher: keys on view->word[0] (= view[0..1] LE u16); if > 1
      → NOP.  When active: [0x541f]=1 (source from pointer table[word[0]]),
@@ -31,8 +31,8 @@
    In draw_anim_channels_a (1000:165e) and draw_anim_channels_b (1000:17c7),
    BOTH the erase_view (0x114b:0x74a0) and the draw_view (0x114b:0x751e)
    descriptors BEGIN with machine code (0xb385 / 0xc3fb respectively).
-   For bgi_set_mode_01: word[0x0e] of erase_view = 0x85b3 > 1 → NOP.
-   For bgi_set_mode_10: word[0] of draw_view = 0xc3fb > 1 → NOP.
+   For gfx_set_mode_01: word[0x0e] of erase_view = 0x85b3 > 1 → NOP.
+   For gfx_set_mode_10: word[0] of draw_view = 0xc3fb > 1 → NOP.
    Consequence: ALL restore_bg_view / render_player_view calls inside
    draw_anim_channels_a/b are structural NOPs for every entity blit.
    The visible entity pixels come solely from blit_sprite_vga (step 2).
@@ -82,26 +82,26 @@ typedef struct {
     u16 dest_seg;        /* +0x12 dest far ptr segment (mode-10) */
     u16 _pad2[4];        /* +0x14..0x1b */
     u16 subhandler;      /* +0x1c sub-dispatch index (mode-10) */
-} bgi_view_desc;
+} gfx_view_desc;
 
 /* VGA page table (mirrors sprite_table_base at DGROUP:0x5415):
      entry[0] = a200:0000  (VGA plane offset 0x2000 — page1 / sprite-scratch)
      entry[1] = a000:0000  (VGA plane offset 0x0000 — page0 / visible)
    Indexed by view->word00 (mode-10) or view->word0e (mode-01). */
-#define BGI_PAGE_A200_OFF  0x2000UL  /* VGA byte offset for a200:0000 */
-#define BGI_PAGE_A000_OFF  0x0000UL  /* VGA byte offset for a000:0000 */
-#define BGI_PAGE_SIZE      0x1F40UL  /* 200 rows × 40 bytes = 8000 B per plane */
+#define GFX_PAGE_A200_OFF  0x2000UL  /* VGA byte offset for a200:0000 */
+#define GFX_PAGE_A000_OFF  0x0000UL  /* VGA byte offset for a000:0000 */
+#define GFX_PAGE_SIZE      0x1F40UL  /* 200 rows × 40 bytes = 8000 B per plane */
 /* bytes per plane in host work buffer — must match HOST_PLANE_SIZE.  HOST_FB_16K
    (playable EXE) → 16 KB/plane; default build + ctests → full 64 KB (byte-unchanged). */
 #ifdef HOST_FB_16K
-#define BGI_PLANE_SIZE     0x4000UL
+#define GFX_PLANE_SIZE     0x4000UL
 #else
-#define BGI_PLANE_SIZE     0x10000UL
+#define GFX_PLANE_SIZE     0x10000UL
 #endif
-#define BGI_ROWS           200u      /* display rows */
-#define BGI_ROW_BYTES      40u       /* VGA row stride (320px ÷ 8 bits) */
+#define GFX_ROWS           200u      /* display rows */
+#define GFX_ROW_BYTES      40u       /* VGA row stride (320px ÷ 8 bits) */
 
-/* restore_bg_view — wrapper for bgi_set_mode_01 (1000:80bc → 1ab9:0d77).
+/* restore_bg_view — wrapper for gfx_set_mode_01 (1000:80bc → 1ab9:0d77).
    Parameters:
      planes      — 4-plane host work buffer (4 × 0x10000 B), plane p at p×0x10000
      vga_src     — pointer into a flat VGA-page buffer (used as the bg source region);
@@ -115,9 +115,9 @@ typedef struct {
    UNVALIDATED in the harness (NOP for all layer-A/B calls). */
 void restore_bg_view(u8 __huge *planes,
                      const u8 __huge *vga_src,
-                     const bgi_view_desc __far *view);
+                     const gfx_view_desc __far *view);
 
-/* render_player_view — wrapper for bgi_set_mode_10 (1000:93b8 → 1ab9:1028).
+/* render_player_view — wrapper for gfx_set_mode_10 (1000:93b8 → 1ab9:1028).
    Parameters:
      planes      — 4-plane host work buffer.
      vga_src     — VGA source page base pointer (indexed by view->word00).
@@ -135,6 +135,6 @@ void restore_bg_view(u8 __huge *planes,
    UNVALIDATED in the harness (NOP for all layer-A/B calls). */
 void render_player_view(u8 __huge *planes,
                         const u8 __huge *vga_src,
-                        const bgi_view_desc __far *view);
+                        const gfx_view_desc __far *view);
 
-#endif /* BGI_OVERLAY_H */
+#endif /* GFX_OVERLAY_H */

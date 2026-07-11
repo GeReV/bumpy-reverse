@@ -1,4 +1,4 @@
-# Rendering pipeline — BGI overlay dispatch, VGA double-buffer, blit paths
+# Rendering pipeline — graphics-overlay dispatch, VGA double-buffer, blit paths
 
 Faithful documentation of how the engine puts pixels on screen, reconstructed from the
 `BumpyDecomp` Ghidra decomp + raw disassembly of the non-decompiling graphics overlay
@@ -8,29 +8,29 @@ segment `0x203b`). This documents the **original**; the `src/` reconstruction mi
 
 ## 1. Graphics-driver overlay (Loriciel-custom, NOT Borland BGI)
 
-> **Naming note.** The overlay at `1ab9` and its `bgi_*` symbols (`bgi_set_mode_*`,
-> `bgi_overlay*`, …) are labelled "BGI" only for historical reasons — an early naming
-> pass assumed Borland BGI. **It is not**: verified 2026-07-11 there is no `EGAVGA.BGI`
+> **Naming note.** The overlay at `1ab9` and its `gfx_*` symbols (`gfx_set_mode_*`,
+> `gfx_overlay*`, …) were **renamed from `bgi_*` (2026-07-11)** — an early naming pass
+> wrongly assumed Borland BGI. **It is not**: verified 2026-07-11 there is no `EGAVGA.BGI`
 > linked or loaded and no Borland driver banner in the image (only a 42-byte incidental
-> code match). It is the game's **own Loriciel VGA planar driver**. The `bgi_*` symbol
-> names are retained pending a rename; read them as "the graphics overlay", not Borland.
+> code match). It is the game's **own Loriciel VGA planar driver**. `gfx_` = "the
+> graphics overlay". (Historical references elsewhere may still say "BGI"; same thing.)
 
 Graphics output goes through the game's **VGA planar overlay** loaded at segment `1ab9`.
 Two engine entry thunks dispatch into it by "mode":
 
 | Engine fn | Addr | Calls | Purpose |
 |---|---|---|---|
-| `restore_bg_view`   | `1000:80bc` | `bgi_set_mode_01` (`1ab9:0d77`) | background / erase blit |
-| `render_player_view`| `1000:93b8` | `bgi_set_mode_10` (`1ab9:1028`) | planar region COPY (save-under / read-back / present-style) |
+| `restore_bg_view`   | `1000:80bc` | `gfx_set_mode_01` (`1ab9:0d77`) | background / erase blit |
+| `render_player_view`| `1000:93b8` | `gfx_set_mode_10` (`1ab9:1028`) | planar region COPY (save-under / read-back / present-style) |
 
 Both take a far pointer to a **view descriptor** in `DX:AX`. Each mode thunk dispatches
 through a per-`palette_mode` vector table in DGROUP, but **gated on the descriptor's
 lead word**:
 
-- `bgi_set_mode_10` (`1ab9:1028`): if `view->word[0] < 2`, set flags `[0x541f]=1`,
+- `gfx_set_mode_10` (`1ab9:1028`): if `view->word[0] < 2`, set flags `[0x541f]=1`,
   `[0x5420]=0`, then `call DGROUP[palette_mode*2 + 0x5698]`. Otherwise it is a **no-op**
   (this is how code-embedded / inactive views are skipped).
-- `bgi_set_mode_01` (`1ab9:0d77`): keys on `view->word[0x0e]` instead; sets
+- `gfx_set_mode_01` (`1ab9:0d77`): keys on `view->word[0x0e]` instead; sets
   `[0x541f]=0`, `[0x5420]=1`, then `call DGROUP[palette_mode*2 + 0x555e]`.
 
 **Dispatch vectors** (near offsets within overlay `1ab9`; values read from a live DGROUP
@@ -84,9 +84,9 @@ over many calls).
 
 ### What is *not* present (verified dynamically)
 
-Over a full settled level (873 `bgi_set_mode_10` calls hooked), **every** active call
+Over a full settled level (873 `gfx_set_mode_10` calls hooked), **every** active call
 sourced from page 0 (`a000`); **none** sourced page 1 (`a200`). There is **no
-`a200 → a000` memory-copy present**. The `bgi_set_mode_10` calls observed are all
+`a200 → a000` memory-copy present**. The `gfx_set_mode_10` calls observed are all
 read-backs / save-unders (VGA → system memory), e.g. per-entity background capture into
 DGROUP scratch buffers and a level-start full capture into `fullscreen_buf`.
 
@@ -164,7 +164,7 @@ misattribution; there is no dedicated exit/item draw to port.)
 > double-buffer pages, **not** a second visible draw of the entity. The visible entity
 > pixels come from `blit_sprite` writing the current page.
 >
-> **Reconstruction status:** Both functions are reconstructed in `src/bgi_overlay.c`
+> **Reconstruction status:** Both functions are reconstructed in `src/gfx_overlay.c`
 > (behavior-faithful; see [reconstruction-fidelity.md](reconstruction-fidelity.md)).
 > `entity_draw_layer_a/_b` now call them in the engine's 3-step order (erase → blit →
 > save-under). Both are effective NOPs in the layer-A/B context (code-embedded view

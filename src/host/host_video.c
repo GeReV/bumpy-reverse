@@ -3,7 +3,7 @@
 #include <conio.h>     /* inp, outp */
 #include <string.h>    /* _fmemset */
 #include "host.h"
-#include "host_bgi.h"   /* host_bgi_stage_image_palette / host_bgi_upload_palette_to_dac */
+#include "host_gfx.h"   /* host_gfx_stage_image_palette / host_gfx_upload_palette_to_dac */
 #include "../screens.h" /* palette_mode, wait_vretrace_thunk */
 
 /* ============================================================================
@@ -178,10 +178,10 @@ extern const u8 __far *level_packed_palette(void);
  * (DAT_75eb / DAT_75ec are DGROUP bias bytes; init_game_session_state zeroes BOTH and
  * nothing else writes them, so in the gameplay path the biases are 0 → R=(w>>8)<<3,
  * G=(w>>4)<<3, B=(w&0xff)<<3.)  The VGA DAC latches only the low 6 bits on upload
- * (host_bgi_upload_palette_to_dac → port 0x3c9), so e.g. packed word 0x0750 →
+ * (host_gfx_upload_palette_to_dac → port 0x3c9), so e.g. packed word 0x0750 →
  * (R,G,B bytes) (0x38,0xa8,0x80) → DAC (56,40,0).  It then runs the palette tail,
- * REUSING the Task-1 BGI primitives: bgi_stage_image_palette(0x6c42,DS,0) →
- * bgi_upload_palette_to_dac(0) → the vsync wait (1000:9864).  (Mode-1 is the EGA
+ * REUSING the Task-1 BGI primitives: gfx_stage_image_palette(0x6c42,DS,0) →
+ * gfx_upload_palette_to_dac(0) → the vsync wait (1000:9864).  (Mode-1 is the EGA
  * fixed-palette patch path, not taken on the VGA boot.)
  *
  * RECONSTRUCTION FIDELITY — HOST DATA SOURCE (RE'd 2026-06-27):
@@ -195,9 +195,9 @@ extern const u8 __far *level_packed_palette(void);
  * — NOT a palette → all-black DAC); corrected here.  Recorded in
  * docs/reconstruction-fidelity.md ("playable host: level-palette pipeline").
  *
- * DAC-LAYOUT NOTE (findings §3): host_bgi_upload_palette_to_dac writes DAC slots
+ * DAC-LAYOUT NOTE (findings §3): host_gfx_upload_palette_to_dac writes DAC slots
  * {0..7, 0x10..0x17} — the slots the active BGI Attribute-Controller mapping
- * (host_set_bgi_attribute_palette: pixel i → DAC i<8?i:0x10+(i-8)) reads.  This is what
+ * (host_set_gfx_attribute_palette: pixel i → DAC i<8?i:0x10+(i-8)) reads.  This is what
  * makes gameplay colours 8..15 correct; render_level's video_set_palette6 (DAC 0..15
  * contiguous) only covers the AC's low 8 slots.  See the audit + the report. */
 static u8 host_palette_staging[0x33u + 48u];   /* mirrors the engine 0x6c42 buffer: palette @ +0x33 */
@@ -232,8 +232,8 @@ void load_palette(u16 src_off, u16 src_seg)
     /* Engine tail (1000:09e9): stage the staged palette into the per-page BGI slot,
      * upload it to the DAC, then wait for vertical retrace. */
     stage_fp = (u8 __far *)host_palette_staging;
-    host_bgi_stage_image_palette(FP_OFF(stage_fp), FP_SEG(stage_fp), 0u);
-    host_bgi_upload_palette_to_dac(0u);
+    host_gfx_stage_image_palette(FP_OFF(stage_fp), FP_SEG(stage_fp), 0u);
+    host_gfx_upload_palette_to_dac(0u);
     wait_vretrace_thunk();
 }
 
@@ -259,7 +259,7 @@ void apply_level_palette(void)
  * buffer layout, then applies the level palette.
  * RECONSTRUCTION FIDELITY: the original 97f1 body is not cleanly decompiled;
  * the host reconstructs its observable effect (CRTC window + DAC init). */
-/* host_set_bgi_attribute_palette — program the VGA Attribute Controller palette to the
+/* host_set_gfx_attribute_palette — program the VGA Attribute Controller palette to the
  * BGI 16-colour mapping: pixel i -> DAC (i<8 ? i : 0x10+(i-8)).  The engine's BGI driver
  * set this up (its mode-init code is not in the Ghidra corpus); without it the BIOS
  * mode-0x0D default AC maps pixel 6->DAC 0x14 and pixels 8..15->DAC 0x38..0x3f, which the
@@ -268,7 +268,7 @@ void apply_level_palette(void)
  * vga_dac_upload_from_buffer's DAC targets makes pixel i resolve to image palette colour i.
  * RECONSTRUCTION FIDELITY: host BGI-init reconstruction (the original BGI handler is absent
  * from the corpus); recorded in docs/reconstruction-fidelity.md ("playable host: BGI palette"). */
-static void host_set_bgi_attribute_palette(void)
+static void host_set_gfx_attribute_palette(void)
 {
     u8 i;
     (void)inp(0x3DAu);                 /* reset the AC index/data flip-flop */
@@ -281,7 +281,7 @@ static void host_set_bgi_attribute_palette(void)
 
 void init_display_97f1(void)
 {
-    /* Engine 1000:97f1 → overlay 1ab9:137b bgi_draw_sequence (runtime-relocated
+    /* Engine 1000:97f1 → overlay 1ab9:137b gfx_draw_sequence (runtime-relocated
      * disasm, 2026-07-03): text pos = (10,10) [op 1441]; clip window
      * (0,0,0x13f,0xc7) [1422]; active page = 0 [1409]; text line height = 8
      * [1458: DGROUP 0x693e]; TEXT COLOUR fg=0x0f bg=0 [1311 → pm-2 expansion
@@ -295,7 +295,7 @@ void init_display_97f1(void)
      * the observable effects of the BGI driver init that is absent from the
      * corpus. */
     host_crtc_set_start(CRTC_PAGE1_ADDR);
-    host_set_bgi_attribute_palette();
+    host_set_gfx_attribute_palette();
     apply_level_palette();
 }
 
@@ -311,11 +311,11 @@ void init_display_97f1(void)
  * which is unfaithful (1ab9:1409 does no such thing) and would move the display off
  * the drawn a000 page now that present_frame no longer overrides it.
  * RECONSTRUCTION FIDELITY: recorded in docs/reconstruction-fidelity.md. */
-u8 host_bgi_active_page = 0u;   /* mirrors DGROUP[0x6940] — inert for gameplay draw */
+u8 host_gfx_active_page = 0u;   /* mirrors DGROUP[0x6940] — inert for gameplay draw */
 
 void set_display_page(u8 page)
 {
-    host_bgi_active_page = (u8)(page & 1u);   /* setactivepage: store index, no CRTC */
+    host_gfx_active_page = (u8)(page & 1u);   /* setactivepage: store index, no CRTC */
 }
 
 /* ── clear_viewport ─────────────────────────────────────────────────────────────
@@ -366,7 +366,7 @@ void clear_viewport(void)
 }
 
 /* ── present_frame (BUMPY_PLAYABLE real body) — the engine's REAL page flip ─────
- * present_frame is the engine's frame-present hook (1000:7bdd → bgi_present_dispatch
+ * present_frame is the engine's frame-present hook (1000:7bdd → gfx_present_dispatch
  * 1ab9:0351; pm=2 handler 1ab9:0379 → 1ab9:06c1).  The 06c1 primitive, recovered
  * from the runtime-relocated overlay bytes (2026-07-02 investigation):
  *

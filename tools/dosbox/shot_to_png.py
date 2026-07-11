@@ -32,7 +32,7 @@ DAC_BYTES = 256 * 3
 AC_BYTES = 16
 
 
-def bgi_ac(v: int) -> int:
+def gfx_ac(v: int) -> int:
     """Engine BGI Attribute-Controller mapping: 4-bit pixel value -> DAC index."""
     return v if v < 8 else 0x10 + (v - 8)
 
@@ -54,7 +54,7 @@ def main() -> None:
     if len(data) >= ac_off + AC_BYTES:
         ac = [data[ac_off + v] for v in range(16)]
     else:
-        ac = [bgi_ac(v) for v in range(16)]
+        ac = [gfx_ac(v) for v in range(16)]
     rows = []
     for y in range(H):
         row = bytearray()

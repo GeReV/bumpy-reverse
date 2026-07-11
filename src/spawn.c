@@ -42,7 +42,7 @@
  *  ── RECONSTRUCTION FIDELITY ────────────────────────────────────────────────────
  *   • The render-core LEAVES (setup_fullscreen_view, draw/erase_anim_channels_a/b,
  *     blit_sprite) are the already-reconstructed / faithful-signature primitives
- *     owned by their modules (anim.c / level.c declares blit_sprite; bgi_overlay.c
+ *     owned by their modules (anim.c / level.c declares blit_sprite; gfx_overlay.c
  *     models setup_fullscreen_view's fullscreen restore).  spawn.c calls them by
  *     name and does not re-implement them.  draw_anim_channels_a/b each NEST a
  *     blit_sprite per active entity (Phase-5-validated behavior); the host replay

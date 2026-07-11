@@ -3145,7 +3145,7 @@ void handle_gameplay_input(void)
  *     restore_bg_pending -> restore_bg_view(pending_erase_view off,seg)(1000:80bc)
  *     draw_p1_sprite  -> blit_sprite(0x792e, DS=0x203b)        (1000:942a)
  * Phase-0 reconstructed those render leaves as behavior-faithful semantic
- * reconstructions driven by host WORK BUFFERS (see src/bgi_overlay.h /
+ * reconstructions driven by host WORK BUFFERS (see src/gfx_overlay.h /
  * src/entity.c); `blit_sprite` was inlined into its validated pipeline stages and
  * has no callable symbol.  These game-loop wrappers do not hold that work-buffer
  * render context, so the present/blit LEAF is modeled here as a faithful-signature

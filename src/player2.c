@@ -778,7 +778,7 @@ void p2_cell_move_right(void)
  *      erase_p2_view   -> restore_bg_view(p2_erase_view off,seg)(1000:80bc)
  *  Phase-0 reconstructed those render leaves as BEHAVIOR-FAITHFUL semantic
  *  reconstructions driven by host WORK BUFFERS (planes/bank + a 3-arg signature; see
- *  src/entity.c §entity_blit_object and src/bgi_overlay.h) — and `blit_sprite` itself
+ *  src/entity.c §entity_blit_object and src/gfx_overlay.h) — and `blit_sprite` itself
  *  was inlined there into its three validated pipeline stages, so it has no callable
  *  symbol.  Those game-loop wrappers do not hold the work-buffer render context, and
  *  the Phase-0 core must NOT be modified to take the engine's far-ptr convention.

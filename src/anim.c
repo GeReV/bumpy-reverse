@@ -336,7 +336,7 @@ void step_anim_channels_b(void)
  *    (1000:80ac) — each taking ONE far-ptr / a (off,seg) pair on the engine stack
  *    (e.g. draw_a: `PUSH [0x8d6]; PUSH [0x8d4]; CALL 0x80bc`).  Phase-0 already
  *    reconstructed restore_bg_view / render_player_view as BEHAVIOR-FAITHFUL
- *    semantic models in src/bgi_overlay.c driven by HOST WORK BUFFERS with a
+ *    semantic models in src/gfx_overlay.c driven by HOST WORK BUFFERS with a
  *    different 3-arg (planes, vga_src, view) signature; blit_sprite was inlined
  *    into its three validated pipeline stages in src/entity.c (no callable symbol).
  *    Those Phase-0 wrappers hold no work-buffer context here and MUST NOT be

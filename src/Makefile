@@ -38,14 +38,14 @@ SPR_OBJS = bsprite.obj bsprite_buf.obj sprite.obj dosio.obj
 #                     signature stubs for the not-yet-reconstructed per-tick
 #                     callees — linkability scaffolding, DEFERRED Phase 2)
 #   gameplay modules— level (start_level) / input (keyboard) / player (move spine)
-#   render modules  — vec/op12/video/sprite/sprite_anim/sprite_chain/sprite_blit/bg_render/entity/bgi_overlay
+#   render modules  — vec/op12/video/sprite/sprite_anim/sprite_chain/sprite_blit/bg_render/entity/gfx_overlay
 #   support modules — dosio/prng/globals
 #   buffer modules  — bvec_buf1/bvec_buf2 (large __far buffers for VEC decode arena + planar buf)
 BUMPY_OBJS = main.obj game.obj game_stubs.obj &
              level.obj input.obj player.obj player2.obj items.obj anim.obj spawn.obj sound.obj screens.obj &
              vec.obj op12.obj video.obj &
              sprite.obj sprite_anim.obj sprite_chain.obj sprite_blit.obj &
-             bg_render.obj entity.obj bgi_overlay.obj &
+             bg_render.obj entity.obj gfx_overlay.obj &
              dosio.obj prng.obj globals.obj worldmap_data.obj anim_data.obj &
              bvec_buf1.obj bvec_buf2.obj
 
@@ -86,14 +86,14 @@ PLAY_OBJS = &
     $(PLAYDIR)/main.obj $(PLAYDIR)/game.obj $(PLAYDIR)/game_stubs.obj &
     $(PLAYDIR)/host_video.obj $(PLAYDIR)/host_render.obj $(PLAYDIR)/host_timer.obj &
     $(PLAYDIR)/host_input.obj $(PLAYDIR)/view_setup.obj $(PLAYDIR)/host_boot.obj &
-    $(PLAYDIR)/host_resource.obj $(PLAYDIR)/host_bgi.obj $(PLAYDIR)/config_screens.obj &
+    $(PLAYDIR)/host_resource.obj $(PLAYDIR)/host_gfx.obj $(PLAYDIR)/config_screens.obj &
     $(PLAYDIR)/level.obj $(PLAYDIR)/input.obj $(PLAYDIR)/player.obj $(PLAYDIR)/player2.obj &
     $(PLAYDIR)/items.obj $(PLAYDIR)/anim.obj $(PLAYDIR)/spawn.obj $(PLAYDIR)/sound.obj &
     $(PLAYDIR)/screens.obj &
     $(PLAYDIR)/vec.obj $(PLAYDIR)/op12.obj $(PLAYDIR)/video.obj &
     $(PLAYDIR)/sprite.obj $(PLAYDIR)/sprite_anim.obj $(PLAYDIR)/sprite_chain.obj &
     $(PLAYDIR)/sprite_blit.obj &
-    $(PLAYDIR)/bg_render.obj $(PLAYDIR)/entity.obj $(PLAYDIR)/bgi_overlay.obj &
+    $(PLAYDIR)/bg_render.obj $(PLAYDIR)/entity.obj $(PLAYDIR)/gfx_overlay.obj &
     $(PLAYDIR)/dosio.obj $(PLAYDIR)/prng.obj $(PLAYDIR)/globals.obj &
     $(PLAYDIR)/move_scripts.obj $(PLAYDIR)/worldmap_data.obj $(PLAYDIR)/anim_data.obj &
     $(PLAYDIR)/bvec_buf1.obj $(PLAYDIR)/bvec_buf2.obj
@@ -124,8 +124,8 @@ $(PLAYDIR)/host_boot.obj: host/host_boot.c
 	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/host_boot.obj host/host_boot.c
 $(PLAYDIR)/host_resource.obj: host/host_resource.c
 	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/host_resource.obj host/host_resource.c
-$(PLAYDIR)/host_bgi.obj: host/host_bgi.c host/host_bgi.h
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/host_bgi.obj host/host_bgi.c
+$(PLAYDIR)/host_gfx.obj: host/host_gfx.c host/host_gfx.h
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/host_gfx.obj host/host_gfx.c
 
 # Shared TUs — compile WITH -dBUMPY_PLAYABLE into play/ (default BUMPY objs unaffected).
 $(PLAYDIR)/main.obj: main.c
@@ -172,8 +172,8 @@ $(PLAYDIR)/bg_render.obj: bg_render.c
 	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/bg_render.obj bg_render.c
 $(PLAYDIR)/entity.obj: entity.c
 	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/entity.obj entity.c
-$(PLAYDIR)/bgi_overlay.obj: bgi_overlay.c
-	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/bgi_overlay.obj bgi_overlay.c
+$(PLAYDIR)/gfx_overlay.obj: gfx_overlay.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/gfx_overlay.obj gfx_overlay.c
 $(PLAYDIR)/dosio.obj: dosio.c
 	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/dosio.obj dosio.c
 $(PLAYDIR)/prng.obj: prng.c

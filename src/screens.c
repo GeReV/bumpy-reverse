@@ -32,7 +32,7 @@
  *      render_descriptor_ptr      DGROUP 0x0574/0x0576 (DAT_0574 view-struct far ptr).
  *                                 grep finds zero matches anywhere in src/ — new symbol.
  *      fullscreen_buf / _seg      DGROUP 0x7926 / 0x7928.  grep finds the NAME only in
- *                                 bgi_overlay.c / entity.c comments (describing the
+ *                                 gfx_overlay.c / entity.c comments (describing the
  *                                 decoded-image buffer); no symbol def — owned here.
  *      timing_flag_accumulator    DGROUP 0x854f.  grep `0x854f`/`timing_flag` finds
  *                                 nothing in src/ — new symbol.
@@ -45,7 +45,7 @@
  *      formatted_number_buf[16]   number-formatter ASCII scratch.  No other TU defines
  *                                 it — new symbol.
  *    None of these names appear in any other src/ TU (checked: game.c, level.c,
- *    input.c, player.c, player2.c, items.c, anim.c, sound.c, entity.c, bgi_overlay.c,
+ *    input.c, player.c, player2.c, items.c, anim.c, sound.c, entity.c, gfx_overlay.c,
  *    globals.c, game_stubs.c) — so defining them here introduces no duplicate symbol.
  *
  *    EXTERN (owned elsewhere — grep evidence beside each; NOT defined here):
@@ -81,7 +81,7 @@
 #endif
 #include "screens.h"
 #ifdef BUMPY_PLAYABLE
-#include "host/host_bgi.h"   /* host_bgi_stage_image_palette / host_bgi_upload_palette_to_dac */
+#include "host/host_gfx.h"   /* host_gfx_stage_image_palette / host_gfx_upload_palette_to_dac */
 #endif
 
 /* ── screen-state scalars ───────────────────────────────────────────────────────── */
@@ -232,8 +232,8 @@ u16  draw_name_entry_cursor(u8 col, u8 row, u16 frame, char do_blit); /* 1000:5f
    (9837 gets args 3/4, 9804 gets args 1/2) — only the names were wrong.) */
 void anim_render_leaf_80ac(u8 __far *view);       /* FUN_1000_80ac  1000:80ac (anim.obj) */
 void anim_blit_sprite_leaf(u16 obj_off, u16 obj_seg); /* blit_sprite 1000:942a (anim.obj) */
-void bgi_set_text_pos_9837(u16 x, u16 y);              /* 1000:9837 -> 1ab9:1441 */
-void bgi_draw_string_9804(u16 str_off, u16 str_seg);   /* 1000:9804 -> 1ab9:13ec */
+void gfx_set_text_pos_9837(u16 x, u16 y);              /* 1000:9837 -> 1ab9:1441 */
+void gfx_draw_string_9804(u16 str_off, u16 str_seg);   /* 1000:9804 -> 1ab9:13ec */
 
 #ifdef BUMPY_PLAYABLE
 /* Playable build: route to the host text primitives (host_render.c) — the text
@@ -243,14 +243,14 @@ void bgi_draw_string_9804(u16 str_off, u16 str_seg);   /* 1000:9804 -> 1ab9:13ec
  * colours 14/1, set by init_game_session_state via set_text_color / 1000:97c5). */
 extern void host_text_set_pos(u16 x, u16 y);              /* host/host_render.c */
 extern void host_text_draw_string(u16 str_off, u16 str_seg);
-void bgi_set_text_pos_9837(u16 x, u16 y)            { host_text_set_pos(x, y); }
-void bgi_draw_string_9804(u16 str_off, u16 str_seg) { host_text_draw_string(str_off, str_seg); }
+void gfx_set_text_pos_9837(u16 x, u16 y)            { host_text_set_pos(x, y); }
+void gfx_draw_string_9804(u16 str_off, u16 str_seg) { host_text_draw_string(str_off, str_seg); }
 #else
 /* RECONSTRUCTION FIDELITY: BGI-overlay text leaves — faithful-signature no-op stubs
    in the default build (self-modifying overlay; no clean decomp).  draw_text_at's
    call sites are preserved 1:1; the text pixels are the BGI overlay's. */
-void bgi_set_text_pos_9837(u16 x, u16 y)            { (void)x; (void)y; return; }
-void bgi_draw_string_9804(u16 str_off, u16 str_seg) { (void)str_off; (void)str_seg; return; }
+void gfx_set_text_pos_9837(u16 x, u16 y)            { (void)x; (void)y; return; }
+void gfx_draw_string_9804(u16 str_off, u16 str_seg) { (void)str_off; (void)str_seg; return; }
 #endif
 
 /* DS-stamped far-data segment for the HUD view descriptor (+0x12).  Default = the
@@ -276,8 +276,8 @@ extern u16 host_dgroup_seg(void);   /* host_render.c — loaded image's real DGR
  * ════════════════════════════════════════════════════════════════════════════ */
 void draw_text_at(u16 str_off, u16 str_seg, u16 x, u16 y)
 {
-    bgi_set_text_pos_9837(x, y);
-    bgi_draw_string_9804(str_off, str_seg);
+    gfx_set_text_pos_9837(x, y);
+    gfx_draw_string_9804(str_off, str_seg);
     return;
 }
 
@@ -485,7 +485,7 @@ void draw_hud_composite(void)
  *  — the render_descriptor_ptr view struct + the p1_sprite blit descriptor — IS
  *  produced here and is the validated descriptor-level gate):
  *    restore_bg_view / present_frame / init_fullscreen_view_desc  (owned by
- *      bgi_overlay.c / game_stubs.c — extern, NOT redefined here);
+ *      gfx_overlay.c / game_stubs.c — extern, NOT redefined here);
  *    FUN_1000_7b93 / FUN_1000_7bca / FUN_1000_7b4a (the per-step view-blit) /
  *      FUN_1000_9410 (set_sprite_table_ptr trampoline) — BGI overlay leaves, stubbed;
  *    blit_sprite (1000:942a) routed through anim.c's anim_blit_sprite_leaf (same
@@ -519,17 +519,17 @@ void draw_hud_composite(void)
  *  port-write gate drives `vga_dac_upload_from_buffer` over a SEEDED palette buffer and
  *  asserts its (port,value) sequence (perturbation-proven).  In the playable path the
  *  real level-palette DAC upload now flows through the level-palette pipeline:
- *  load_palette (host_video.c) -> host_bgi_stage_image_palette + host_bgi_upload_palette_
- *  to_dac (host_bgi.c) -> wait_vretrace_thunk (the vsync wait).  The iris wipe calls
+ *  load_palette (host_video.c) -> host_gfx_stage_image_palette + host_gfx_upload_palette_
+ *  to_dac (host_gfx.c) -> wait_vretrace_thunk (the vsync wait).  The iris wipe calls
  *  wait_vretrace_thunk 4x/step as the wipe PACING; its descriptor RECT SWEEP is the
  *  faithfully-reconstructed, validated part, its render/present leaves stubbed.
  * ──────────────────────────────────────────────────────────────────────────────── */
 
 /* ── render / BGI-overlay leaves OWNED ELSEWHERE (extern — NOT defined here; resolve
- *    to bgi_overlay.obj / game_stubs.obj / input.obj at the BUMPY.EXE link; the host
+ *    to gfx_overlay.obj / game_stubs.obj / input.obj at the BUMPY.EXE link; the host
  *    replay harness supplies its own host definitions) ──────────────────────────── */
 #ifndef BUMPY_PLAYABLE
-extern void restore_bg_view(u8 __far *view, u16 seg);    /* bgi_overlay.c 1000:80bc */
+extern void restore_bg_view(u8 __far *view, u16 seg);    /* gfx_overlay.c 1000:80bc */
 #else
 /* RECONSTRUCTION FIDELITY — HOST TITLE-PATH restore_bg_view SHIM
  * ─────────────────────────────────────────────────────────────────────────────
@@ -539,9 +539,9 @@ extern void restore_bg_view(u8 __far *view, u16 seg);    /* bgi_overlay.c 1000:8
  * render leaf (see the "STUBBED render-core" note above): the observable title
  * present is produced by the descriptor build + present_frame(1) that follow.
  *
- * bgi_overlay.c, however, reconstructs the SAME symbol with the EXPANDED host
+ * gfx_overlay.c, however, reconstructs the SAME symbol with the EXPANDED host
  * 3-arg form `restore_bg_view(u8 __huge *planes, const u8 __huge *vga_src,
- * const bgi_view_desc __far *view)` (used by entity.c / player.c / host_view.c).
+ * const gfx_view_desc __far *view)` (used by entity.c / player.c / host_view.c).
  * Under __watcall (-ml) that body takes its first two far-ptr args in registers
  * and its THIRD arg ON THE STACK, cleaning it with `retf 0x0004`.  screens.c's
  * 2-arg call pushes NOTHING, so the shared `restore_bg_view_` `retf 4` pops 4
@@ -552,7 +552,7 @@ extern void restore_bg_view(u8 __far *view, u16 seg);    /* bgi_overlay.c 1000:8
  *
  * FIX (host build only): route screens.c's title/menu restore_bg_view(view,seg)
  * calls to a host NOP leaf with the MATCHING 2-arg convention, so the host build
- * never invokes the 3-arg bgi_overlay body with a mismatched ABI.  This preserves
+ * never invokes the 3-arg gfx_overlay body with a mismatched ABI.  This preserves
  * the documented "stubbed render leaf" semantics (NOP; present via present_frame)
  * and is faithful to the engine's NOP-guard behaviour for these title views.  The
  * DEFAULT BUMPY.EXE build is unaffected (the #ifndef branch above is byte-stable;
@@ -625,35 +625,35 @@ void sprite_proc_dispatch(u16 obj_list_off, u16 obj_list_seg);  /* sprite_anim.c
 void process_sprites(u16 buf_off, u16 buf_seg) { sprite_proc_dispatch(buf_off, buf_seg); }
 #endif
 #ifdef BUMPY_PLAYABLE
-/* Playable build: route to host palette-stage primitive (host_bgi.c).
+/* Playable build: route to host palette-stage primitive (host_gfx.c).
  * fun_7b93 thunk (1000:7b93) dispatches into BGI overlay 1ab9:0620, which
  * copies 48 bytes from [buf_seg:buf_off]+0x33 into the per-page palette slot.
- * 'flag' is the page index.  RECONSTRUCTION FIDELITY: see host/host_bgi.h. */
+ * 'flag' is the page index.  RECONSTRUCTION FIDELITY: see host/host_gfx.h. */
 void fun_7b93_present_blank(u16 buf_off, u16 buf_seg, u16 flag)
-{ host_bgi_stage_image_palette(buf_off, buf_seg, flag); }
+{ host_gfx_stage_image_palette(buf_off, buf_seg, flag); }
 #else
 void fun_7b93_present_blank(u16 buf_off, u16 buf_seg, u16 flag)
 { (void)buf_off; (void)buf_seg; (void)flag; }
 #endif
 #ifdef BUMPY_PLAYABLE
-/* Playable build: route to host DAC-upload primitive (host_bgi.c).
+/* Playable build: route to host DAC-upload primitive (host_gfx.c).
  * fun_7bca thunk (1000:7bca) dispatches into BGI overlay 1ab9:0677, which
- * writes host_bgi_page_palette[page & 1] to VGA DAC ports 0x3c8/0x3c9.
- * RECONSTRUCTION FIDELITY: see host/host_bgi.h. */
-void fun_7bca_flip(u8 page) { host_bgi_upload_palette_to_dac(page); }
+ * writes host_gfx_page_palette[page & 1] to VGA DAC ports 0x3c8/0x3c9.
+ * RECONSTRUCTION FIDELITY: see host/host_gfx.h. */
+void fun_7bca_flip(u8 page) { host_gfx_upload_palette_to_dac(page); }
 #else
 void fun_7bca_flip(u8 page) { (void)page; }
 #endif
 #ifdef BUMPY_PLAYABLE
-/* Playable build: route to host clip/viewport primitive (host_bgi.c).
- * fun_7b4a thunk (1000:7b4a, Ghidra: bgi_set_viewport_thunk, formerly blit_view_step)
- * dispatches into BGI overlay 1ab9:0179 (bgi_init_viewport): writes CONSTANT clip
- * extents view[+0x18]=0x14, view[+0x1a]=0x19; sets bgi_write_mode_flag_a=2/b=1;
+/* Playable build: route to host clip/viewport primitive (host_gfx.c).
+ * fun_7b4a thunk (1000:7b4a, Ghidra: gfx_set_viewport_thunk, formerly blit_view_step)
+ * dispatches into BGI overlay 1ab9:0179 (gfx_init_viewport): writes CONSTANT clip
+ * extents view[+0x18]=0x14, view[+0x1a]=0x19; sets gfx_write_mode_flag_a=2/b=1;
  * VGA dispatch slot 0x4dda[2]=0x0000 -> NULL -> no pixel blit.
  * Called from the iris loop (play_iris_wipe_transition) and all screen builders;
  * on VGA the visible iris = timed hold + blank-palette upload, NOT a geometric shrink.
- * RECONSTRUCTION FIDELITY: see host/host_bgi.h (host_bgi_set_viewport). */
-void fun_7b4a_view_blit(u8 __far *view, u16 seg) { host_bgi_set_viewport(view, seg); }
+ * RECONSTRUCTION FIDELITY: see host/host_gfx.h (host_gfx_set_viewport). */
+void fun_7b4a_view_blit(u8 __far *view, u16 seg) { host_gfx_set_viewport(view, seg); }
 #else
 void fun_7b4a_view_blit(u8 __far *view, u16 seg) { (void)view; (void)seg; }
 #endif
@@ -719,7 +719,7 @@ void vga_dac_upload_from_buffer(u8 __far *img_buf)
  *  handler is 2036:0015 — a VERTICAL-RETRACE (vsync) WAIT (`mov dx,0x3da; in al,dx;
  *  test al,8`: wait for the retrace to START, then to END).  It is NOT a DAC upload:
  *  the old names (upload_vga_dac_palette / dispatch_by_palette_mode) were MISNOMERS.
- *  The genuine DAC upload happens earlier via fun_7bca_flip -> host_bgi_upload_palette_
+ *  The genuine DAC upload happens earlier via fun_7bca_flip -> host_gfx_upload_palette_
  *  to_dac (and the standalone modelled writer vga_dac_upload_from_buffer).
  *
  *  RECONSTRUCTION FIDELITY: the overlay handler table at 0x6976 is runtime-populated by
@@ -1162,9 +1162,9 @@ void show_menu_select_screen(void)
      * restore_bg_view): it draws "ENTER YOUR PASSWORD" + the entry field as sprite
      * glyphs over a screen that is BLACK by the time it draws.  That clean-black is
      * the engine's own doing: play_iris_wipe_transition() above drives the geometric
-     * rect-fill iris (bgi_init_viewport 1ab9:0179 → the 1ab9:0000 secondary dispatcher
+     * rect-fill iris (gfx_init_viewport 1ab9:0179 → the 1ab9:0000 secondary dispatcher
      * → 0x4dcc[0]=1ab9:002b solid black rect fill, now reconstructed in
-     * host_bgi_set_viewport), whose shrinking outline rings tile the whole 20×25 view
+     * host_gfx_set_viewport), whose shrinking outline rings tile the whole 20×25 view
      * to black.  No separate host clear is needed — capture-confirmed 2026-07-05 that
      * the iris alone clears the code screen (nonzero VGA bytes 1799, vs 36921 for the
      * old un-cleared menu bleed).  (An earlier reconstruction inserted an invented

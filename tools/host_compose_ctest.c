@@ -55,7 +55,7 @@ static void outp(u16 port, unsigned val) { (void)port; (void)val; }
 #include "../src/sprite_blit.c"
 #include "../src/sprite_chain.c"
 #include "../src/sprite_anim.c"
-#include "../src/bgi_overlay.c"
+#include "../src/gfx_overlay.c"
 #include "../src/entity.c"
 
 /* Cross-module symbols host_render.c's playable block references but this harness's

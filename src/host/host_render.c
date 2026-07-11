@@ -8,7 +8,7 @@
 #include "host.h"
 #include "../sprite_chain.h"   /* sprite_view */
 #include "../entity.h"         /* entity_draw_p1 / entity_draw_p2 */
-#include "../bgi_overlay.h"    /* restore_bg_view / render_player_view + bgi_view_desc */
+#include "../gfx_overlay.h"    /* restore_bg_view / render_player_view + gfx_view_desc */
 
 /* ============================================================================
  * host_render.c — host framebuffer + render-leaf binding  (Plan A, Task 2)
@@ -19,7 +19,7 @@
  * VGA page table (sprite_table_base / cur_sprite_data) into that buffer, and makes
  * the per-module render-leaf wrappers REAL — routing the gameplay draw calls
  * (draw_p1_sprite / draw_p2_sprite / the channel-A/B blits) through the already-
- * reconstructed bgi_overlay.c leaves + the validated sprite blitter, exactly as
+ * reconstructed gfx_overlay.c leaves + the validated sprite blitter, exactly as
  * tools/composite_ctest.c wires them.
  *
  * ┌──────────────────────────────────────────────────────────────────────────┐
@@ -420,11 +420,11 @@ void p2_blit_sprite_leaf(u16 obj_off, u16 obj_seg)
 
 /* ── View leaves — render_player_view (1000:93b8) / restore_bg_view (1000:80bc) ──
  *   The engine's per-tick render/erase view leaves take the descriptor far ptr.
- *   The reconstructed bgi_overlay.c functions take (planes, vga_src, view).  In the
+ *   The reconstructed gfx_overlay.c functions take (planes, vga_src, view).  In the
  *   gameplay (P1/P2 + channel-A/B) context these are STRUCTURAL NOPs: the engine's
  *   view descriptors are code-embedded (word00=0xc3fb / word0e=0x85b3 > 1) so the
- *   bgi_set_mode_01/10 guard trips and nothing is copied (present_model.md §5;
- *   bgi_overlay.c).  We faithfully drive the reconstructed leaf with that NOP view,
+ *   gfx_set_mode_01/10 guard trips and nothing is copied (present_model.md §5;
+ *   gfx_overlay.c).  We faithfully drive the reconstructed leaf with that NOP view,
  *   so the host behaviour matches the engine: no-op.  The visible per-tick pixels
  *   come solely from the blit leaves above. */
 /* ── Per-sprite VGA save-under (the faithful delta double-buffer) ──────────────
@@ -435,7 +435,7 @@ void p2_blit_sprite_leaf(u16 obj_off, u16 obj_seg)
  * must operate on real VGA too — read-map-select to save, map-mask to restore — not
  * the old flat back-buffer (which is no longer the display).
  *
- * Geometry (grounded in init_view_anim_descriptors@1000:535e + bgi_overlay.c): a
+ * Geometry (grounded in init_view_anim_descriptors@1000:535e + gfx_overlay.c): a
  * descriptor's tile cell (cx,cy) maps to a000 byte offset cy*8*40 + cx*2 (tiles are
  * 16px wide = 2 bytes, 8px tall = 8 rows); the rect is extent_x tiles wide (×2 bytes)
  * by extent_y tiles tall (×8 rows).
@@ -450,7 +450,7 @@ void p2_blit_sprite_leaf(u16 obj_off, u16 obj_seg)
  *   erase view p1_erase_view (mode-01): width @ +0x0a, height @ +0x0c  (= 4, 4 tiles)
  *   save  view p1_view       (mode-10): width @ +0x18, height @ +0x1a  (= 4, 4 tiles)
  * → a fixed 4×4-tile (64×32 px) footprint, matching restore_bg_view's own +0x0a/+0x0c
- *   read in bgi_overlay.c.  The +0x1e/+0x20 fields are the per-frame SCROLL offsets
+ *   read in gfx_overlay.c.  The +0x1e/+0x20 fields are the per-frame SCROLL offsets
  *   (p1_scroll_x/y): 4 at rest but SHRINK below 4 near the screen edges (0x14-grid_x /
  *   0x19-grid_y).  Reading extent from those (the prior bug) shrank the erase rect near
  *   the edges so it stopped covering the sprite → trails.  We read the real fixed
@@ -675,7 +675,7 @@ static void hr_restore_under(const u8 __far *view, const u8 *buf, u16 cell_off, 
  * erase.  LAYER-B (2026-07-05, was a known gap): draw_anim_channels_b calls this leaf
  * twice per active B channel with anim_b_view1 (0x8cc) — in the engine that view's
  * word0e==1 dispatches an a000 blit from the 0x9eba/0x9fba shadow + 0x8888 sources.  The
- * host never populates those shadows (the render/mask pass bgi_set_mode_00 is a NOP), so
+ * host never populates those shadows (the render/mask pass gfx_set_mode_00 is a NOP), so
  * it now repaints the CLEAN TILE BACKGROUND over the B cell instead (extent view+0x0a/0x0c),
  * the same mechanism as the layer-A erase — restoring the bg under the moving B sprite and
  * fixing the layer-B trails/flicker + world-2 speckles.  See the per-view branch below +
@@ -739,11 +739,11 @@ void anim_restore_bg_view_leaf(u8 __far *view)
         if (view == anim_b_view1) {
             /* RECONSTRUCTION FIDELITY (layer-B under-erase — host-adaptation, 2026-07-05).
                draw_anim_channels_b (anim.c:516/522) restores the layer-B background under each
-               active B channel via mode-01 (restore_bg_view/bgi_set_mode_01) with anim_b_view1,
+               active B channel via mode-01 (restore_bg_view/gfx_set_mode_01) with anim_b_view1,
                whose EXTENT is view+0x0a (width) × view+0x0c (height) tiles and whose SOURCE is a
                pre-composited layer-B shadow (DGROUP 0x9eba/0x9fba for the sprite pass, 0x8888 for
-               the bg pass — see bgi_overlay.c restore_bg_view).  The host never populates those
-               shadows: the render/mask pass anim_render_leaf_80ac (blit_view_masked/bgi_set_mode_00)
+               the bg pass — see gfx_overlay.c restore_bg_view).  The host never populates those
+               shadows: the render/mask pass anim_render_leaf_80ac (blit_view_masked/gfx_set_mode_00)
                is a NOP because the engine's composited double-buffer is single-page-vestigial here.
                With no shadow to blit, the host instead REPAINTS THE CLEAN TILE BACKGROUND over the
                B cell — the SAME mechanism the layer-A erase (anim_a_erase_view) uses — restoring the
@@ -800,12 +800,12 @@ void anim_restore_bg_view_leaf(u8 __far *view)
             for (col = 0u; col < wbytes; col++) {
                 u16 soff = (u16)(sline + col);   /* clean-bg source (page-relative) */
                 u16 doff = (u16)(dline + col);   /* page dest       (page-relative) */
-                if (soff < (u16)BGI_PAGE_SIZE && doff < (u16)BGI_PAGE_SIZE) {
+                if (soff < (u16)GFX_PAGE_SIZE && doff < (u16)GFX_PAGE_SIZE) {
                     host_vga_put4((u16)(pg + doff),
                                   clean[soff],
-                                  clean[(u16)BGI_PAGE_SIZE + soff],
-                                  clean[2u * (u16)BGI_PAGE_SIZE + soff],
-                                  clean[3u * (u16)BGI_PAGE_SIZE + soff]);
+                                  clean[(u16)GFX_PAGE_SIZE + soff],
+                                  clean[2u * (u16)GFX_PAGE_SIZE + soff],
+                                  clean[3u * (u16)GFX_PAGE_SIZE + soff]);
                 }
             }
         }
@@ -924,7 +924,7 @@ void host_compose_bg_view(u8 __far *view)
  *   work-buffer body; the engine's HUD/text path is out of scope for the keystone
  *   gameplay compose.  Kept a faithful NOP so the screens.c / anim.c call sites
  *   stay byte-faithful (same convention as the default build's game_stubs leaves).
- *   The BGI text leaves (bgi_set_text_pos_9837 / bgi_draw_string_9804) live in
+ *   The BGI text leaves (gfx_set_text_pos_9837 / gfx_draw_string_9804) live in
  *   screens.c — NOPs in the default build, routed to host_text_* below when playable. */
 void anim_render_leaf_80ac(u8 __far *view)        { (void)view; }
 

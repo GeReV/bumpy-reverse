@@ -62,12 +62,12 @@ OBJ_H = 0x12
 # Ghidra 1000:off byte is 0x1100 + off (this is exactly dosemu.py's BLIT formula).
 BLIT_LIN = 0x1100 + 0x942a
 
-# bgi_set_mode_10 (1ab9:1028) and restore_bg_view (1ab9:0d77): overlay segment
+# gfx_set_mode_10 (1ab9:1028) and restore_bg_view (1ab9:0d77): overlay segment
 # 1ab9 maps as 0x1100 + (0x1ab9 - 0x1000)*16 + off = 0xbc90 + off (static).
 # These are used by the FRAME_ORACLE present-path hook (Plan 6c Task 2).
-_BGI_OV_BASE = 0x1100 + (0x1ab9 - 0x1000) * 16  # = 0xbc90
-BGI_SET_MODE_10_LIN = _BGI_OV_BASE + 0x1028      # bgi_set_mode_10 entry
-BGI_RESTORE_BG_LIN  = _BGI_OV_BASE + 0x0d77      # restore_bg_view dispatcher entry
+_GFX_OV_BASE = 0x1100 + (0x1ab9 - 0x1000) * 16  # = 0xbc90
+GFX_SET_MODE_10_LIN = _GFX_OV_BASE + 0x1028      # gfx_set_mode_10 entry
+GFX_RESTORE_BG_LIN  = _GFX_OV_BASE + 0x0d77      # restore_bg_view dispatcher entry
 
 # cur_sprite_data far ptr: off @ DGROUP:0x56e2, seg @ DGROUP:0x56e4
 OFF_CSD_OFF = 0x56e2
@@ -587,21 +587,21 @@ def main() -> None:
 
     uc.hook_add(UC_HOOK_CODE, hook_restore_bg, None, RBTR_LIN, RBTR_LIN)
 
-    # --- PRESENT ORACLE (6c Task 2): hook bgi_set_mode_10 + restore_bg_view entry ---
+    # --- PRESENT ORACLE (6c Task 2): hook gfx_set_mode_10 + restore_bg_view entry ---
     # Each call records the view descriptor far ptr, view->word[0] (selects src page),
     # dest far ptr (view+0x10/+0x12), and sub-handler index (view+0x1c).
     # Calls with word[0] ∈ {0,1} are "active" (trigger the plane-copy path); those
     # with word[0] > 1 are NOPs (code-embedded descriptors, e.g. draw_anim views).
     # Also logs cur_sprite_data (DGROUP:0x56e2/0x56e4) at each blit_sprite_vga call
     # to confirm which VGA page each sprite goes to.
-    present_log: list = []   # list of dicts, one per bgi_set_mode_10 call (active path)
+    present_log: list = []   # list of dicts, one per gfx_set_mode_10 call (active path)
     all_mode10: list = []    # all calls (active + NOP), for dynamics report
     csd_log: list = []       # cur_sprite_data at each blit_sprite_vga call
 
-    def hook_bgi_mode10(uc, addr, size, _) -> None:
+    def hook_gfx_mode10(uc, addr, size, _) -> None:
         if not tr.get("watch"):
             return
-        # bgi_set_mode_10 is called with DX:AX = view descriptor far ptr.
+        # gfx_set_mode_10 is called with DX:AX = view descriptor far ptr.
         dx = uc.reg_read(UC_X86_REG_DX) & 0xFFFF
         ax = uc.reg_read(UC_X86_REG_AX) & 0xFFFF
         desc_lin = (dx * 16 + ax) & 0xFFFFF
@@ -618,11 +618,11 @@ def main() -> None:
         if w0 <= 1:
             present_log.append(entry)
 
-    def hook_bgi_restore(uc, addr, size, _) -> None:
+    def hook_gfx_restore(uc, addr, size, _) -> None:
         if not tr.get("watch"):
             return
         # restore_bg_view (1ab9:0d77) uses DX:AX for view far ptr too (same calling
-        # convention as bgi_set_mode_10 — both are lcall targets from dispatch).
+        # convention as gfx_set_mode_10 — both are lcall targets from dispatch).
         dx = uc.reg_read(UC_X86_REG_DX) & 0xFFFF
         ax = uc.reg_read(UC_X86_REG_AX) & 0xFFFF
         desc_lin = (dx * 16 + ax) & 0xFFFFF
@@ -648,8 +648,8 @@ def main() -> None:
         csd_log.append(dict(caller="blit_vga", call_n=n,
                             csd_seg=csd_seg, csd_off=csd_off))
 
-    uc.hook_add(UC_HOOK_CODE, hook_bgi_mode10, None, BGI_SET_MODE_10_LIN, BGI_SET_MODE_10_LIN)
-    uc.hook_add(UC_HOOK_CODE, hook_bgi_restore, None, BGI_RESTORE_BG_LIN, BGI_RESTORE_BG_LIN)
+    uc.hook_add(UC_HOOK_CODE, hook_gfx_mode10, None, GFX_SET_MODE_10_LIN, GFX_SET_MODE_10_LIN)
+    uc.hook_add(UC_HOOK_CODE, hook_gfx_restore, None, GFX_RESTORE_BG_LIN, GFX_RESTORE_BG_LIN)
     uc.hook_add(UC_HOOK_CODE, hook_bvga_csd, None, BLITVGA_LIN, BLITVGA_LIN)
 
     uc.hook_add(UC_HOOK_INTR, hook_intr)
@@ -978,7 +978,7 @@ def main() -> None:
     #              layout: 4 planes × 8000 B (plane 0 first, then 1, 2, 3)
     #              (= the save-under captured by setup_fullscreen_view via the
     #               a000→fullscreen_buf present copy at level start)
-    #   next   2 B  u16 n_present  (number of bgi_set_mode_10 calls with word[0]<=1
+    #   next   2 B  u16 n_present  (number of gfx_set_mode_10 calls with word[0]<=1
     #                               observed during the settle period)
     #   per present-call record (18 B each):
     #     2 B u16 desc_seg   — view descriptor far ptr seg
@@ -987,7 +987,7 @@ def main() -> None:
     #     2 B u16 dest_seg   — dest far ptr seg (from view+0x12)
     #     2 B u16 dest_off   — dest far ptr off (from view+0x10)
     #     2 B u16 sh_idx     — sub-handler index (from view+0x1c)
-    #     2 B u16 n_all      — total bgi_set_mode_10 calls so far (incl. NOPs)
+    #     2 B u16 n_all      — total gfx_set_mode_10 calls so far (incl. NOPs)
     #     4 B u32 call_ord   — ordinal of this call within all_mode10 (0-based)
     #   next   2 B  u16 n_csd  (number of cur_sprite_data observations)
     #   per csd record (6 B each):
@@ -1051,7 +1051,7 @@ def main() -> None:
             print("  present[%d] w0=%d src=%s dest=%04x:%04x sh_idx=%d" % (
                 _i, pe["w0"], _src_map.get(pe["w0"], "?"),
                 pe["dest_seg"], pe["dest_off"], pe["sh_idx"]), flush=True)
-        print("[sprite_oracle] FRM4: %d total bgi_set_mode_10 calls (%d active, %d NOP)" % (
+        print("[sprite_oracle] FRM4: %d total gfx_set_mode_10 calls (%d active, %d NOP)" % (
             len(all_mode10), len(_plog), len(all_mode10) - len(_plog)), flush=True)
 
     # --- BG ORACLE output (6a): tile-blit snapshots + the PAV atlas --------------

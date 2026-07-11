@@ -256,7 +256,7 @@ caught, and the oracle calibration anchor agreeing. One-command gate:
   (item-collection, contact-action, cell-animation); the only residual full-tilemap
   divergence is the **animated-tile FX-graphics layer** (cell+0xa0, e.g. cell `0xc8` =
   anim-slot cell `0x28` + `0xa0` cycling its displayed tile-graphic +6/tick), written
-  INSIDE the carved-out BGI render core (`render_player_view` → `bgi_set_mode_10` → the
+  INSIDE the carved-out BGI render core (`render_player_view` → `gfx_set_mode_10` → the
   un-analyzed EGAVGA overlay handler `1ab9:0db0`). No gameplay-collision callee reads
   that layer; it is render-only, so it is legitimately excluded from the state-spine
   SNAP. The collision-layer tilemap is validated per-cell by the items/anim/spawn

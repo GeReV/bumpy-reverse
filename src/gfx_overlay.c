@@ -1,14 +1,13 @@
 #include <string.h>
-#include "bgi_overlay.h"
+#include "gfx_overlay.h"
 
-/* See bgi_overlay.h.
+/* See gfx_overlay.h.
 
-   NAMING (2026-07-11): the "BGI"/`bgi_*` labels on the segment-1ab9 overlay
-   (`bgi_set_mode_00/01/10/11`, `bgi_overlay*`, this file) are a HISTORICAL MISNOMER.
-   The overlay is the game's OWN Loriciel VGA planar driver — NOT stock Borland BGI
-   (verified: no EGAVGA.BGI linked or loaded, no Borland driver banner in the image;
-   only a 42-byte incidental code match).  The names are retained pending a rename;
-   read "bgi" here as "the graphics overlay", not Borland.  See CLAUDE.md +
+   NAMING (2026-07-11): the segment-1ab9 overlay + these `gfx_*` symbols were RENAMED
+   from `bgi_*` — an early naming pass wrongly assumed Borland BGI.  The overlay is the
+   game's OWN Loriciel VGA planar driver — NOT stock Borland BGI (verified: no
+   EGAVGA.BGI linked or loaded, no Borland driver banner in the image; only a 42-byte
+   incidental code match).  `gfx_` = "the graphics overlay".  See CLAUDE.md +
    docs/rendering-pipeline.md §1.
 
    Behavioral reconstruction of the two overlay dispatch wrappers:
@@ -29,18 +28,18 @@
 
 /* Local shorthands (avoid collisions with sprite_blit.c / bg_render.c macros
    when all .c files are #include'd into one translation unit). */
-#define BGI_OVL_PLANE_SIZE    BGI_PLANE_SIZE    /* 0x10000UL */
-#define BGI_OVL_PAGE_SIZE     BGI_PAGE_SIZE     /* 0x1F40UL = 8000 */
-#define BGI_OVL_ROWS          BGI_ROWS          /* 200 */
-#define BGI_OVL_ROW_BYTES     BGI_ROW_BYTES     /* 40 */
-#define BGI_OVL_PAGE_A200_OFF BGI_PAGE_A200_OFF /* 0x2000UL */
-#define BGI_OVL_PAGE_A000_OFF BGI_PAGE_A000_OFF /* 0x0000UL */
+#define GFX_OVL_PLANE_SIZE    GFX_PLANE_SIZE    /* 0x10000UL */
+#define GFX_OVL_PAGE_SIZE     GFX_PAGE_SIZE     /* 0x1F40UL = 8000 */
+#define GFX_OVL_ROWS          GFX_ROWS          /* 200 */
+#define GFX_OVL_ROW_BYTES     GFX_ROW_BYTES     /* 40 */
+#define GFX_OVL_PAGE_A200_OFF GFX_PAGE_A200_OFF /* 0x2000UL */
+#define GFX_OVL_PAGE_A000_OFF GFX_PAGE_A000_OFF /* 0x0000UL */
 
 #ifdef BUMPY_PLAYABLE
 /* DGROUP write-mode flags (0x541f / 0x5420) that the BGI mode-01/mode-10
-   dispatchers set before calling their handler; defined in host/host_bgi.c. */
-extern u8 bgi_write_mode_flag_a;
-extern u8 bgi_write_mode_flag_b;
+   dispatchers set before calling their handler; defined in host/host_gfx.c. */
+extern u8 gfx_write_mode_flag_a;
+extern u8 gfx_write_mode_flag_b;
 #endif
 
 /* -----------------------------------------------------------------------
@@ -65,12 +64,12 @@ extern u8 bgi_write_mode_flag_b;
    plane is an independent array slice, so we just copy the right slice.
    ----------------------------------------------------------------------- */
 /* NOTE on the plane-stride asymmetry below: the SOURCE is a VGA page (plane stride
-   BGI_OVL_PLANE_SIZE = 0x10000, the full 64KB plane window) while the DEST is the
-   PACKED fullscreen_buf (plane stride BGI_OVL_PAGE_SIZE = 0x1F40, 4 contiguous planes).
+   GFX_OVL_PLANE_SIZE = 0x10000, the full 64KB plane window) while the DEST is the
+   PACKED fullscreen_buf (plane stride GFX_OVL_PAGE_SIZE = 0x1F40, 4 contiguous planes).
    This matches the only call shape exercised (save-under to fullscreen_buf). If ever
-   invoked with a VGA-page DEST, the dest stride would need to be BGI_OVL_PLANE_SIZE.
+   invoked with a VGA-page DEST, the dest stride would need to be GFX_OVL_PLANE_SIZE.
    UNVALIDATED: this path is unreachable in the harness (sub-handler 0 fires only when
-   the bgi_set_mode_10 NOP guard passes, which never happens for the layer-A/B views). */
+   the gfx_set_mode_10 NOP guard passes, which never happens for the layer-A/B views). */
 static void render_player_view_full_copy(u8 __huge *dest_buf,
                                          const u8 __huge *src_planes,
                                          u32 src_page_off,
@@ -80,19 +79,19 @@ static void render_player_view_full_copy(u8 __huge *dest_buf,
 
     for (plane = 0; plane < 4u; plane++) {
         const u8 __huge *src = src_planes
-                             + (u32)plane * BGI_OVL_PLANE_SIZE
+                             + (u32)plane * GFX_OVL_PLANE_SIZE
                              + src_page_off;
         u8 __huge *dst = dest_buf
-                       + (u32)plane * BGI_OVL_PAGE_SIZE
+                       + (u32)plane * GFX_OVL_PAGE_SIZE
                        + dest_lin_off;
         memcpy((void __huge *)dst,
                (const void __huge *)src,
-               (size_t)(BGI_OVL_ROWS * BGI_OVL_ROW_BYTES));
+               (size_t)(GFX_OVL_ROWS * GFX_OVL_ROW_BYTES));
     }
 }
 
 /* -----------------------------------------------------------------------
-   restore_bg_view — 1000:80bc → bgi_set_mode_01 (1ab9:0d77)
+   restore_bg_view — 1000:80bc → gfx_set_mode_01 (1ab9:0d77)
 
    Faithfully reconstructs the outer dispatch wrapper:
      1. Check view->word0e (field at +0x0e): if > 1 → return (NOP).
@@ -132,13 +131,13 @@ static void render_player_view_full_copy(u8 __huge *dest_buf,
    ----------------------------------------------------------------------- */
 void restore_bg_view(u8 __huge *planes,
                      const u8 __huge *vga_src,
-                     const bgi_view_desc __far *view)
+                     const gfx_view_desc __far *view)
 {
     u16 word0e;
     u32 dest_page_off;
     u8  plane;
 
-    /* bgi_set_mode_01 (1ab9:0d77) guard is SIGNED in the original
+    /* gfx_set_mode_01 (1ab9:0d77) guard is SIGNED in the original
        (asm `CMP BP,1` / `JG`; decomp `if (*(int*)(AX+0xe) < 2)`): do the work iff
        (s16)word0e < 2.  An earlier reconstruction used an UNSIGNED compare
        (word0e > 1u), which diverges for high-bit word0e values — e.g. the
@@ -151,26 +150,26 @@ void restore_bg_view(u8 __huge *planes,
     }
 
 #ifdef BUMPY_PLAYABLE
-    /* bgi_set_mode_01 sets these DGROUP write-mode flags (0x541f/0x5420) before
-       dispatching to the mode-01 handler; host_bgi tracks them. */
-    bgi_write_mode_flag_a = 0u;
-    bgi_write_mode_flag_b = 1u;
+    /* gfx_set_mode_01 sets these DGROUP write-mode flags (0x541f/0x5420) before
+       dispatching to the mode-01 handler; host_gfx tracks them. */
+    gfx_write_mode_flag_a = 0u;
+    gfx_write_mode_flag_b = 1u;
 #endif
 
     /* Dest page selection: table[word0e]
          word0e == 0 → a200:0000 (plane offset 0x2000)
          word0e == 1 → a000:0000 (plane offset 0x0000) */
     if (word0e == 0u) {
-        dest_page_off = BGI_OVL_PAGE_A200_OFF;
+        dest_page_off = GFX_OVL_PAGE_A200_OFF;
     } else {
-        dest_page_off = BGI_OVL_PAGE_A000_OFF;
+        dest_page_off = GFX_OVL_PAGE_A000_OFF;
     }
 
 #ifdef BUMPY_PLAYABLE
     /* CLIPPED-RECT blit — the executed (playable) path.  Reads the blit rectangle
        from the descriptor and copies ONLY that rectangle (see the function header).
        This is the faithful behavior; the #else full-page copy below is retained for
-       the default BUMPY.EXE so that build's bgi_overlay.obj stays byte-identical
+       the default BUMPY.EXE so that build's gfx_overlay.obj stays byte-identical
        (it is byte-compared, never executed — its restore_bg_view is unreachable at
        runtime, so the behavioral content is immaterial there). */
     {
@@ -196,16 +195,16 @@ void restore_bg_view(u8 __huge *planes,
            Dest: VGA page, row stride 40, at the tile origin. */
         src_plane_stride = (u32)row_bytes * (u32)rows;
         dst_origin_off   = dest_page_off
-                         + (u32)((u32)dy_tiles * 8u) * BGI_OVL_ROW_BYTES
+                         + (u32)((u32)dy_tiles * 8u) * GFX_OVL_ROW_BYTES
                          + (u32)dx_tiles * 2u;
 
         for (plane = 0; plane < 4u; plane++) {
             const u8 __huge *src = vga_src + (u32)plane * src_plane_stride;
             u8 __huge *dst = planes
-                           + (u32)plane * BGI_OVL_PLANE_SIZE
+                           + (u32)plane * GFX_OVL_PLANE_SIZE
                            + dst_origin_off;
             for (row = 0; row < rows; row++) {
-                memcpy((void __huge *)(dst + (u32)row * BGI_OVL_ROW_BYTES),
+                memcpy((void __huge *)(dst + (u32)row * GFX_OVL_ROW_BYTES),
                        (const void __huge *)(src + (u32)row * row_bytes),
                        (size_t)row_bytes);
             }
@@ -213,28 +212,28 @@ void restore_bg_view(u8 __huge *planes,
     }
 #else
     /* Default build (byte-compared, never executed): the original behavioral model
-       — a flat plane-by-plane PAGE_SIZE copy.  Kept verbatim so bgi_overlay.obj is
+       — a flat plane-by-plane PAGE_SIZE copy.  Kept verbatim so gfx_overlay.obj is
        byte-stable in BUMPY.EXE.  See the #ifdef branch above for the executed,
        clip-aware playable path. */
     for (plane = 0; plane < 4u; plane++) {
-        const u8 __huge *src = vga_src + (u32)plane * BGI_OVL_PAGE_SIZE;
+        const u8 __huge *src = vga_src + (u32)plane * GFX_OVL_PAGE_SIZE;
         u8 __huge *dst = planes
-                       + (u32)plane * BGI_OVL_PLANE_SIZE
+                       + (u32)plane * GFX_OVL_PLANE_SIZE
                        + dest_page_off;
         memcpy((void __huge *)dst,
                (const void __huge *)src,
-               (size_t)BGI_OVL_PAGE_SIZE);
+               (size_t)GFX_OVL_PAGE_SIZE);
     }
 #endif
 }
 
 /* -----------------------------------------------------------------------
-   render_player_view — 1000:93b8 → bgi_set_mode_10 (1ab9:1028) → 1ab9:0db0
+   render_player_view — 1000:93b8 → gfx_set_mode_10 (1ab9:1028) → 1ab9:0db0
 
    Faithfully reconstructs:
-     1. render_player_view (1000:93b8): 7-byte wrapper — calls bgi_set_mode_10
+     1. render_player_view (1000:93b8): 7-byte wrapper — calls gfx_set_mode_10
         with the view far ptr.
-     2. bgi_set_mode_10 (1ab9:1028): check view->word00; if > 1 → return (NOP).
+     2. gfx_set_mode_10 (1ab9:1028): check view->word00; if > 1 → return (NOP).
         Set [0x541f]=1 (source from pointer table), [0x5420]=0 (dest from
         les view+0x10), call 1ab9:0db0 (mode-10 VGA handler, pm=2).
      3. 1ab9:0db0: call 1ab9:052d (setup src DS:SI / dest ES:DI from view
@@ -253,7 +252,7 @@ void restore_bg_view(u8 __huge *planes,
    ----------------------------------------------------------------------- */
 void render_player_view(u8 __huge *planes,
                         const u8 __huge *vga_src,
-                        const bgi_view_desc __far *view)
+                        const gfx_view_desc __far *view)
 {
     u16 word00;
     u32 src_page_off;
@@ -261,7 +260,7 @@ void render_player_view(u8 __huge *planes,
     u16 dest_seg;
     u16 dest_off;
 
-    /* bgi_set_mode_10 (1ab9:1028) guard is SIGNED (asm `CMP BP,1` / `JG`;
+    /* gfx_set_mode_10 (1ab9:1028) guard is SIGNED (asm `CMP BP,1` / `JG`;
        decomp `if (*(int*)AX < 2)`): run the handler iff (s16)word00 < 2.  Earlier
        reconstruction used an unsigned compare (word00 > 1u), which NOPs for
        high-bit word00 (e.g. the 0xc3fb the default-build descriptor reads from
@@ -273,19 +272,19 @@ void render_player_view(u8 __huge *planes,
     }
 
 #ifdef BUMPY_PLAYABLE
-    /* bgi_set_mode_10 sets these DGROUP write-mode flags (0x541f/0x5420) before
+    /* gfx_set_mode_10 sets these DGROUP write-mode flags (0x541f/0x5420) before
        dispatching to the mode-10 handler (note: 1/0, opposite of mode-01). */
-    bgi_write_mode_flag_a = 1u;
-    bgi_write_mode_flag_b = 0u;
+    gfx_write_mode_flag_a = 1u;
+    gfx_write_mode_flag_b = 0u;
 #endif
 
     /* Source page selection: pointer table[word00]
          word00 == 0 → a200:0000 (VGA plane offset 0x2000, sprite scratch)
          word00 == 1 → a000:0000 (VGA plane offset 0x0000, visible page) */
     if (word00 == 0u) {
-        src_page_off = BGI_OVL_PAGE_A200_OFF;
+        src_page_off = GFX_OVL_PAGE_A200_OFF;
     } else {
-        src_page_off = BGI_OVL_PAGE_A000_OFF;
+        src_page_off = GFX_OVL_PAGE_A000_OFF;
     }
 
     /* Dest: split far ptr from view->dest_seg:view->dest_off (les view+0x10).

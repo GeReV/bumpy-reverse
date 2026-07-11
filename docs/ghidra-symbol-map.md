@@ -62,13 +62,13 @@ DOS/BIOS wrappers: `7120` bios_int10_thunk · `7221` dos_getcurdir_wrap · `74b6
 dos_select_disk_wrap · `74c3` dos_chdir_wrap · `74d4` noop_empty_74d4.
 
 ### Overlay thunks (near→far trampolines into the BGI/overlay segments)
-`7b76`/`7b86`/`7b93`/`7ba7`/`7bad`/`7bbd`/`7bca`/`7bd7`/`7bea` bgi_overlay_thunk_* (→ `1ab9`) ·
-`809e` overlay_thunk_cd82 (→ `1cd5`) · `93a4` prng_seed_thunk · `93c8` bgi_set_mode_11_thunk ·
+`7b76`/`7b86`/`7b93`/`7ba7`/`7bad`/`7bbd`/`7bca`/`7bd7`/`7bea` gfx_overlay_thunk_* (→ `1ab9`) ·
+`809e` overlay_thunk_cd82 (→ `1cd5`) · `93a4` prng_seed_thunk · `93c8` gfx_set_mode_11_thunk ·
 `93e2`/`93f2`/`93fc`/`9406` palette_dispatch_*_thunk · `941a` prepare_sprite_frames_thunk ·
-`9424` build_bit_reverse_lut_thunk · `97d5` bgi_set_current_object_thunk ·
-`97f7` draw_char_glyph_thunk · `9837` bgi_text_clip_thunk · `9854` measure_string_width_thunk ·
+`9424` build_bit_reverse_lut_thunk · `97d5` gfx_set_current_object_thunk ·
+`97f7` draw_char_glyph_thunk · `9837` gfx_text_clip_thunk · `9854` measure_string_width_thunk ·
 `9438` ret_thunk_9438 · `9376`/`9390` `maybe_`overlay_thunk (→ unanalyzed `1cda` targets) ·
-`9847` `maybe_`bgi_text_thunk_1458.
+`9847` `maybe_`gfx_text_thunk_1458.
 
 ### Borland C runtime (linked from the Turbo C++ libraries)
 Exit/startup: `00f6` crt_exit_terminate · `0115` crt_terminate · `012f` crt_install_trap_vectors ·
@@ -87,15 +87,15 @@ Device-command dispatchers (each indexes a per-display-mode fn-pointer table by 
 the mode index — confirmed against `local/borlandc/INCLUDE/GRAPHICS.H` + the in-binary VGA
 behavior of each vector target):
 
-`0179` bgi_init_viewport · `01c0` bgi_driver_nop · `01c1` bgi_device_clear_flag ·
-`01e1` bgi_putimage_dispatch (BGI cmd 21, `rep movsw` image copy) ·
-`01ff` bgi_cleardevice_dispatch (mode-0Dh reset) · `0232` bgi_device_reset_dispatch ·
-`02b1` bgi_palette_dispatch (VGA-DAC `OUT 0x3c8/0x3c9` upload) ·
-`0351` bgi_present_dispatch (called by `present_frame`) · `0384` bgi_device_inc_dispatch.
+`0179` gfx_init_viewport · `01c0` gfx_driver_nop · `01c1` gfx_device_clear_flag ·
+`01e1` gfx_putimage_dispatch (BGI cmd 21, `rep movsw` image copy) ·
+`01ff` gfx_cleardevice_dispatch (mode-0Dh reset) · `0232` gfx_device_reset_dispatch ·
+`02b1` gfx_palette_dispatch (VGA-DAC `OUT 0x3c8/0x3c9` upload) ·
+`0351` gfx_present_dispatch (called by `present_frame`) · `0384` gfx_device_inc_dispatch.
 
-Text output: `12b0` bgi_char_width · `1311` bgi_text_render_dispatch · `1409` bgi_set_text_mode ·
-`1422` bgi_set_clip_rect · `1441` bgi_set_text_position · `1458` bgi_set_text_attr. The text
-state lives in the DGROUP block `0x6936`–`0x6946` (`bgi_clip_x0/y0/x1/y1`, `bgi_text_mode`, …).
+Text output: `12b0` gfx_char_width · `1311` gfx_text_render_dispatch · `1409` gfx_set_text_mode ·
+`1422` gfx_set_clip_rect · `1441` gfx_set_text_position · `1458` gfx_set_text_attr. The text
+state lives in the DGROUP block `0x6936`–`0x6946` (`gfx_clip_x0/y0/x1/y1`, `gfx_text_mode`, …).
 
 ### BGI command-vector tables (DGROUP, slot = `[0x541d]*2 + base`)
 `0x4dda` cmdvec_init · `0x5435` cmdvec_putimage · `0x5441` cmdvec_palette ·
@@ -156,5 +156,5 @@ Loading a new build requires restarting the Ghidra GUI + reconnecting the MCP.
 Behavior is known; the precise purpose is best-effort and flagged `maybe_`:
 `7ad5` wait_key_change (loop exit condition unclear) · `8fb6` opl2_detect_chip (matches the
 AdLib presence-detect pattern, no caller confirmation) · `9376`/`9390` overlay_thunk (targets
-`1cda:0045`/`0089` are unanalyzed) · `9847` bgi_text_thunk_1458 · `0698` crt_return_one_stub
+`1cda:0045`/`0089` are unanalyzed) · `9847` gfx_text_thunk_1458 · `0698` crt_return_one_stub
 (dead code).

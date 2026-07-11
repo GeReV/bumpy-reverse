@@ -5,8 +5,8 @@
 #include <i86.h>              /* MK_FP */
 #include "host/host.h"        /* host_framebuffer, VGA constants */
 #include "bumpy.h"
-#include "bgi_overlay.h"      /* bgi_view_desc, render_player_view, restore_bg_view,
-                                  BGI_PAGE_A000_OFF, BGI_PLANE_SIZE, BGI_PAGE_SIZE */
+#include "gfx_overlay.h"      /* gfx_view_desc, render_player_view, restore_bg_view,
+                                  GFX_PAGE_A000_OFF, GFX_PLANE_SIZE, GFX_PAGE_SIZE */
 #include "screens.h"          /* render_descriptor_ptr, fullscreen_buf/seg,
                                   palette_mode, draw_number, wait_vretrace_thunk,
                                   play_iris_wipe_transition */
@@ -55,7 +55,7 @@ extern u8 __far *p2_sprite;   /* player2.c DGROUP 0x9b9e/0x9ba0 */
  * │    (a000:0000) into fullscreen_buf via render_player_view + the BGI       │
  * │    overlay's mode-10 subhandler-0 full-plane copy.  In the host flat-RAM  │
  * │    model we additionally copy host_framebuffer's page-0 region (4 planes  │
- * │    × BGI_PAGE_SIZE = 8000 B each) into hv_saveunder_buf.  The view-desc  │
+ * │    × GFX_PAGE_SIZE = 8000 B each) into hv_saveunder_buf.  The view-desc  │
  * │    build at render_descriptor_ptr and the render_player_view call are     │
  * │    faithfully reconstructed 1:1; only the source (flat RAM vs VGA a000)  │
  * │    and dest (hv_saveunder_buf vs fullscreen_buf) differ.                  │
@@ -77,8 +77,8 @@ extern u8 __far *p2_sprite;   /* player2.c DGROUP 0x9b9e/0x9ba0 */
  * │    Recorded in docs/reconstruction-fidelity.md (Playable host / Task 7). │
  * │                                                                            │
  * │ 3. BGI MODE-11 CALL (init_fullscreen_view_desc):                           │
- * │    The engine ends init_fullscreen_view_desc with bgi_set_mode_11_thunk    │
- * │    (→ bgi_set_mode_11 1ab9:126e, dynamically-loaded BGI overlay code).    │
+ * │    The engine ends init_fullscreen_view_desc with gfx_set_mode_11_thunk    │
+ * │    (→ gfx_set_mode_11 1ab9:126e, dynamically-loaded BGI overlay code).    │
  * │    In the host this call is replaced by present_frame(1) which copies the  │
  * │    composed RAM image to real VGA.  The view-desc build is 1:1.            │
  * │    Recorded in docs/reconstruction-fidelity.md (Playable host / Task 7). │
@@ -146,7 +146,7 @@ extern void anim_blit_sprite_leaf(u16 obj_off, u16 obj_seg);
  * hv_saveunder_buf: 4-plane RAM snapshot of host_framebuffer page-0.
  * setup_fullscreen_view captures it; restore_bg_view can read it back.
  * Sized to hold one full VGA page in planar form: 4 × 8000 = 32000 B.
- * (BGI_PAGE_SIZE = 0x1F40 = 8000 B; BGI_PLANE_SIZE = 0x10000 = host plane stride.) */
+ * (GFX_PAGE_SIZE = 0x1F40 = 8000 B; GFX_PLANE_SIZE = 0x10000 = host plane stride.) */
 static u8 __far *hv_saveunder_buf = (u8 __far *)0;
 
 /* Backing storage for the P2 move-state handler table (p2_state_handler_tbl shadow);
@@ -264,7 +264,7 @@ void init_sprite_structs(void)
 /* ── init_fullscreen_view_desc — 1000:5181 ─────────────────────────────────────
  *
  * Set up the fullscreen view/blit descriptor at render_descriptor_ptr and call
- * the BGI present path (engine: bgi_set_mode_11_thunk; host: present_frame).
+ * the BGI present path (engine: gfx_set_mode_11_thunk; host: present_frame).
  *
  * Engine decomp (verbatim field writes into render_descriptor_ptr pointee):
  *   [+0x00] = sprite_id (mode arg)        [+0x06] = 0
@@ -272,7 +272,7 @@ void init_sprite_structs(void)
  *   [+0x14] = 0                            [+0x16] = 0
  *   [+0x1c] = 0                            [+0x1e] = 0x14
  *   [+0x20] = 0x19
- *   then: bgi_set_mode_11_thunk(off, seg)   (host: present_frame(1))
+ *   then: gfx_set_mode_11_thunk(off, seg)   (host: present_frame(1))
  *
  * RECONSTRUCTION FIDELITY: BGI MODE-11 CALL — see file header note §3.
  * ──────────────────────────────────────────────────────────────────────────── */
@@ -296,7 +296,7 @@ void init_fullscreen_view_desc(u8 mode, u8 flag)
     *(u16 __far *)(d + 0x1e) = 0x14;
     *(u16 __far *)(d + 0x20) = 0x19;
 
-    /* Engine: bgi_set_mode_11_thunk(off, seg) — the FULL-SCREEN PAGE SYNC: copy
+    /* Engine: gfx_set_mode_11_thunk(off, seg) — the FULL-SCREEN PAGE SYNC: copy
      * page[word00=mode] → page[word0e=flag] (e.g. (1,0) copies the just-composed
      * gameplay page onto the other page so BOTH hold the clean screen before the
      * sprite draws + the first present flip).  A prior revision routed this to
@@ -315,7 +315,7 @@ void init_fullscreen_view_desc(u8 mode, u8 flag)
            host_page_off_of(mode) sourced the WRONG page (and host_page_off_of(flag=0)
            targeted the draw page itself).  While the iris wipe was a NOP that page held
            a near-identical previous bg, so the mis-source was invisible; once the
-           reconstructed GEOMETRIC iris (host_bgi_set_viewport) paints real BLACK there,
+           reconstructed GEOMETRIC iris (host_gfx_set_viewport) paints real BLACK there,
            the sync propagated BLACK over the freshly-composed page → the overworld walk
            "freezes on the frame-before-last" and the in-level save-under captures black
            under the moving sprite → sprite flicker.
@@ -374,7 +374,7 @@ void init_fullscreen_view_desc(u8 mode, u8 flag)
 void setup_fullscreen_view(void)
 {
     u8 __far *d;
-    const bgi_view_desc __far *view;
+    const gfx_view_desc __far *view;
 
     /* Step 1: rebuild background tile runs (1:1 engine call). */
     redraw_level_background_tiles();
@@ -401,7 +401,7 @@ void setup_fullscreen_view(void)
     /* Step 3: clean-background capture (RECONSTRUCTION FIDELITY note §1).
      * Engine calls render_player_view(off, seg) which copies VGA a000 → fullscreen_buf.
      * Host: allocate hv_saveunder_buf if needed, then read the freshly-painted a000
-     * page-0 (4 planes × BGI_PAGE_SIZE bytes, via host_vga_read4) into it.
+     * page-0 (4 planes × GFX_PAGE_SIZE bytes, via host_vga_read4) into it.
      * (2026-07-02 FIX: this previously memcpy'd from the flat host_framebuffer, which
      * the real-VGA blitters no longer write — the snapshot was all zeros and the
      * anim-channel erase repainted black.  redraw_level_background_tiles above has
@@ -425,7 +425,7 @@ void setup_fullscreen_view(void)
      * descriptor to fill fullscreen_buf.  The host's clean-bg equivalent is the
      * hv_saveunder_buf VGA capture above; the flat host_framebuffer copy this used
      * to do was orphaned by the real-VGA migration and is dropped. */
-    view = (const bgi_view_desc __far *)d;
+    view = (const gfx_view_desc __far *)d;
     (void)view;
 }
 
@@ -475,7 +475,7 @@ void show_text_screen(void)
      * fullscreen_buf.  Stubbed (resource-load path not yet live). */
 
     /* Iris-wipe in, present fullscreen image + upload DAC palette.
-     * Engine calls bgi_overlay_thunk_01e1 + _02b1 (Ghidra names); in screens.c
+     * Engine calls gfx_overlay_thunk_01e1 + _02b1 (Ghidra names); in screens.c
      * these are fun_7b93_present_blank + fun_7bca_flip (the reconstructed names). */
     play_iris_wipe_transition();
     fun_7b93_present_blank(fullscreen_buf, fullscreen_buf_seg, 0);

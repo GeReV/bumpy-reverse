@@ -602,7 +602,7 @@ static int run_replay(const char *path)
            ANIMATED-TILE FX-GRAPHICS layer (e.g. cell 0xc8 = anim-slot cell 0x28 +
            0xa0, cycling its displayed tile-graphic index +6/tick).  That write is
            produced INSIDE the carved-out BGI render core: draw_anim_channels_a calls
-           render_player_view (1000:93b8) -> bgi_set_mode_10 -> the un-analyzed BGI
+           render_player_view (1000:93b8) -> gfx_set_mode_10 -> the un-analyzed BGI
            EGAVGA overlay handler (1ab9:0db0), which is the documented render-leaf
            carve-out (src/anim.c FIDELITY note; docs/rendering-pipeline.md).  No
            reconstructed (or original) game_tick state-callee writes that FX layer, and

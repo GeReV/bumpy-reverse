@@ -1,4 +1,4 @@
-/* host_bgi.h — BGI primitive host reimplementation (BUMPY_PLAYABLE).
+/* host_gfx.h — BGI primitive host reimplementation (BUMPY_PLAYABLE).
  *
  * RECONSTRUCTION FIDELITY — BGI OVERLAY PRIMITIVES (HOST REIMPLEMENTATION)
  * The original Bumpy engine's graphics primitives route through a Borland BGI
@@ -12,45 +12,45 @@
  * keeps the faithful-signature NOP stubs in screens.c.
  * Deviation recorded in docs/reconstruction-fidelity.md ("playable host: BGI
  * overlay primitives"). */
-#ifndef HOST_BGI_H
-#define HOST_BGI_H
+#ifndef HOST_GFX_H
+#define HOST_GFX_H
 #ifdef BUMPY_PLAYABLE
 #include "bumpy.h"
 
-/* host_bgi_stage_image_palette — functional equivalent of BGI VGA stage handler
+/* host_gfx_stage_image_palette — functional equivalent of BGI VGA stage handler
  * (1ab9:0620): copies 48 bytes (16-colour 6-bit palette) from [buf_seg:buf_off]
- * +0x33 into the per-page side-store host_bgi_page_palette[page & 1].
+ * +0x33 into the per-page side-store host_gfx_page_palette[page & 1].
  *
  * Called from fun_7b93_present_blank (screens.c) under #ifdef BUMPY_PLAYABLE.
  * RECONSTRUCTION FIDELITY: the engine slots the palette into *0x5311+page*99+
- * 0x33; the host uses a two-entry side-store instead (see host_bgi.c). */
-void host_bgi_stage_image_palette(u16 buf_off, u16 buf_seg, u16 page);
+ * 0x33; the host uses a two-entry side-store instead (see host_gfx.c). */
+void host_gfx_stage_image_palette(u16 buf_off, u16 buf_seg, u16 page);
 
-/* host_bgi_upload_palette_to_dac — functional equivalent of BGI VGA DAC-upload
- * handler (1ab9:0677): reads host_bgi_page_palette[page & 1] and emits the
+/* host_gfx_upload_palette_to_dac — functional equivalent of BGI VGA DAC-upload
+ * handler (1ab9:0677): reads host_gfx_page_palette[page & 1] and emits the
  * canonical VGA-DAC write sequence (OUT 0x3c8=0, 8×RGB; OUT 0x3c8=0x10, 8×RGB).
  *
  * Called from fun_7bca_flip (screens.c) under #ifdef BUMPY_PLAYABLE.
  * The (port,value) sequence is the hard contract the DAC gate validates. */
-void host_bgi_upload_palette_to_dac(u16 page);
+void host_gfx_upload_palette_to_dac(u16 page);
 
-/* bgi_write_mode_flag_a / bgi_write_mode_flag_b — DGROUP 0x541f / 0x5420.
- * Engine globals set by bgi_init_viewport (1ab9:0179) to select addressing mode
+/* gfx_write_mode_flag_a / gfx_write_mode_flag_b — DGROUP 0x541f / 0x5420.
+ * Engine globals set by gfx_init_viewport (1ab9:0179) to select addressing mode
  * for the subsequent blit dispatch.  Written here (a=2, b=1) by
- * host_bgi_set_viewport; the VGA blit slot is null so they are never read by a
+ * host_gfx_set_viewport; the VGA blit slot is null so they are never read by a
  * live handler.  Exposed for reference / future overlay reconstruction. */
-extern u8 bgi_write_mode_flag_a;   /* DGROUP 0x541f */
-extern u8 bgi_write_mode_flag_b;   /* DGROUP 0x5420 */
+extern u8 gfx_write_mode_flag_a;   /* DGROUP 0x541f */
+extern u8 gfx_write_mode_flag_b;   /* DGROUP 0x5420 */
 
-/* host_bgi_set_viewport — functional equivalent of BGI overlay bgi_init_viewport
- * (1ab9:0179), called via thunk 1000:7b4a (Ghidra: bgi_set_viewport_thunk).
+/* host_gfx_set_viewport — functional equivalent of BGI overlay gfx_init_viewport
+ * (1ab9:0179), called via thunk 1000:7b4a (Ghidra: gfx_set_viewport_thunk).
  *
  * Sets clip-extent constants view[+0x18]=0x14, view[+0x1a]=0x19 and the two mode
- * flags (bgi_write_mode_flag_a=2, bgi_write_mode_flag_b=1), then returns with NO
+ * flags (gfx_write_mode_flag_a=2, gfx_write_mode_flag_b=1), then returns with NO
  * pixel blit (VGA dispatch slot 0x4dda[2]=0x0000 is null).
  *
  * VGA iris: the iris loop passes a per-step rect in +0x14/+0x16/+0x1e/+0x20 but
- * bgi_init_viewport IGNORES it (writes CONSTANTS to +0x18/+0x1a).  The visible
+ * gfx_init_viewport IGNORES it (writes CONSTANTS to +0x18/+0x1a).  The visible
  * VGA iris = the vsync-timed hold (4x wait_vretrace_thunk/step, 10 steps) + the
  * final blank-palette upload (Task-1/2 palette path) → TIMED-HOLD -> BLANK-TO-BLACK,
  * not a geometric shrink (the geometric iris is an EGA/CGA effect; on VGA it
@@ -62,7 +62,7 @@ extern u8 bgi_write_mode_flag_b;   /* DGROUP 0x5420 */
  *
  * Called from fun_7b4a_view_blit (screens.c) under #ifdef BUMPY_PLAYABLE.
  * `seg` is the DGROUP segment (already encoded in the far ptr `view`; unused here). */
-void host_bgi_set_viewport(u8 __far *view, u16 seg);
+void host_gfx_set_viewport(u8 __far *view, u16 seg);
 
 #endif /* BUMPY_PLAYABLE */
-#endif /* HOST_BGI_H */
+#endif /* HOST_GFX_H */

@@ -166,16 +166,16 @@ u8        deferred_contact_buf[16];    /* DGROUP 0x0886 — the event buffer (he
 void init_game_session_state(void)
 {
     set_disk_swap_callback(0x698, 0x6a9);
-    init_timer_resource_table(0x6fac, 0x203b);   /* 1000:7bad bgi_overlay_thunk_adab */
+    init_timer_resource_table(0x6fac, 0x203b);   /* 1000:7bad gfx_overlay_thunk_adab */
     install_interrupt_handler();
     install_keyboard_isr();                        /* REAL (input.c) */
     init_joystick_handlers();
     mouse_reset();
     init_sound_tables(0x4c00, 0x4cd0, 0x203b);    /* 1000:7563 init_sound_tables */
-    init_misc_7bd7();                              /* 1000:7bd7 bgi_overlay_thunk_gfx_init */
+    init_misc_7bd7();                              /* 1000:7bd7 gfx_overlay_thunk_gfx_init */
     init_display_97a4();                           /* 1000:97a4 thunk→detect_video_adapter (adapter probe); host folds the mode-0x0D set here */
-    init_misc_7bbd(2);                             /* 1000:7bbd bgi_overlay_thunk_0232 */
-    init_display_97f1();                           /* 1000:97f1 → 1ab9:137b bgi_draw_sequence (text pos/window/page/colour init) */
+    init_misc_7bbd(2);                             /* 1000:7bbd gfx_overlay_thunk_0232 */
+    init_display_97f1();                           /* 1000:97f1 → 1ab9:137b gfx_draw_sequence (text pos/window/page/colour init) */
     init_crtc_window(0, 0, 0x13f, 199);            /* 1000:9821 → 1ab9:1422 clip-window store (NO CRTC — see host_video.c) */
     set_display_page(1);                           /* 1000:9814 set_active_display_page */
     set_text_color(0xe, 1);                        /* 1000:97c5 → 1ab9:1311/14ef: session text colours fg=14, bg=1 (disasm @1000:02f1) */

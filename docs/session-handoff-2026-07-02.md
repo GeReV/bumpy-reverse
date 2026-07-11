@@ -410,10 +410,10 @@ pending.  §8.3 is otherwise CLOSED (mapping + worldmap data affirmatively faith
 
 ### 8.4 Screen-transition iris ("shrinking square fade") never worked
 
-play_iris_wipe_transition (engine 1000:3467) → the host_bgi viewport/iris path
-(src/host/host_bgi.c, commit 9bf5946).  Never functional in the playable build.
+play_iris_wipe_transition (engine 1000:3467) → the host_gfx viewport/iris path
+(src/host/host_gfx.c, commit 9bf5946).  Never functional in the playable build.
 Related to task #18's presentation leaves.  INVESTIGATE: decompile 1000:3467 —
-likely a loop shrinking a clip viewport + fill; check what host_bgi_set_viewport
+likely a loop shrinking a clip viewport + fill; check what host_gfx_set_viewport
 does and whether the fill leaf is a NOP.  LOW RISK to gameplay; cosmetic.
 
 ### 8.5 High scores "broken"
@@ -474,7 +474,7 @@ hs_5200.png.)
 This is NOT the §8.2 text-color / §8.1 page-parity bug (both now fixed).
 `show_highscore_screen` (screens.c:1710) is fully reconstructed and does:
 `open_resource(3,4)` + read_chunked + vec_decode (highscore BG image) →
-`play_iris_wipe_transition` → `restore_bg_view` (the real BG blit, bgi_overlay.c:125)
+`play_iris_wipe_transition` → `restore_bg_view` (the real BG blit, gfx_overlay.c:125)
 → `fun_7b93_present_blank` (stage image palette) → `fun_7bca_flip` (DAC upload) →
 `present_frame(1)` → `render_highscore_table`.  The failure is in THIS chain, and it
 is COUPLED TO §8.4: the iris (`play_iris_wipe_transition`, screens.c:697) uploads a
@@ -485,7 +485,7 @@ SUSPECTS to check IN ORDER (all host-integration, like the menu/level present wo
   1. **Palette** — after the iris fade, is the highscore BG image's embedded palette
      (img+0x33, staged by fun_7b93 then DAC-uploaded by fun_7bca) actually the
      highscore palette, or still the blank/faded one?  A wrong/blank palette alone
-     explains the ghost.  Verify host_bgi_stage_image_palette reads +0x33 of the
+     explains the ghost.  Verify host_gfx_stage_image_palette reads +0x33 of the
      DECODED resource-3 image, and that fun_7bca uploads THAT page's palette.
   2. **Resource load** — does `open_resource(3,4)` + vec_decode actually populate
      fullscreen_img_buf on the host?  If resource 3 fails/decodes empty,

@@ -80,7 +80,7 @@ typedef int32_t  s32;
 #include "../src/sprite_blit.c"
 #include "../src/sprite_chain.c"
 #include "../src/sprite_anim.c"
-#include "../src/bgi_overlay.c"
+#include "../src/gfx_overlay.c"
 #include "../src/entity.c"
 
 /* -------------------------------------------------------------------------

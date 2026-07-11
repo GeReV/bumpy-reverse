@@ -1,6 +1,6 @@
 #include <string.h>
 #include "entity.h"
-#include "bgi_overlay.h"
+#include "gfx_overlay.h"
 #include "sprite_anim.h"
 #include "sprite_chain.h"
 #include "sprite_blit.h"
@@ -89,12 +89,12 @@ void host_animb_capture(u16 voff, u16 cols, u16 rows, u16 stride);
    In draw_anim_channels_a/b (1000:165e / 1000:17c7), the erase_view and
    draw_view far ptrs point into the code segment at 0x114b:0x74a0 and
    0x114b:0x751e respectively.  Both start with machine code:
-     erase_view+0x0e = 0x85b3  (>1 → bgi_set_mode_01 NOP guard)
-     draw_view+0x00  = 0xc3fb  (>1 → bgi_set_mode_10 NOP guard)
+     erase_view+0x0e = 0x85b3  (>1 → gfx_set_mode_01 NOP guard)
+     draw_view+0x00  = 0xc3fb  (>1 → gfx_set_mode_10 NOP guard)
    So ALL restore_bg_view / render_player_view calls from draw_anim_channels_a/b
    are structural NOPs at run time (per present_model.md §5).
 
-   We model this with a static bgi_view_desc whose NOP-guard fields are set to
+   We model this with a static gfx_view_desc whose NOP-guard fields are set to
    values > 1, so the host reconstruction's NOP guards fire exactly as the
    engine's guards do.  The composite result is therefore unchanged.
    ----------------------------------------------------------------------- */
@@ -109,7 +109,7 @@ void host_animb_capture(u16 voff, u16 cols, u16 rows, u16 stride);
  * of relying on the old unsigned misreading of 0xc3fb/0x85b3; after the guard was
  * corrected to signed, the old values dispatched into the NULL source and crashed
  * the ctests.  Pixel-validated equivalence is unchanged. */
-static const bgi_view_desc nop_view = {
+static const gfx_view_desc nop_view = {
     0x7fffu,  /* word00: (s16)>=2 → mode-10 guard rejects (engine stale value 0xc3fb) */
     { 0u, 0u, 0u, 0u, 0u, 0u },
     0x7fffu,  /* word0e: (s16)>=2 → mode-01 guard rejects (engine stale value 0x85b3) */
@@ -512,7 +512,7 @@ void entity_draw_screen_sprite(u8 __huge *planes, u16 pixel_x, u16 pixel_y, u16 
      //   les bx, [0x8d4]           ; load erase_view far ptr (0x114b:0x74a0)
      //   mov es:[bx+0x1c], 0       ; set sub-handler
      //   push [0x8d6],[0x8d4]      ; push view far ptr
-     //   call 0x80bc               ; restore_bg_view → bgi_set_mode_01 (1ab9:0d77)
+     //   call 0x80bc               ; restore_bg_view → gfx_set_mode_01 (1ab9:0d77)
      //   NOP: erase_view+0x0e = 0x85b3 > 1 → guard fires (see present_model.md §5)
      //
      // STEP 2 — BLIT SPRITE (blit_sprite):
@@ -527,7 +527,7 @@ void entity_draw_screen_sprite(u8 __huge *planes, u16 pixel_x, u16 pixel_y, u16 
      //   mov es:[bx+0x10], ax      ; view+0x10 = sprite obj offset
      //   mov es:[bx+0x12], ds      ; view+0x12 = DGROUP
      //   mov es:[bx+0x1c], 0       ; sub-handler = 0
-     //   call 0x93b8               ; render_player_view → bgi_set_mode_10 (1ab9:1028)
+     //   call 0x93b8               ; render_player_view → gfx_set_mode_10 (1ab9:1028)
      //   NOP: draw_view+0x00 = 0xc3fb > 1 → guard fires (see present_model.md §5)
 
    DESCRIPTOR SOURCING: the far ptr at dg[0x3d6a + remap*4] lands at seg 0x114b
@@ -582,12 +582,12 @@ void entity_draw_layer_a(u8 __huge *planes, const u8 __far *bum,
                STEP 1: ERASE — restore_bg_view (1000:80bc → 1ab9:0d77)
                Engine: les bx,[0x8d4]; call 0x80bc (erase_view far ptr).
                NOP: erase_view+0x0e = 0x85b3 > 1 (code-embedded view;
-               bgi_set_mode_01 guard fires; see present_model.md §5).
+               gfx_set_mode_01 guard fires; see present_model.md §5).
                We pass nop_view (word0e = 0x85b3) to model this exactly.
                UNVALIDATED: NOP path only in this harness context.
                ------------------------------------------------------- */
             restore_bg_view(planes, (const u8 __huge *)NULL,
-                            (const bgi_view_desc __far *)&nop_view);
+                            (const gfx_view_desc __far *)&nop_view);
 
             /* -------------------------------------------------------
                STEP 2: BLIT SPRITE — entity_blit_object (= blit_sprite)
@@ -621,12 +621,12 @@ void entity_draw_layer_a(u8 __huge *planes, const u8 __far *bum,
                STEP 3: SAVE-UNDER — render_player_view (1000:93b8 → 1ab9:1028)
                Engine: les bx,[0x8e0]; set draw_view fields; call 0x93b8.
                NOP: draw_view+0x00 = 0xc3fb > 1 (code-embedded view;
-               bgi_set_mode_10 guard fires; see present_model.md §5).
+               gfx_set_mode_10 guard fires; see present_model.md §5).
                We pass nop_view (word00 = 0xc3fb) to model this exactly.
                UNVALIDATED: NOP path only in this harness context.
                ------------------------------------------------------- */
             render_player_view(planes, (const u8 __huge *)NULL,
-                               (const bgi_view_desc __far *)&nop_view);
+                               (const gfx_view_desc __far *)&nop_view);
         }
     }
 }
@@ -711,7 +711,7 @@ void entity_draw_layer_b(u8 __huge *planes, const u8 __far *bum,
                UNVALIDATED: NOP path only in this harness context.
                ------------------------------------------------------- */
             restore_bg_view(planes, (const u8 __huge *)NULL,
-                            (const bgi_view_desc __far *)&nop_view);
+                            (const gfx_view_desc __far *)&nop_view);
 
             /* -------------------------------------------------------
                STEP 2: BLIT SPRITE — entity_blit_object (= blit_sprite)
@@ -745,7 +745,7 @@ void entity_draw_layer_b(u8 __huge *planes, const u8 __far *bum,
                UNVALIDATED: NOP path only in this harness context.
                ------------------------------------------------------- */
             render_player_view(planes, (const u8 __huge *)NULL,
-                               (const bgi_view_desc __far *)&nop_view);
+                               (const gfx_view_desc __far *)&nop_view);
         }
     }
 }

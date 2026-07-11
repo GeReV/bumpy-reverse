@@ -75,7 +75,7 @@ void game_tick(void);
 
 /* init_game_session_state setup callees */
 void set_disk_swap_callback(u16 int24_handler, u16 callback);
-void init_timer_resource_table(u16 off, u16 seg);   /* 1000:7bad bgi_overlay_thunk_adab (carve) */
+void init_timer_resource_table(u16 off, u16 seg);   /* 1000:7bad gfx_overlay_thunk_adab (carve) */
 void install_interrupt_handler(void);
 void init_joystick_handlers(void);
 void mouse_reset(void);

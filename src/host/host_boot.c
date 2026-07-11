@@ -9,9 +9,9 @@
  *
  * ── RECONSTRUCTION FIDELITY ──────────────────────────────────────────────────
  *
- *  init_timer_resource_table (1000:7bad = bgi_overlay_thunk_adab):
+ *  init_timer_resource_table (1000:7bad = gfx_overlay_thunk_adab):
  *    Engine body: calls gfx_set_current_pos() which stores register values
- *    AX/DX into bgi_cur_pos_x/bgi_cur_pos_y.  No state the playable host
+ *    AX/DX into gfx_cur_pos_x/gfx_cur_pos_y.  No state the playable host
  *    uses.  BENIGN NO-OP: BGI overlay not installed in the host build.
  *
  *  init_joystick_handlers (1000:7532):
@@ -75,7 +75,7 @@
 #include "../input.h"    /* g_joystick_handler_table   */
 #include <string.h>      /* memset */
 
-/* init_timer_resource_table 1000:7bad (bgi_overlay_thunk_adab) — BGI cur-pos
+/* init_timer_resource_table 1000:7bad (gfx_overlay_thunk_adab) — BGI cur-pos
  * store.  BENIGN NO-OP: BGI overlay not installed in the host build.
  *
  * NOTE (name↔body uncertainty): the function name implies timer + resource-table
@@ -88,7 +88,7 @@ void init_timer_resource_table(u16 off, u16 seg)
     (void)off;
     (void)seg;
     /* Engine: gfx_set_current_pos() stores AX/DX register values into
-     * bgi_cur_pos_x/bgi_cur_pos_y.  Not relevant to the host path. */
+     * gfx_cur_pos_x/gfx_cur_pos_y.  Not relevant to the host path. */
 }
 
 /* init_joystick_handlers 1000:7532 — zero the joystick handler table, then (HOST)

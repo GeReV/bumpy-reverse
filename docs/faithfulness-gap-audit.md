@@ -56,20 +56,20 @@ several presentation primitives are no-ops.
 > ⚠️ **CORRECTION (2026-06-27): the role labels below for `7b93`/`7bca` are MISNOMERS.**
 > Capture-driven RE of the actual VGA (`palette_mode==2`) handlers (disassembled from the
 > binary; recorded as Ghidra disassembly comments at the handler addresses) proved:
-> - `1ab9:01e1` (`bgi_stage_palette_dispatch`, thunk `7b93`, VGA handler `1ab9:0620`) is a
+> - `1ab9:01e1` (`gfx_stage_palette_dispatch`, thunk `7b93`, VGA handler `1ab9:0620`) is a
 >   **16-colour palette stage** — `rep movsw` of the 48-byte palette from `buf+0x33` into the
 >   current draw-object's per-**page** slot (`*0x5311 + page*99 + 0x33`). NOT a pixel putimage.
-> - `1ab9:02b1` (`bgi_upload_palette_to_dac_dispatch`, thunk `7bca`, VGA handler `1ab9:0677`)
+> - `1ab9:02b1` (`gfx_upload_palette_to_dac_dispatch`, thunk `7bca`, VGA handler `1ab9:0677`)
 >   is a **DAC palette upload** (ports `0x3c8`/`0x3c9`, slots 0–7 & 0x10–0x17). NOT a page flip.
-> - `1ab9:0351` (`bgi_present_dispatch`, `present_frame` `7bdd`, VGA handler `1ab9:0379` →
+> - `1ab9:0351` (`gfx_present_dispatch`, `present_frame` `7bdd`, VGA handler `1ab9:0379` →
 >   `1ab9:06c1`) is **the one true CRTC page flip** (`XOR` Start-Address bit 5 = 0x2000 swap).
-> - `1ab9:0179` (`bgi_init_viewport`, thunk `7b4a`) sets the clip/viewport extent, then
+> - `1ab9:0179` (`gfx_init_viewport`, thunk `7b4a`) sets the clip/viewport extent, then
 >   dispatches `[pm*2+0x4dda]`. **CORRECTION (2026-07-05): the EGA/VGA slot value `0` is NOT a
 >   null no-op** — `CALL word ptr [BX+0x4dda]`==0 calls near `1ab9:0000`, a secondary dispatcher
 >   → `0x4dcc[view+0x1c]`; `0x4dcc[0]=1ab9:002b` = a **solid black rect fill** (4-plane SEQ
 >   map-mask + `rep stosw`, geometry from `view[+0x14/+0x16/+0x1e/+0x20]`, colour `+0x22..+0x25`).
 >   This is the real **geometric iris** + name-entry cursor erase + code-screen clear (Task 24),
->   reconstructed in `host_bgi_set_viewport`. The earlier "null slot / iris = timed-hold+blank-DAC"
+>   reconstructed in `host_gfx_set_viewport`. The earlier "null slot / iris = timed-hold+blank-DAC"
 >   claim below was a disassembly error, now superseded.
 >
 > ⚠️ **CORRECTION (2026-06-27, Task 2): `upload_vga_dac_palette`/`dispatch_by_palette_mode`
@@ -79,7 +79,7 @@ several presentation primitives are no-ops.
 > for the VGA boot (`pm==2`) entry[2]=`0x0015` → `2036:0015` = a **VERTICAL-RETRACE (vsync)
 > WAIT** (`mov dx,0x3da; in al,dx; test al,8`: wait for retrace start, then end). The iris
 > wipe calls it 4×/step as the wipe PACING. The genuine DAC upload is `7bca`
-> (`host_bgi_upload_palette_to_dac`) / `vga_dac_upload_from_buffer` — kept as-is. src mirror:
+> (`host_gfx_upload_palette_to_dac`) / `vga_dac_upload_from_buffer` — kept as-is. src mirror:
 > `wait_vretrace_thunk`/`wait_vretrace_dispatch` (`src/screens.c`, `#ifdef BUMPY_PLAYABLE`).
 > The level-palette loader `load_palette` (`1000:08d1`) reuses `7b93`→`7bca`→`9864`
 > (stage→DAC upload→vsync); reconstructed host body in `src/host/host_video.c` (Task 2),
@@ -92,44 +92,44 @@ The engine's graphics primitives are a Borland-BGI-style driver overlay. Main-se
 **thunks** (`1000:7b4a`…) call **dispatch** functions here, which indirect-call a
 **runtime vector table** indexed by `palette_mode` (DGROUP `0x4dda`/`0x5435`/`0x5441`/
 `0x5475`/`0x555e`), reaching the per-mode handler. All of `1ab9` is in the corpus and
-decompiles, **except** the innermost self-modifying planar blit cores (the `bgi_set_mode_*`
+decompiles, **except** the innermost self-modifying planar blit cores (the `gfx_set_mode_*`
 → `1ab9:0aa0`-family targets), which is the one legitimate behavior-faithful carve-out
 (already done once as `restore_bg_view`).
 
 | Addr | Ghidra name | Role | `src/` status | Decompiles? | Action |
 |------|-------------|------|---------------|-------------|--------|
-| `1ab9:0179` | bgi_init_viewport | set viewport 0x14×0x19, dispatch `[pm*2+0x4dda]` → (slot 0) `1ab9:0000` → `0x4dcc[+0x1c]` → `1ab9:002b` **rect fill** | **host-modeled** (thunk `1000:7b4a` → `host_bgi_set_viewport`, `#ifdef BUMPY_PLAYABLE`; default NOP kept) — slot is a **solid black rect fill** = geometric iris + name-entry cursor erase + code-screen clear (Task 24, corrected 2026-07-05; the old "null slot, timed-hold iris" was a disasm error) | yes | — |
-| `1ab9:01e1` | bgi_stage_palette_dispatch | **palette stage** via `[pm*2+0x5435]` (VGA handler `1ab9:0620` = `rep movsw` of 48-byte palette into per-page slot; NOT a pixel putimage — misnomer corrected 2026-06-27) | **host-modeled** (thunk `1000:7b93` → `host_bgi_stage_image_palette`, `#ifdef BUMPY_PLAYABLE`; default NOP kept; Tasks 1–2) | yes | — |
-| `1ab9:01ff` | bgi_cleardevice_dispatch | cleardevice via vector | missing | yes | reconstruct 1:1 |
-| `1ab9:0232` | bgi_device_reset_dispatch | device reset via vector | missing (thunk `7bbd`=NOP) | yes | reconstruct 1:1 |
-| `1ab9:02b1` | bgi_upload_palette_to_dac_dispatch | **DAC palette upload** via `[pm*2+0x5441]` (VGA handler `1ab9:0677` = DAC write to ports `0x3c8`/`0x3c9`, slots 0–7 & 0x10–0x17; NOT a page flip — misnomer corrected 2026-06-27) | **host-modeled** (thunk `1000:7bca` → `host_bgi_upload_palette_to_dac`, `#ifdef BUMPY_PLAYABLE`; default NOP kept; Tasks 1–2) | yes | — |
-| `1ab9:0351` | bgi_present_dispatch | **CRTC page flip** via `[pm*2+0x5475]` (VGA handler `1ab9:0379` → `1ab9:06c1` = XOR Start-Address bit 5, 0x2000 swap; the ONE true frame present) | **host-modeled** (thunk `1000:7bdd` → `present_frame`, `src/host/host_video.c`; Tasks 1–2) | yes | — |
-| `1ab9:0384` | bgi_device_inc_dispatch | device-inc via vector | missing (thunk `7bea`=NOP) | yes | reconstruct 1:1 |
-| `1ab9:01c0` | bgi_driver_nop | driver no-op slot | missing | yes | reconstruct 1:1 (trivial) |
-| `1ab9:01c1` | bgi_device_clear_flag | clear device flag | missing | yes | reconstruct 1:1 |
+| `1ab9:0179` | gfx_init_viewport | set viewport 0x14×0x19, dispatch `[pm*2+0x4dda]` → (slot 0) `1ab9:0000` → `0x4dcc[+0x1c]` → `1ab9:002b` **rect fill** | **host-modeled** (thunk `1000:7b4a` → `host_gfx_set_viewport`, `#ifdef BUMPY_PLAYABLE`; default NOP kept) — slot is a **solid black rect fill** = geometric iris + name-entry cursor erase + code-screen clear (Task 24, corrected 2026-07-05; the old "null slot, timed-hold iris" was a disasm error) | yes | — |
+| `1ab9:01e1` | gfx_stage_palette_dispatch | **palette stage** via `[pm*2+0x5435]` (VGA handler `1ab9:0620` = `rep movsw` of 48-byte palette into per-page slot; NOT a pixel putimage — misnomer corrected 2026-06-27) | **host-modeled** (thunk `1000:7b93` → `host_gfx_stage_image_palette`, `#ifdef BUMPY_PLAYABLE`; default NOP kept; Tasks 1–2) | yes | — |
+| `1ab9:01ff` | gfx_cleardevice_dispatch | cleardevice via vector | missing | yes | reconstruct 1:1 |
+| `1ab9:0232` | gfx_device_reset_dispatch | device reset via vector | missing (thunk `7bbd`=NOP) | yes | reconstruct 1:1 |
+| `1ab9:02b1` | gfx_upload_palette_to_dac_dispatch | **DAC palette upload** via `[pm*2+0x5441]` (VGA handler `1ab9:0677` = DAC write to ports `0x3c8`/`0x3c9`, slots 0–7 & 0x10–0x17; NOT a page flip — misnomer corrected 2026-06-27) | **host-modeled** (thunk `1000:7bca` → `host_gfx_upload_palette_to_dac`, `#ifdef BUMPY_PLAYABLE`; default NOP kept; Tasks 1–2) | yes | — |
+| `1ab9:0351` | gfx_present_dispatch | **CRTC page flip** via `[pm*2+0x5475]` (VGA handler `1ab9:0379` → `1ab9:06c1` = XOR Start-Address bit 5, 0x2000 swap; the ONE true frame present) | **host-modeled** (thunk `1000:7bdd` → `present_frame`, `src/host/host_video.c`; Tasks 1–2) | yes | — |
+| `1ab9:0384` | gfx_device_inc_dispatch | device-inc via vector | missing (thunk `7bea`=NOP) | yes | reconstruct 1:1 |
+| `1ab9:01c0` | gfx_driver_nop | driver no-op slot | missing | yes | reconstruct 1:1 (trivial) |
+| `1ab9:01c1` | gfx_device_clear_flag | clear device flag | missing | yes | reconstruct 1:1 |
 | `1ab9:021b` | gfx_set_current_pos | set current draw pos | missing | yes | reconstruct 1:1 |
-| `1ab9:0a73` | bgi_set_mode_00 | CGA-mode handler | missing | partial (self-mod core) | reconstruct dispatch; blit core behavior-faithful |
-| `1ab9:0d77` | bgi_set_mode_01 | bg/erase handler → `0aa0` masked blit | **modeled** by `restore_bg_view` | partial | un-merge: real `bgi_set_mode_01` + behavior-faithful blit core |
-| `1ab9:1028` | bgi_set_mode_10 | player-view handler | **modeled** by `render_player_view` | partial | un-merge similarly |
-| `1ab9:126e` | bgi_set_mode_11 | mode-11 handler | partial citation | partial | reconstruct dispatch + behavior-faithful core |
-| `1ab9:12b0` | bgi_char_width | glyph width | missing | yes | reconstruct 1:1 |
-| `1ab9:1311` | bgi_text_render_dispatch | text render dispatch | missing | yes | reconstruct 1:1 |
-| `1ab9:132b` | bgi_set_current_object | select current draw object | missing (thunk `97d5`) | yes | reconstruct 1:1 |
-| `1ab9:137b` | bgi_draw_sequence | draw a sequence | missing | yes | reconstruct 1:1 |
+| `1ab9:0a73` | gfx_set_mode_00 | CGA-mode handler | missing | partial (self-mod core) | reconstruct dispatch; blit core behavior-faithful |
+| `1ab9:0d77` | gfx_set_mode_01 | bg/erase handler → `0aa0` masked blit | **modeled** by `restore_bg_view` | partial | un-merge: real `gfx_set_mode_01` + behavior-faithful blit core |
+| `1ab9:1028` | gfx_set_mode_10 | player-view handler | **modeled** by `render_player_view` | partial | un-merge similarly |
+| `1ab9:126e` | gfx_set_mode_11 | mode-11 handler | partial citation | partial | reconstruct dispatch + behavior-faithful core |
+| `1ab9:12b0` | gfx_char_width | glyph width | missing | yes | reconstruct 1:1 |
+| `1ab9:1311` | gfx_text_render_dispatch | text render dispatch | missing | yes | reconstruct 1:1 |
+| `1ab9:132b` | gfx_set_current_object | select current draw object | missing (thunk `97d5`) | yes | reconstruct 1:1 |
+| `1ab9:137b` | gfx_draw_sequence | draw a sequence | missing | yes | reconstruct 1:1 |
 | `1ab9:13bc` | draw_char_glyph | render one glyph | missing (thunk `97f7`) | yes | reconstruct 1:1 |
 | `1ab9:13ec` | draw_string_glyphs | render glyph string | missing (`9804`/screens.c NOP) | yes | reconstruct 1:1 |
-| `1ab9:1409` | bgi_set_text_mode | text mode | missing | yes | reconstruct 1:1 |
-| `1ab9:1422` | bgi_set_clip_rect | clip rect | missing | yes | reconstruct 1:1 |
-| `1ab9:1441` | bgi_set_text_position | text position | missing | yes | reconstruct 1:1 |
-| `1ab9:1458` | bgi_set_text_attr | text attributes | missing (thunk `9847`) | yes | reconstruct 1:1 |
+| `1ab9:1409` | gfx_set_text_mode | text mode | missing | yes | reconstruct 1:1 |
+| `1ab9:1422` | gfx_set_clip_rect | clip rect | missing | yes | reconstruct 1:1 |
+| `1ab9:1441` | gfx_set_text_position | text position | missing | yes | reconstruct 1:1 |
+| `1ab9:1458` | gfx_set_text_attr | text attributes | missing (thunk `9847`) | yes | reconstruct 1:1 |
 | `1ab9:146b` | measure_string_width | string width (thunk `9854`) | missing | yes | reconstruct 1:1 |
 | `1ab9:14d3` | font_glyph_ptr | glyph-data pointer | missing | yes | reconstruct 1:1 |
 | `1ab9:02ce` | gfx_driver_init | adapter/palette select screen | **reconstructed** (config_screens.c) | yes | — |
 
 **Also required (the wiring):** the main-segment dispatch thunks
 `1000:7b4a/7b76/7b86/7b93/7ba7/7bbd/7bca/7bdd/7bea`; **Tasks 1–3 host-modeled four of these on the
-VGA (`palette_mode==2`) path**: `7b4a` → `host_bgi_set_viewport`, `7b93` →
-`host_bgi_stage_image_palette`, `7bca` → `host_bgi_upload_palette_to_dac`, `7bdd` →
+VGA (`palette_mode==2`) path**: `7b4a` → `host_gfx_set_viewport`, `7b93` →
+`host_gfx_stage_image_palette`, `7bca` → `host_gfx_upload_palette_to_dac`, `7bdd` →
 `present_frame`; their default-build NOP stubs remain. The remaining thunks (`7b76`/`7b86`/
 `7ba7`/`7bbd`/`7bea`) are still NOP. The per-`palette_mode` **vector tables** (DGROUP
 `0x4dda/0x5435/0x5441/0x5475/0x555e`) and the **BGI-init code that populates them** (currently
@@ -201,7 +201,7 @@ the BGI gfx-init thunks; needed for §1 vector-table population. → reconstruct
 
 ## §4 — `screens.c` presentation no-ops (used on the title/menu/highscore path)
 
-`process_sprites` (`93d8`), `fun_7bca_flip`/`fun_7b93_present_blank` (§1 thunks — host-modeled, Tasks 1-2), `fun_7b4a_view_blit` (**host-modeled**, Task 3 — `bgi_set_viewport_thunk`/`host_bgi_set_viewport`), `fun_9410_set_sprite_table` (`9410`), `play_intro_animation_loop`
+`process_sprites` (`93d8`), `fun_7bca_flip`/`fun_7b93_present_blank` (§1 thunks — host-modeled, Tasks 1-2), `fun_7b4a_view_blit` (**host-modeled**, Task 3 — `gfx_set_viewport_thunk`/`host_gfx_set_viewport`), `fun_9410_set_sprite_table` (`9410`), `play_intro_animation_loop`
 (`30dd` — real body in corpus), `wait_50_frames` (`3e74` — real body),
 `draw_string_glyphs_9804` / `text_clip_leaf_9837`, `draw_icon_row` (`6130`),
 `play_anim_sequence` (`3c4f`), `p1_move_step_up/down/left/right` (`3ab2/3b0f/3b6c/3bc9`),
@@ -217,8 +217,8 @@ faithfulness goal implies.
 
 | Host symbol | Merges / models | Action |
 |-------------|-----------------|--------|
-| `restore_bg_view` (bgi_overlay.c) | `bgi_set_mode_01` (`1ab9:0d77`) + its `0aa0` blit core | un-merge: real dispatch + behavior-faithful core |
-| `render_player_view` model | `bgi_set_mode_10` (`1ab9:1028`) | un-merge |
+| `restore_bg_view` (gfx_overlay.c) | `gfx_set_mode_01` (`1ab9:0d77`) + its `0aa0` blit core | un-merge: real dispatch + behavior-faithful core |
+| `render_player_view` model | `gfx_set_mode_10` (`1ab9:1028`) | un-merge |
 | `present_frame` (host_video.c) | CRTC double-buffer (engine mechanism unresolved) | keep behavior-faithful; document |
 | `load_palette` (host_video.c) | `1000:08d1` — host sources decoded palette `g_pav_buf+51` instead of decoding packed `0x578` (which the host never stages); omits `load_palette_byteswapped` (`1000:063b`, fills `0x578` — vestigial in host) | data-sourcing deviation; structure (stage→upload→vsync) faithful |
 | `wait_vretrace_thunk`/`_dispatch` (screens.c) | `1000:9864`/`2036:0000`/`2036:0015` — overlay-table dispatch collapsed to the vsync poll (table runtime-populated, `2036:0015` not in corpus) | keep behavior-faithful; document (misnomer corrected) |
@@ -245,7 +245,7 @@ reconstructed — not part of this.)
 
 1. **BGI overlay dispatch + vector tables + BGI-init (§1 dispatch layer + §3 init_misc)** —
    the foundation; unblocks every visual primitive and the title/menu transitions.
-2. **`bgi_set_mode_01/10/11` un-merge (§1 + §5)** — real handlers + behavior-faithful blit
+2. **`gfx_set_mode_01/10/11` un-merge (§1 + §5)** — real handlers + behavior-faithful blit
    cores; makes `restore_bg_view`/`render_player_view` faithful.
 3. **Sprite pipeline front-end (§2)** — RLE decode, `sprite_proc_dispatch`, palette
    dispatches, un-merge `sprite_chain`; restores sprite/cursor/entity decode.

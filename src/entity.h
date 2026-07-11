@@ -87,7 +87,7 @@
      static tables in entity.c).  FRM3 chan_a records confirm anim_tables values
      for cv=1 (yoff=5, frame=64).  posA from dg matches anim_tables.json for all
      48 cells.  This is the faithful reconstructible path.
-   * Erase / render_player_view RECONSTRUCTED (see src/bgi_overlay.c,
+   * Erase / render_player_view RECONSTRUCTED (see src/gfx_overlay.c,
      docs/rendering-pipeline.md, docs/reconstruction-fidelity.md):
      draw_anim_channels_a/b call restore_bg_view (erase) and render_player_view
      around each blit_sprite.  These are NOT a second visible draw of the entity:
@@ -95,13 +95,13 @@
      render_player_view (BGI mode-0x10, 1ab9:0db0) is a PLANAR REGION COPY used for
      save-unders / read-backs on the a000/a200 double-buffer pages.  The visible
      entity pixels come solely from blit_sprite writing the current page.
-     Both functions are now reconstructed in src/bgi_overlay.c (behavior-faithful)
+     Both functions are now reconstructed in src/gfx_overlay.c (behavior-faithful)
      and entity_draw_layer_a/_b call them in the engine's 3-step order:
        restore_bg_view (erase) → entity_blit_object (blit) → render_player_view (save-under)
      Both are STRUCTURAL NOPs in the layer-A/B context: the view descriptors at
      0x114b:0x74a0 (erase_view) and 0x114b:0x751e (draw_view) in draw_anim_channels_a/b
      start with machine code (word0e=0x85b3 and word00=0xc3fb respectively, both >1),
-     so the NOP guards in bgi_set_mode_01/bgi_set_mode_10 fire immediately.
+     so the NOP guards in gfx_set_mode_01/gfx_set_mode_10 fire immediately.
      Modeled via a static nop_view stub in entity.c.  The NOP path is STRUCTURALLY
      PRESENT and documented; the active copy path (word<=1) is UNVALIDATED in this
      harness context.  Composite result unchanged: 54152/64000 (world-8, live page).
@@ -155,7 +155,7 @@
      - The engine alternates the index per-sprite blit (~50/50 across 888 calls at
        level 8, confirmed by FRM4 csd_log in local/build/present_dynamics.md).
      - No a200→a000 present copy occurs during settled gameplay; the two-page toggle
-       is per-entity, not per-frame. (present_dynamics.md §4: bgi_set_mode_10 never
+       is per-entity, not per-frame. (present_dynamics.md §4: gfx_set_mode_10 never
        observed with w0=0 (source=a200) during the 40-tick settle window.)
    * Live page at FRAME_ORACLE capture: cur_sprite_data seg = dg[0x56e4].
      For the level-8 oracle: seg = 0xa200 → live page = page1, plane offset 0x2000.
