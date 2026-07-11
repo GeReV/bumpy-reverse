@@ -1350,6 +1350,26 @@ These deviations exist ONLY in the `BUMPYP.EXE` playable build (`wmake play`); t
     re-broke the mode-11 view-sync freeze fix (the two are coupled through the page the iris
     paints) and was REVERTED.  Proper fix pending: re-anchor the CRTC display when `host_fb_init`
     resets the table + bracket the overworld iris to slot 0 like the others.
+  - **palette stage/upload — EGA branch** (`host_gfx_stage_image_palette` /
+    `host_gfx_upload_palette_to_dac`, `host_gfx.c`, Task 5) — the two functions above were
+    VGA-only (`palette_mode==2`); they now also gate on `palette_mode==1` (EGA), mirroring
+    `1ab9:0606` (stage: 16-byte AC-index palette from `buf+0x23`) and `1ab9:0662` (upload:
+    `INT 10h AX=1002h` programs the 16 Attribute Controller palette registers).  CORRECTION
+    (2026-07-11): the earlier note above ("NOT in the Ghidra decompilation corpus; 1:1
+    reconstruction impossible") was wrong for these handlers — the palette STAGE/UPLOAD
+    handlers WERE carved and DO decompile (`src/gfx_palette.c`/`.h` is their faithful 1:1
+    mirror, keyed off the engine's own `*0x5311` draw-object descriptor).  `host_gfx.c`
+    models the same handlers again but *behaviorally*, via its own per-page side-store
+    (`host_gfx_page_ac[2][16]`, new here, alongside the existing `host_gfx_page_palette
+    [2][48]`) instead of a live `*0x5311` descriptor — the same side-store deviation the VGA
+    path already had, now applied at the same fidelity to EGA.  The `INT 10h AX=1002h` call is
+    modeled as the equivalent direct `0x3c0` Attribute Controller port sequence (reset the
+    flip-flop via a read of `0x3DA`, `OUT 0x3C0=index`/`OUT 0x3C0=value` per register, then
+    `OUT 0x3C0=0x20` to re-enable video) so it runs under the host's real VGA hardware.  The
+    DAC itself is left untouched by this branch — it stays whatever the BIOS EGA ramp / boot
+    init programmed (see Task 6).  The VGA (`palette_mode==2`) branch is unchanged
+    byte-for-byte (only wrapped in an added `if`/block); the graphics overlay's
+    self-modifying BLIT cores remain the genuinely non-decompiling part.
 
 - **playable host: code-screen (menu-select / "ENTER YOUR PASSWORD") background clear**
   (`show_menu_select_screen`, `src/screens.c`, `BUMPY_PLAYABLE` only) — unlike

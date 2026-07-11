@@ -1,52 +1,75 @@
 #ifdef BUMPY_PLAYABLE
 #include <i86.h>       /* MK_FP */
-#include <conio.h>     /* outp */
+#include <conio.h>     /* inp, outp */
 #include "host.h"
 #include "host_gfx.h"
+#include "../screens.h"   /* palette_mode (DGROUP 0x541d) */
 
 /* ============================================================================
  * host_gfx.c — graphics-overlay primitive host reimplementation (BUMPY_PLAYABLE)
  * ============================================================================
  *
- * RECONSTRUCTION FIDELITY — GRAPHICS-OVERLAY PRIMITIVES (FUNCTIONAL EQUIVALENCE)
+ * RECONSTRUCTION FIDELITY — GRAPHICS-OVERLAY PRIMITIVES (BEHAVIORAL SIDE-STORE)
  * The original Bumpy engine calls graphics primitives through thunks in segment
  * 1000 that dispatch into the graphics overlay loaded at segment 1AB9.  The
- * graphics overlay implements per-mode handlers (CGA mode 0 / VGA mode 2) selected
- * via a vector table at palette_mode*2+0x5441.  The overlay is Loriciel-custom
- * (not Borland BGI) and is NOT in the Ghidra decompilation corpus; 1:1
- * reconstruction of its internals is impossible.
+ * graphics overlay implements per-mode handlers (CGA/EGA/VGA) selected via
+ * vector tables at palette_mode*2+0x5435 (stage) / +0x5441 (upload) / +0x4dda
+ * (viewport).  The overlay is Loriciel-custom (not Borland BGI).
  *
- * This module provides functional equivalents for the VGA (palette_mode==2)
- * path — the only path exercised by the playable build.  Each function replaces
- * the corresponding graphics-overlay dispatch thunk under #ifdef BUMPY_PLAYABLE while the
- * default BUMPY.EXE build retains the faithful-signature NOP stubs in screens.c.
- * Deviation recorded in docs/reconstruction-fidelity.md ("playable host: graphics
- * overlay primitives").
+ * CORRECTED (2026-07-11): the palette STAGE/UPLOAD handlers (1ab9:0605-0677)
+ * WERE carved and DO decompile — see src/gfx_palette.c/.h for the faithful 1:1
+ * mirror keyed off the engine's own *0x5311 draw-object descriptor. This file
+ * models the SAME handlers again, but behaviorally: instead of wiring a live
+ * *0x5311 descriptor, it keeps a per-page side-store (host_gfx_page_palette /
+ * host_gfx_page_ac below) that the playable render path actually reads/writes
+ * at runtime. EGA (palette_mode==1) and VGA (palette_mode==2) are modeled at
+ * the same fidelity — side-store instead of descriptor heap — for both; only
+ * the graphics overlay's self-modifying BLIT cores (sprite/bg composite)
+ * remain genuinely non-decompiling and are the ones that cannot be
+ * reconstructed 1:1 (see host_render.c / sprite_blit.c / bg_render.c).
+ *
+ * Each function replaces the corresponding graphics-overlay dispatch thunk
+ * under #ifdef BUMPY_PLAYABLE while the default BUMPY.EXE build retains the
+ * faithful-signature NOP stubs in screens.c. Deviation recorded in
+ * docs/reconstruction-fidelity.md ("playable host: graphics overlay
+ * primitives").
  *
  * Ghidra provenance — palette pipeline:
  *   1000:7b93  fun_7b93_present_blank(buf_off, buf_seg, page)
- *              thunk → 1ab9:0620  VGA palette-STAGE handler.
- *              Disassembly: DS:SI = buf+0x33, ES:DI = *0x5311 + page*99 + 0x33,
- *              rep movsw (0x18 words = 48 bytes).  Copies the decoded-image's
- *              16-colour graphics-overlay palette into the per-page palette slot.
+ *              thunk → 1ab9:0606 EGA / 0620 VGA palette-STAGE handler
+ *              (palette_mode-dispatched via cmdvec_stage_palette_modes 0x5435).
+ *              EGA: DS:SI = buf+0x23, rep movsw (8 words = 16 bytes, AC-index
+ *              palette).  VGA: DS:SI = buf+0x33, ES:DI = *0x5311 + page*99 +
+ *              0x33, rep movsw (0x18 words = 48 bytes).  Copies the
+ *              decoded-image's graphics-overlay palette into the per-page slot.
  *   1000:7bca  fun_7bca_flip(page)
- *              thunk → 1ab9:0677  VGA DAC-UPLOAD handler.
- *              Disassembly: reads *0x5311 + page*99 + 0x33; OUT 0x3c8=0, 8×RGB,
+ *              thunk → 1ab9:0662 EGA / 0677 VGA DAC/AC-UPLOAD handler
+ *              (palette_mode-dispatched via cmdvec_upload_palette_modes 0x5441).
+ *              EGA: INT 10h AX=1002h programs the 16 Attribute Controller
+ *              palette registers from the staged +0x23 table.
+ *              VGA: reads *0x5311 + page*99 + 0x33; OUT 0x3c8=0, 8×RGB,
  *              OUT 0x3c8=0x10, 8×RGB to port 0x3c9.  Writes DAC from staged slot.
  *
  * RECONSTRUCTION FIDELITY — PALETTE SIDE-STORE DEVIATION
- * The engine stores staged palettes in *0x5311 + page*99 + 0x33 (a slot in the
- * descriptor heap keyed by page).  The host keeps a two-entry side-store
- * host_gfx_page_palette[2][48] instead — behaviorally equivalent (stage writes
- * it, upload reads it, same 48-byte content) but does not model the full
- * *0x5311 descriptor heap layout.  Deviation cited for handler addresses
- * 1ab9:0620 (stage) and 1ab9:0677 (DAC upload).
+ * The engine stores staged palettes in *0x5311 + page*99 + 0x23 (EGA, 16-byte
+ * AC-index table) / +0x33 (VGA, 48-byte 6-bit RGB table) — a slot in the
+ * descriptor heap keyed by page. The host keeps two-entry side-stores,
+ * host_gfx_page_ac[2][16] (EGA) and host_gfx_page_palette[2][48] (VGA),
+ * instead — behaviorally equivalent (stage writes it, upload reads it, same
+ * content) but does not model the full *0x5311 descriptor heap layout.
+ * Deviation cited for handler addresses 1ab9:0606/0662 (EGA) and 1ab9:0620/
+ * 0677 (VGA).
  * ============================================================================ */
 
 /* Per-page staged palette store — 2 pages × 16 colours × 3 bytes (6-bit RGB).
  * Filled by host_gfx_stage_image_palette (mirrors 1ab9:0620 rep-movsw); read by
  * host_gfx_upload_palette_to_dac (mirrors 1ab9:0677 DAC write loop). */
 static u8 host_gfx_page_palette[2][48];
+
+/* Per-page staged AC-index palette store (EGA) — 2 pages × 16 bytes. Filled by
+ * host_gfx_stage_image_palette (mirrors 1ab9:0606 rep-movsw); read by
+ * host_gfx_upload_palette_to_dac (mirrors 1ab9:0662 INT 10h AX=1002h). */
+static u8 host_gfx_page_ac[2][16];
 
 /* gfx_write_mode_flag_a / gfx_write_mode_flag_b — DGROUP 0x541f / 0x5420.
  * Engine globals set by gfx_init_viewport (1ab9:0179), restore_bg_view (1ab9:0d77),
@@ -61,54 +84,98 @@ u8 gfx_write_mode_flag_a;   /* DGROUP 0x541f */
 u8 gfx_write_mode_flag_b;   /* DGROUP 0x5420 */
 
 /* ── host_gfx_stage_image_palette ───────────────────────────────────────────
- * Functional equivalent of the graphics-overlay VGA palette-stage handler (1ab9:0620).
+ * Functional equivalent of the graphics-overlay palette-stage handler
+ * (1ab9:0606 EGA / 0620 VGA), dispatched by palette_mode.
  *
- * The original handler copies 0x18 words (48 bytes = 16 colours × 3 bytes) from
- * DS:SI = [buf_seg:buf_off]+0x33 to ES:DI = *0x5311 + page*99 + 0x33 via
- * "rep movsw".  The host copies to host_gfx_page_palette[page & 1] instead of
- * the full descriptor slot — see the fidelity note above.
+ * EGA: the original handler copies 8 words (16 bytes, AC-index palette) from
+ * DS:SI = [buf_seg:buf_off]+0x23 via "rep movsw".  The host copies to
+ * host_gfx_page_ac[page & 1] instead of the full descriptor slot — see the
+ * fidelity note above.
+ *
+ * VGA (existing): the original handler copies 0x18 words (48 bytes = 16
+ * colours × 3 bytes) from DS:SI = [buf_seg:buf_off]+0x33 to ES:DI =
+ * *0x5311 + page*99 + 0x33 via "rep movsw".  The host copies to
+ * host_gfx_page_palette[page & 1] instead of the full descriptor slot — see
+ * the fidelity note above.
  *
  * Called from fun_7b93_present_blank (screens.c) under #ifdef BUMPY_PLAYABLE. */
 void host_gfx_stage_image_palette(u16 buf_off, u16 buf_seg, u16 page)
 {
-    u8 __far *src = (u8 __far *)MK_FP(buf_seg, buf_off) + 0x33;
-    u8 *dst = host_gfx_page_palette[page & 1u];
-    u8 i;
-    for (i = 0u; i < 48u; i++) {
-        dst[i] = src[i];
+    if (palette_mode == 1u) {                      /* EGA: 16 bytes from buf+0x23 */
+        u8 __far *src = (u8 __far *)MK_FP(buf_seg, buf_off) + 0x23;
+        u8 *dst = host_gfx_page_ac[page & 1u];
+        u8 i;
+        for (i = 0u; i < 16u; i++) {
+            dst[i] = src[i];
+        }
+        return;
+    }
+    {                                                /* VGA (existing): 48 bytes from buf+0x33 */
+        u8 __far *src = (u8 __far *)MK_FP(buf_seg, buf_off) + 0x33;
+        u8 *dst = host_gfx_page_palette[page & 1u];
+        u8 i;
+        for (i = 0u; i < 48u; i++) {
+            dst[i] = src[i];
+        }
     }
 }
 
 /* ── host_gfx_upload_palette_to_dac ─────────────────────────────────────────
- * Functional equivalent of the graphics-overlay VGA DAC-upload handler (1ab9:0677).
+ * Functional equivalent of the graphics-overlay palette-upload handler
+ * (1ab9:0662 EGA / 0677 VGA), dispatched by palette_mode.
  *
- * The original handler reads *0x5311 + page*99 + 0x33 (the staged palette slot)
- * and emits the canonical VGA-DAC write sequence: OUT 0x3c8=0x00, 8×RGB to
- * 0x3c9, OUT 0x3c8=0x10, 8×RGB to 0x3c9 (graphics-overlay colour indices 0..7 at DAC 0..7,
- * indices 8..15 at DAC 0x10..0x17).  The host reads from host_gfx_page_palette
- * [page & 1] and emits the identical port sequence.
+ * EGA: the original handler issues INT 10h AX=1002h (ES:DX -> the staged
+ * +0x23 AC table) to program the 16 Attribute Controller palette registers.
+ * RECONSTRUCTION FIDELITY: modeled here as the equivalent direct 0x3c0 AC-port
+ * sequence (reset the AC index/data flip-flop via a read of 0x3DA, then for
+ * each of the 16 regs OUT 0x3C0=index, OUT 0x3C0=value, then OUT 0x3C0=0x20 to
+ * re-enable video output) so it runs under the host's real VGA in EGA-register
+ * mode. Same per-page side-store deviation as the VGA path below
+ * (host_gfx_page_ac vs the *0x5311 descriptor slot). The DAC itself is left
+ * alone here (stays whatever the BIOS EGA ramp / boot init programmed it to —
+ * see Task 6).
  *
- * The (port,value) sequence is the hard contract the DAC port-write gate
+ * VGA (existing): the original handler reads *0x5311 + page*99 + 0x33 (the
+ * staged palette slot) and emits the canonical VGA-DAC write sequence: OUT
+ * 0x3c8=0x00, 8×RGB to 0x3c9, OUT 0x3c8=0x10, 8×RGB to 0x3c9 (graphics-overlay
+ * colour indices 0..7 at DAC 0..7, indices 8..15 at DAC 0x10..0x17).  The host
+ * reads from host_gfx_page_palette[page & 1] and emits the identical port
+ * sequence.
+ *
+ * The VGA (port,value) sequence is the hard contract the DAC port-write gate
  * validates; it must match vga_dac_upload_from_buffer (screens.c) byte-for-byte.
  *
  * Called from fun_7bca_flip (screens.c) under #ifdef BUMPY_PLAYABLE. */
 void host_gfx_upload_palette_to_dac(u16 page)
 {
-    const u8 *pal = host_gfx_page_palette[page & 1u];
-    u8 i;
-    outp(0x3c8, 0x00);                 /* DAC write index 0 */
-    for (i = 0u; i < 8u; i++) {
-        outp(0x3c9, pal[0]);           /* R */
-        outp(0x3c9, pal[1]);           /* G */
-        outp(0x3c9, pal[2]);           /* B */
-        pal += 3;
+    if (palette_mode == 1u) {
+        const u8 *ac = host_gfx_page_ac[page & 1u];
+        u8 i;
+        (void)inp(0x3DAu);                         /* reset AC flip-flop */
+        for (i = 0u; i < 16u; i++) {
+            outp(0x3C0u, i);                       /* AC palette reg index */
+            outp(0x3C0u, ac[i]);                   /* value = image AC index (0..15) */
+        }
+        outp(0x3C0u, 0x20u);                       /* re-enable video */
+        return;
     }
-    outp(0x3c8, 0x10);                 /* DAC write index 0x10 (graphics-overlay colours 8..15) */
-    for (i = 0u; i < 8u; i++) {
-        outp(0x3c9, pal[0]);
-        outp(0x3c9, pal[1]);
-        outp(0x3c9, pal[2]);
-        pal += 3;
+    {                                                /* VGA (existing) */
+        const u8 *pal = host_gfx_page_palette[page & 1u];
+        u8 i;
+        outp(0x3c8, 0x00);                 /* DAC write index 0 */
+        for (i = 0u; i < 8u; i++) {
+            outp(0x3c9, pal[0]);           /* R */
+            outp(0x3c9, pal[1]);           /* G */
+            outp(0x3c9, pal[2]);           /* B */
+            pal += 3;
+        }
+        outp(0x3c8, 0x10);                 /* DAC write index 0x10 (graphics-overlay colours 8..15) */
+        for (i = 0u; i < 8u; i++) {
+            outp(0x3c9, pal[0]);
+            outp(0x3c9, pal[1]);
+            outp(0x3c9, pal[2]);
+            pal += 3;
+        }
     }
 }
 
