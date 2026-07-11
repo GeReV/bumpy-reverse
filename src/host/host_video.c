@@ -78,9 +78,13 @@
  * at ram 0x26c4c, selecting the CGA vs EGA/VGA branch.  In the real engine the
  * VGA mode-0x0D set is done by the graphics overlay's init, and the probe/driver
  * init establishes palette_mode (DGROUP 0x541d) — runtime capture: 2 (EGA/VGA).
- * The host folds the platform mode-0x0D set + the palette_mode=2 outcome into
- * this boot slot as a NECESSITY (there is no live BIOS/graphics-overlay init to do it);
- * the probe itself is a no-op on the host.  (palette_mode was previously set —
+ * The host folds the platform mode-0x0D set into this boot slot as a NECESSITY
+ * (there is no live BIOS/graphics-overlay init to do it); the probe itself is a
+ * no-op on the host.  UPDATED 2026-07-11 (Task 6): palette_mode=2 is no longer
+ * forced unconditionally here — the playable's gfx_driver_init() (config_screens.c)
+ * now runs earlier in boot and sets a live palette_mode from the player's F2/F3
+ * choice (1=EGA, 2=VGA); this slot only supplies 2 as the DEFAULT when nothing
+ * selected it yet, so it never overwrites that choice.  (palette_mode was previously set —
  * to 14! — by the misnomered set_palette_mode/97c5, which is really the graphics-overlay
  * set-text-colour op; see set_text_color below.)  NOTE: this INT 10h mode set
  * resets the CRTC start address to 0 — the boot page parity is programmed
@@ -91,7 +95,16 @@ void init_display_97a4(void)
     r.h.ah = 0x00u;
     r.h.al = 0x0Du;
     int86(0x10, &r, &r);
-    palette_mode = 2u;   /* the VGA-adapter outcome the graphics-overlay init records */
+    /* RECONSTRUCTION FIDELITY — REVERSED 2026-07-11 (was: unconditional palette_mode=2):
+     * this previously forced VGA outright, which clobbered the F2/EGA selection
+     * gfx_driver_init() (config_screens.c) makes earlier in boot — making the EGA
+     * path unreachable regardless of the player's graphics-select choice.  Now the
+     * live selection survives; VGA is only the default when nothing selected it
+     * (palette_mode left at its pre-boot sentinel).  VGA remains the default +
+     * validated path. */
+    if (palette_mode != 1u && palette_mode != 2u) {
+        palette_mode = 2u;   /* default VGA */
+    }
 }
 
 /* ── init_crtc_window (1000:9821 → overlay 1ab9:1422 — CLIP-WINDOW STORE) ──────
@@ -295,7 +308,14 @@ void init_display_97f1(void)
      * the observable effects of the graphics-overlay init that is absent from the
      * corpus. */
     host_crtc_set_start(CRTC_PAGE1_ADDR);
-    host_set_gfx_attribute_palette();
+    /* RECONSTRUCTION FIDELITY (2026-07-11): the fixed VGA pixel->DAC Attribute
+     * Controller map only applies under VGA (palette_mode==2).  In EGA
+     * (palette_mode==1) the AC is programmed per-image by the Task-5 host_gfx
+     * upload path (host_gfx_upload_palette_to_dac); running the fixed VGA map
+     * here would clobber that per-image AC state. */
+    if (palette_mode != 1u) {
+        host_set_gfx_attribute_palette();
+    }
     apply_level_palette();
 }
 
