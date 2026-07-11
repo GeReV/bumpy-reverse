@@ -689,6 +689,7 @@ extern u8 __far  *p1_sprite;             /* DGROUP:0x8884 far ptr → p1 blit de
 extern u8 __far  *cur_level_ptr;         /* DGROUP:0x6bca far ptr → current-level table */
 extern u8 __far  *copyprot_patch_ptr;    /* DGROUP:0x9b96 far ptr → res patch target   */
 extern u16 __far *copyprot_levelptr_src; /* codeseg ptr → 16-word level table   @0x73e */
+extern u8 __far  *copyprot_palette_src;  /* DGROUP:0x65a far ptr → 16-byte EGA AC patch table */
 
 /* copyprot_palette_src — the 16-byte EGA palette-patch source copyprotect_challenge
  *  copies from when palette_mode==1.  RECONSTRUCTION FIDELITY: this is DGROUP 0x65a
@@ -697,11 +698,21 @@ extern u16 __far *copyprot_levelptr_src; /* codeseg ptr → 16-word level table 
  *  pointer (matching the original's addressing) at a static const table, mirroring
  *  the hv_text_ptr_11ae pattern in view_setup.c — no runtime init call needed since
  *  this is compile-time-constant DGROUP data, unlike the loader-relocated far-ptr
- *  tables (password_table etc.) that need init_* functions. */
+ *  tables (password_table etc.) that need init_* functions.
+ *
+ *  Definition lives behind !BUMPY_COPYPROT_HARNESS (matching level_dec_buf_fp,
+ *  copyprot_patch_ptr, copyprot_levelptr_src above): tools/copyprot_ctest.c supplies
+ *  its own host storage for this far-ptr (line 91), so the harness only needs the
+ *  extern declaration, not a second definition. */
+#ifndef BUMPY_COPYPROT_HARNESS
 static const u8 s_copyprot_palette_65a[16] = {
     0x00u,0x00u,0x01u,0x09u,0x0bu,0x05u,0x04u,0x06u,
     0x0cu,0x02u,0x0au,0x09u,0x0bu,0x05u,0x07u,0x00u };
+/* Cast intentionally drops const: copyprot_palette_src is modelled as a plain
+ * (non-const) far ptr to match the original's addressing, and its sole reader
+ * (copyprotect_challenge, level.c:790) only ever reads through it. */
 u8 __far *copyprot_palette_src = (u8 __far *)s_copyprot_palette_65a; /* DGROUP 0x65a */
+#endif /* !BUMPY_COPYPROT_HARNESS */
 
 /* copyprot_engine_rand — 1000:93b1 (the engine rand() thunk).
    NOT the CRT rand: it CALLF's prng_step (1ce5:001f) and returns AL = low byte of
