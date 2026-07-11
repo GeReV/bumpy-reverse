@@ -716,24 +716,17 @@ void anim_restore_bg_view_leaf(u8 __far *view)
         }
     }
 
-    /* RECONSTRUCTION FIDELITY (world-2 platform over-paint fix, F1, 2026-07-11).
-       During spawn_and_draw_level_entities the grid scan draws each layer-A/B cell as
-       ERASE-before-BLIT (draw_anim_channels_a/b).  The host models the erase as a flat
-       host_clean_bg (bg-tiles-only) dither repaint over a fixed 4×4-tile rect; that rect
-       reaches into a NEIGHBOUR cell's freshly-blitted layer-A structure (e.g. the D2
-       platform, tilemap layer-A tile 0x11) and destroys it — the "missing platform rows".
-       The engine's real erase (mode-01 restore) blits a pre-composited SHADOW that
-       preserves overlapping layers, so its spawn scan is non-destructive; the host's flat
-       clean-bg substitute is not, and at the spawn one-shot draw there is no previous
-       frame to erase anyway (the cell holds only bg + the just-drawn statics).  So during
-       the spawn scan we suppress the clean-bg repaint entirely: every layer's BLIT still
-       runs, leaving all structures intact, matching the engine's net result.  Cleared for
-       per-tick gameplay so the layer-B trail-fix / P1-P2 erase paths are unchanged.
-       docs/reconstruction-fidelity.md.  Verified good_frac→~1 across all DGROUP bases. */
-    if (hr_in_spawn) {
-        return;
-    }
-
+    /* RECONSTRUCTION FIDELITY: the F1 spawn-suppression of this clean-bg erase (added
+       2026-07-11 as a band-aid for the layer-B over-paint) is RETIRED.  The destructive
+       over-painter — the layer-B anim_b_view1 clean-bg repaint reaching into the
+       neighbouring platform — is gone (reconstructed as the masked save-under host_animb_*),
+       so only the layer-A erase (anim_a_erase_view, 2×2 at the cell) and the deferred item
+       erase (pending_erase_view) remain here.  The engine's spawn grid scan itself runs
+       draw_anim_channels_a as ERASE(fullscreen_buf)-before-BLIT per cell; the 2×2 erase
+       reaches only the current cell + its right/down neighbours (drawn LATER in the
+       row-major scan, then re-blitted), so it is non-destructive — letting it run matches
+       the engine.  hr_in_spawn is retained solely as the layer-B save-under's gameplay gate
+       (host_animb_capture/restore).  docs/reconstruction-fidelity.md. */
     clean = host_clean_bg();
     if (clean == (const u8 __far *)0) {
         return;
