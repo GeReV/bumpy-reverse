@@ -126,8 +126,11 @@ DEF_EXE="local/build/src/BUMPY.EXE"
 if [ -f "$DEF_EXE" ]; then
     DEF_MD5=$(md5sum "$DEF_EXE" | cut -d' ' -f1)
     echo "   default reconstruction BUMPY.EXE md5 = $DEF_MD5"
-    [ "$DEF_MD5" = "cac9ff236a832284fec6fafff2d8602b" ] \
-        || echo "   WARNING: default BUMPY.EXE md5 changed (expected cac9ff23...)"
+    # Baseline updated 2026-07-11 (EGA-path Task 6): the faithful gfx_palette.obj
+    # is now linked into the default build, shifting the image from the prior
+    # cac9ff23... baseline.
+    [ "$DEF_MD5" = "e8957fa0e38daa3fb27b360933cebbe4" ] \
+        || echo "   WARNING: default BUMPY.EXE md5 changed (expected e8957fa0...)"
 fi
 
 # ── 4. Capture helper ─────────────────────────────────────────────────────────

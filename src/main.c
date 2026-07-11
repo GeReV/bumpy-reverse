@@ -52,7 +52,8 @@
  * level-1 per-tick gameplay loop in BIOS video mode 0x0D, presenting frames.
  *
  * Entry sequence:
- *   palette_mode = 2     — force the validated EGA/VGA palette/blit path.
+ *   gfx_driver_init()    — the interactive F2/F3 graphics-select screen (see
+ *                          below); sets palette_mode from the player's choice.
  *   host_fb_init()       — allocate the flat 4-plane RAM framebuffer + register
  *                          the VGA page table (host_render.c, Task 2).
  *   init_game_session_state()  (game.c 0282) — installs the host INT8 + INT9
@@ -63,22 +64,20 @@
  *   host_timer_teardown() + restore_keyboard_isr() — restore the saved INT8/INT9
  *                          vectors + the BIOS PIT divisor on exit (clean DOS state).
  *
- * ── RECONSTRUCTION FIDELITY: gfx_driver_init palette-select SCREEN skipped ──
+ * ── gfx_driver_init palette-select SCREEN: LIVE, not skipped (Task 6, 2026-07-11) ──
  * The original BUMPY.EXE boots into gfx_driver_init's interactive F2/F5
  * graphics-mode/palette-SELECT screen (the user picks CGA/EGA/VGA before the
  * title appears), which writes palette_mode and only then drops into mode 0x0D.
- * The playable host SKIPS that selection screen entirely and hardcodes
- * palette_mode = 2 (the EGA/VGA path the validated blitters + the DAC upload
- * use), going straight to the gameplay graphics.  This is a deliberate boot
- * deviation: the F2/F5 selection UI is a hardware-probe/config front-end with no
- * gameplay effect once the VGA path is chosen, and reproducing its interactive
- * mode-flips is out of scope for the host bring-up.  The corresponding F2/F5
- * key pulses are therefore omitted from the DOSBox boot input script.
- * Recorded in docs/reconstruction-fidelity.md ("playable host: palette-select
- * screen skip").  NOTE: the default BUMPY.EXE main is NO LONGER byte-unchanged —
- * it gained the init_worldmap_data()/init_anim_data() calls (both builds need the
- * relocated tables: start_level reads the worldmap accessors and spawn/anim read
- * the anim tables unconditionally).  Nothing automated consumes the old image
+ * The playable host now calls that same gfx_driver_init() FIRST (see below),
+ * so an F2 (EGA, palette_mode=1) or F3 (VGA, palette_mode=2) choice is live
+ * and carries through to gameplay.  init_display_97a4 (host_video.c) only
+ * GUARDS the selection: it sets palette_mode = 2 (VGA) solely as the default
+ * when nothing has selected it yet, and never overwrites a live F2/EGA choice.
+ * VGA remains the default and the most-validated path; EGA is reachable via F2.
+ * NOTE: the default BUMPY.EXE main is NO LONGER byte-unchanged — it gained the
+ * init_worldmap_data()/init_anim_data() calls (both builds need the relocated
+ * tables: start_level reads the worldmap accessors and spawn/anim read the
+ * anim tables unconditionally).  Nothing automated consumes the old image
  * md5; the "byte-unchanged"/md5 baselines recorded in docs are historical.
  * ------------------------------------------------------------------------- */
 extern void init_move_scripts(void);   /* move_scripts.c — fill mode_script_tbl + reloc blob */

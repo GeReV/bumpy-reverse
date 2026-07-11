@@ -92,9 +92,10 @@ exit
 > does not strip them, so `machine = vgaonly  # foo` is parsed verbatim and corrupts the
 > machine type (which stalls the playable boot at a BIOS wait). Keep values clean.
 
-**What you should see:** unlike the original, the playable build hardcodes
-`palette_mode = 2` and **skips the interactive F2/F5 palette-select screen** (a documented
-deviation, `src/main.c`). It boots straight toward the menu. The seeded input-handler maps:
+**What you should see:** like the original, the playable build boots into the
+interactive graphics-select screen (`gfx_driver_init`, `src/main.c`) — press **F2** for
+EGA (`palette_mode = 1`) or **F3** for VGA (`palette_mode = 2`, the default and most-
+validated path) — before it proceeds toward the menu. The seeded input-handler maps:
 
 | Action | Key (scancode) |
 |--------|----------------|
