@@ -42,7 +42,7 @@ SPR_OBJS = bsprite.obj bsprite_buf.obj sprite.obj dosio.obj
 #   support modules — dosio/prng/globals
 #   buffer modules  — bvec_buf1/bvec_buf2 (large __far buffers for VEC decode arena + planar buf)
 BUMPY_OBJS = main.obj game.obj game_stubs.obj &
-             level.obj input.obj player.obj player2.obj items.obj anim.obj spawn.obj sound.obj screens.obj &
+             level.obj input.obj player.obj player2.obj items.obj anim.obj spawn.obj sound.obj midi.obj screens.obj &
              vec.obj op12.obj video.obj &
              sprite.obj sprite_anim.obj sprite_chain.obj sprite_blit.obj &
              bg_render.obj entity.obj gfx_overlay.obj gfx_palette.obj &
@@ -89,6 +89,7 @@ PLAY_OBJS = &
     $(PLAYDIR)/host_resource.obj $(PLAYDIR)/host_gfx.obj $(PLAYDIR)/config_screens.obj &
     $(PLAYDIR)/level.obj $(PLAYDIR)/input.obj $(PLAYDIR)/player.obj $(PLAYDIR)/player2.obj &
     $(PLAYDIR)/items.obj $(PLAYDIR)/anim.obj $(PLAYDIR)/spawn.obj $(PLAYDIR)/sound.obj &
+    $(PLAYDIR)/midi.obj &
     $(PLAYDIR)/screens.obj &
     $(PLAYDIR)/vec.obj $(PLAYDIR)/op12.obj $(PLAYDIR)/video.obj &
     $(PLAYDIR)/sprite.obj $(PLAYDIR)/sprite_anim.obj $(PLAYDIR)/sprite_chain.obj &
@@ -151,6 +152,8 @@ $(PLAYDIR)/spawn.obj: spawn.c
 	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/spawn.obj spawn.c
 $(PLAYDIR)/sound.obj: sound.c
 	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/sound.obj sound.c
+$(PLAYDIR)/midi.obj: midi.c
+	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/midi.obj midi.c
 $(PLAYDIR)/screens.obj: screens.c
 	mkdir -p $(PLAYDIR) && $(CC) $(CFLAGS) -dBUMPY_PLAYABLE -dHOST_FB_16K -fo=$(PLAYDIR)/screens.obj screens.c
 $(PLAYDIR)/config_screens.obj: config_screens.c
