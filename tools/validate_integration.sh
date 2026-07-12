@@ -80,6 +80,9 @@ CARVEOUT_ALLOWLIST=(
   p2_dispatch_move_state_handler
   # out-of-scope sound L4/L6 device drivers + helpers
   FUN_1000_6183 pit_set_counter0
+  # MIDI SMF-sequencer event dispatch (Task E2, not yet reconstructed — Task E1's
+  # midi_init_track_table has a real conditional call to it)
+  midi_process_event
   # out-of-scope player handler-table targets
   play_walk_anim_default p1_set_pixel_from_cell step_walk_anim FUN_1000_4802
   move_walk_right_anim_step enter_mode_0b_jump_start move_anim_step_to_mode0c

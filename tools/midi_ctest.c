@@ -104,6 +104,21 @@ typedef int32_t  s32;
 static unsigned char far_mem[FAR_MEM_SIZE];
 #define MK_FP(seg, off) ((void *)(far_mem + (((u32)(u16)(seg) << 4) + (u16)(off))))
 
+/* ── Task E1 FP_SEG/FP_OFF host shims (mirrors tools/gfx_palette_ctest.c /
+ *  spawn_ctest.c / int8_ctest.c's already-established `host_fp_seg`/`host_fp_off`
+ *  convention: derive seg/off from a pointer's offset into the SAME `far_mem`
+ *  arena MK_FP indexes into, so MK_FP(FP_SEG(p),FP_OFF(p)) round-trips for any p
+ *  actually backed by far_mem).  midi_parse_file / midi_init_track_table (Task E1)
+ *  use these to record a track's {off,seg} into midi_track_ptr_table; both stay
+ *  UNPORTED this task (see their own RECONSTRUCTION FIDELITY notes in src/midi.c),
+ *  so `snd_seq_cursor` pointing at the small `si_window` buffer instead of
+ *  `far_mem` (making the round-trip a non-representative approximation there) is
+ *  never exercised by the differential — safe by construction, not by luck. */
+static u16 host_fp_seg(const void *p) { return (u16)(((u32)((const unsigned char *)p - far_mem)) >> 4); }
+static u16 host_fp_off(const void *p) { return (u16)(((u32)((const unsigned char *)p - far_mem)) & 0xF); }
+#define FP_SEG(p) host_fp_seg((const void *)(p))
+#define FP_OFF(p) host_fp_off((const void *)(p))
+
 /* ── HOST PORT-I/O SHIMS (shared by BOTH included TUs — defined once) ─────────────
  *  Only src/sound.c's already-real L4 drivers (opl_write_reg, pc_speaker_silence,
  *  mpu401_write_data_polled, ...) issue out()/in() today; src/midi.c has no bodies
@@ -478,6 +493,13 @@ void FUN_1000_6183(void)         {}
 void pit_set_counter0(void)       {}
 void p1_try_trigger_pending_action(void) {}   /* 1000:654e — player.c (host no-op) */
 
+/* midi_process_event (1000:873c) — Task E2, NOT YET reconstructed.  This task's
+ * midi_init_track_table (src/midi.c, Task E1) has a genuine conditional CALL to it
+ * (when midi_read_varlen's decoded delta is exactly 0); host no-op so this TU
+ * links (mirrors src/game_stubs.c's matching carve-out stub for the real DOS
+ * build).  Prototype corrected to `u32` this task — see midi.h's note. */
+u32 midi_process_event(void)      { return 0; }
+
 /* ── Task D1 zero-arg registry wrappers: OPL2 register-level driver leaves ────────────
  *  opl_read_status / opl2_reset_all_regs / maybe_opl2_detect_chip are genuine, self-
  *  contained port emitters (or pure IN) — no out-of-scope leaf anywhere in their own
@@ -566,6 +588,64 @@ static void call_midi_emit_voice_msg_w1(void)
     midi_emit_voice_msg_w1();
 }
 
+/* ── Task E1 zero-arg registry wrappers + extra_check hooks: the SMF parser leaves ──
+ * midi_read_varlen / seq_normalize_far_ptr / midi_get_track_count are all
+ * SELF-CONTAINED (no CALLs into anything out of scope — verified via
+ * disassemble_function; see src/midi.c's per-fn RECONSTRUCTION FIDELITY notes),
+ * so all three are registered here.  midi_parse_file / midi_init_track_table are
+ * NOT (both reach the not-yet-reconstructed midi_process_event on some inputs) —
+ * left OUT of PORTED[] this task; see src/midi.c's top-of-section note. */
+static u32  g_last_ret_u32;    /* midi_read_varlen's DX:AX, captured by its wrapper */
+static long g_last_si_delta;   /* bytes snd_seq_cursor advanced by that same call   */
+static int  g_last_ret_int;    /* midi_get_track_count's AX, captured by its wrapper */
+
+static void call_midi_read_varlen(void)
+{
+    const u8 *before = snd_seq_cursor;
+    g_last_ret_u32  = midi_read_varlen();
+    g_last_si_delta = (long)(snd_seq_cursor - before);
+}
+
+/* cmp_semantic alone cannot see midi_read_varlen's return value or cursor advance
+ * (it only diffs named globals) — this hook checks the record's EXIT register
+ * snap directly: ax/dx must equal the packed DX:AX return, and the SI delta
+ * (ex.si - ent.si, mod 0x10000, matching the real x86 register wraparound) must
+ * equal the number of bytes the host cursor actually advanced. */
+static const char *check_midi_read_varlen(const record_t *r, long *got, long *want)
+{
+    u16  want_ax, want_dx;
+    long want_delta;
+
+    want_ax = r->ex.ax;
+    if ((u16)(g_last_ret_u32 & 0xFFFFu) != want_ax) {
+        *got = (long)(u16)(g_last_ret_u32 & 0xFFFFu); *want = want_ax;
+        return "varlen_ax";
+    }
+    want_dx = r->ex.dx;
+    if ((u16)(g_last_ret_u32 >> 16) != want_dx) {
+        *got = (long)(u16)(g_last_ret_u32 >> 16); *want = want_dx;
+        return "varlen_dx";
+    }
+    want_delta = (long)(u16)(r->ex.si - r->ent.si);
+    if (g_last_si_delta != want_delta) {
+        *got = g_last_si_delta; *want = want_delta;
+        return "varlen_si_delta";
+    }
+    return NULL;
+}
+
+static void call_seq_normalize_far_ptr(void) { seq_normalize_far_ptr(); }
+
+static void call_midi_get_track_count(void) { g_last_ret_int = midi_get_track_count(); }
+
+static const char *check_midi_get_track_count(const record_t *r, long *got, long *want)
+{
+    u16 want_ax = r->ex.ax;
+    u16 got_ax  = (u16)g_last_ret_int;
+    if (got_ax != want_ax) { *got = got_ax; *want = want_ax; return "track_count_ax"; }
+    return NULL;
+}
+
 static void call_emit_midi_voice_message(void)
 {
     /* emit_midi_voice_message's true inputs (AL, DS, BX, DI) are ALL directly in the
@@ -635,8 +715,16 @@ static void call_emit_midi_voice_message(void)
  *  is_l4=0 (semantic-state comparator, which now also diffs chan_param_table — see
  *  cmp_semantic's doc comment).
  *  ───────────────────────────────────────────────────────────────────────────── */
+/* Task E1: `extra_check`, an OPTIONAL per-entry hook run (for is_l4==0 entries)
+ * after cmp_semantic passes.  cmp_semantic only diffs the NAMED sequencer-state
+ * globals + the two tables — it cannot see a fn's RETURN VALUE or how far it
+ * advanced the DS:SI cursor, which is the ENTIRE observable effect of a pure
+ * leaf/getter like midi_read_varlen / midi_get_track_count (no tracked global
+ * changes either way).  Left NULL for every pre-existing entry (defaults to NULL
+ * via C's aggregate-init zero-fill — no other row needs to be touched). */
 typedef struct { u16 off; const char *name; int is_l4; void (*fn)(void);
-                 int check_tbl; } ported_t;
+                 int check_tbl;
+                 const char *(*extra_check)(const record_t *r, long *got, long *want); } ported_t;
 
 static const ported_t PORTED[] = {
     /* Task D1 — OPL2 register-level driver leaves (src/sound.c). */
@@ -651,6 +739,12 @@ static const ported_t PORTED[] = {
     { 0x8b6b, "midi_emit_voice_msg_w2",    1, call_midi_emit_voice_msg_w2,    0 },
     { 0x8b81, "midi_emit_voice_msg_w1",    1, call_midi_emit_voice_msg_w1,    0 },
     { 0x8bc8, "emit_midi_voice_message",   1, call_emit_midi_voice_message,   0 },
+    /* Task E1 — the SMF-parser leaves that are SELF-CONTAINED (no out-of-scope
+     * calls); midi_parse_file/midi_init_track_table are deliberately NOT here
+     * (see src/midi.c's top-of-section note) — they stay UNPORTED this task. */
+    { 0x8891, "midi_read_varlen",          0, call_midi_read_varlen,          0, check_midi_read_varlen },
+    { 0x8a23, "seq_normalize_far_ptr",     0, call_seq_normalize_far_ptr,     0, NULL },
+    { 0x8999, "midi_get_track_count",      0, call_midi_get_track_count,     0, check_midi_get_track_count },
 };
 #define PORTED_N (sizeof(PORTED) / sizeof(PORTED[0]))
 
@@ -697,6 +791,9 @@ static int run_per_function(record_t *recs, long nrec, const char *scname,
             } else {
                 p->fn();
                 bad = cmp_semantic(&r->ex, &got, &want, p->check_tbl);
+                if (bad == NULL && p->extra_check != NULL) {
+                    bad = p->extra_check(r, &got, &want);
+                }
             }
             if (bad == NULL) {
                 st->pass++;
@@ -757,10 +854,13 @@ int main(int argc, char **argv)
     printf("midi_ctest: replay harness over %s\n", path);
     printf("  trace: MIDTRC01 v%u, %u scenarios, %u fn-names (SNAP=%d B)\n",
            ver, nsc, nfn, SNAP_SIZE);
-    printf("  src/midi.c: still a globals-only skeleton (Task C1) — no midi_*/seq_* body "
-           "PORTED yet, those records report UNPORTED. src/sound.c's 4 OPL2 register-level "
-           "driver leaves (opl_read_status/opl2_reset_all_regs/maybe_opl2_detect_chip/"
-           "opl_set_note_params) ARE now PORTED (Task D1) and PORT_CHECKED/PASS below. "
+    printf("  src/midi.c: PORTED[] now covers the 6 Task D2 MIDI-to-OPL2 voice-message-bridge "
+           "fns + the 3 self-contained Task E1 SMF-parser leaves (midi_read_varlen/"
+           "seq_normalize_far_ptr/midi_get_track_count). midi_parse_file/midi_init_track_table "
+           "(Task E1, real bodies) + midi_process_event (Task E2, unreconstructed) stay "
+           "UNPORTED (see src/midi.c's top-of-section note). src/sound.c's 4 OPL2 "
+           "register-level driver leaves (opl_read_status/opl2_reset_all_regs/"
+           "maybe_opl2_detect_chip/opl_set_note_params) are PORTED (Task D1). "
            "Expected FAIL=0.\n");
 
     for (s = 0; s < nsc; s++) {

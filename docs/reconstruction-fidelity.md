@@ -570,15 +570,108 @@ symbols; the 4 former `game_stubs.c` MIDI-note carve-out stubs are removed from 
 object set — added to `tools/validate_integration.sh`'s own re-link `OBJS` array, a
 pre-existing gap this task also closes).
 
+**Closeout (Task E1 — the SMF parser: `midi_read_varlen`/`seq_normalize_far_ptr`/
+`midi_get_track_count`/`midi_init_track_table`/`midi_parse_file`):** 5 more `src/midi.c`
+bodies land, all reconstructed 1:1 against BOTH `decompile_function_by_address` AND raw
+`disassemble_function`.
+- **(n) Correction: `seq_normalize_far_ptr` is NOT a bare `RET`-only no-op.** An earlier
+  working note (`tools/midi_oracle.py`'s own header comment, carried into this task's
+  brief) claimed 1000:8a23 is "verified: RET". `disassemble_function` shows 11 real
+  instructions (`MOV AX,SI; AND SI,0xf; SHR AX,1`×4`; MOV BX,DS; ADD AX,BX; MOV DS,AX`),
+  i.e. a genuine DS:SI far-pointer renormalization (rolls SI's excess offset into DS) —
+  confirmed reachable from 2 real callers via `get_xrefs_to` (`midi_parse_file` 885e,
+  `midi_process_event` 879d). It IS, however, a provable value-preserving identity
+  (normalization by definition keeps the same linear address), and this codebase models
+  the MIDI event cursor as ONE merged pointer (`snd_seq_cursor`) rather than a split
+  seg/off pair the way `midi_song_data_off/_seg` are — so the reconstructed body is a
+  true no-op **against that model** (not because the original does nothing). Documented
+  at the fn's own definition; not fixed by splitting the shared cursor abstraction (would
+  ripple into every already-committed register-entry MIDI leaf for zero observable gain).
+- **(o) Correction: `midi_read_varlen`'s packed return is the FULL 32-bit decoded value,
+  not "value + byte count".** The task brief characterized the `CONCAT22(dx,ax)` return
+  as "decoded value in the low word, byte-count in the high word"; this does not match
+  the asm (DX is 0 for the 1-/2-byte branches, not 1/2; for the 3-byte branch DX is
+  exactly the VLQ's bits 16-20) — DX:AX is the plain 32-bit numeric value, matching
+  `midi_track_time_table`'s own pre-existing "32-bit next-event clock" doc comment.
+  Reconstructed as a literal instruction-by-instruction transliteration (not the
+  closed-form formula) so the exact 8/16-bit truncation and CF-chained `RCR` behavior
+  reproduces bit-for-bit; verified against 4 independent hand test-vectors (including the
+  brief's own `8a 70` -> 1392 example) plus the Task E1 gate's own `MIDI_PERTURB`-style
+  self-test (an injected 1-bit corruption in the 2-byte branch was caught: `got 0xae0
+  want 0x570`, doubling — proving the differential is a real assertion, not vacuous).
+- **(p) Discovery: the 4-byte VLQ branch does not extend the clean 1/2/3-byte pattern.**
+  Bytes `81 80 80 7F` (a textbook 4-byte VLQ for 0x20007F under the standard MSB-first
+  formula) decode via the real asm to DX:AX = `0x001F:0xC0C0`, not `0x0002:0x007F`.
+  Verified twice independently (literal per-instruction CF/RCR simulation vs. the
+  decompile's own CONCAT expressions — both agree with each other, both disagree with the
+  "obvious" 28-bit extension). Reproduced as-is (plausibly a latent, never-exercised bug
+  in the 1992 binary — 4-byte SMF deltas are astronomically rare in practice); not
+  "corrected" to match the naive formula, per "adhere to the binary, never invent".
+- **(q) `tools/midi_ctest.c` gains an `extra_check` hook** (per-`PORTED[]`-entry, optional,
+  run after `cmp_semantic` passes) because the existing semantic comparator only diffs
+  NAMED globals — it cannot see a leaf/getter's RETURN VALUE or DS:SI cursor advance,
+  which is the entire observable effect of `midi_read_varlen` / `midi_get_track_count`
+  (no tracked global changes either way). Without it, registering these 2 fns would have
+  been a VACUOUS pass regardless of correctness. Wired for `midi_read_varlen` (checks
+  AX/DX against the exit snap + the cursor's byte-advance) and `midi_get_track_count`
+  (checks AX); `seq_normalize_far_ptr` needs none (its no-op is already a real, if narrow,
+  global-equality assertion — see (n)). Existing `PORTED[]` rows are untouched (the new
+  struct field defaults to NULL via C aggregate-init zero-fill).
+- **(r) The Task E2 forward dependency (`midi_process_event`).** `midi_init_track_table`'s
+  real asm (1000:87ad..87b2) CALLs `midi_read_varlen`, then — when the decoded delta is
+  exactly 0 (the real `OR BX,DX`/`JNZ` ZF test) — ALSO CALLs `midi_process_event` (873c,
+  Task E2, genuinely unreconstructed) and stores WHATEVER it returns instead.
+  `midi_parse_file` calls `midi_init_track_table` on success, inheriting the same
+  dependency transitively. Per the task brief: both bodies are reconstructed 1:1 HERE
+  (including the real conditional call — no invented shortcut), but neither is registered
+  in `tools/midi_ctest.c`'s `PORTED[]` this task (stays UNPORTED, not a hard failure).
+  Corrected `midi_process_event`'s prototype from `void` to `u32` (its caller stores its
+  AX:DX return into `midi_track_time_table` exactly like `midi_read_varlen`'s own result)
+  and added a faithful-signature carve-out stub (`return 0`) to BOTH `game_stubs.c` (the
+  real DOS link — `midi.obj` is linked into `BUMPY.EXE`) and `tools/midi_ctest.c` (the
+  host link), so this task's real call site is linkable on both targets without
+  fabricating E2's behavior. `game_stubs.c`'s `CARVEOUT_ALLOWLIST` (`validate_integration.sh`)
+  gains `midi_process_event`.
+- **(s) `midi_parse_file`/`midi_init_track_table` use `FP_OFF`/`FP_SEG` to record a
+  track's `{off,seg}`** into `midi_track_ptr_table` (matching the asm's own
+  `MOV CS:[BX],SI; MOV AX,DS; MOV CS:[BX+2],AX`). On the real Watcom `-ml` build these are
+  the genuine live SI/DS registers (exact). `tools/midi_ctest.c` adds the same
+  `far_mem`-arena-relative `host_fp_seg`/`host_fp_off` shims the project already uses in
+  `gfx_palette_ctest.c`/`spawn_ctest.c`/`int8_ctest.c`; since `snd_seq_cursor` points at a
+  small dedicated `si_window` buffer (not `far_mem`) on host, the shim's values there are
+  a non-representative approximation — harmless because both functions stay UNPORTED
+  (never invoked by the differential runner) per (r). `midi_parse_file`'s own 16-bit
+  offset-overflow check (the asm's `ADD SI,AX; JC`) is reconstructed via the same
+  `FP_OFF`-based arithmetic (exact on the real build, approximate/unexercised on host).
+- **(t) `midi_get_track_count`'s CODE 0x85a1 name-clash — VERIFIED, not just repeated.**
+  Re-confirmed via `get_xrefs_to(1000:85a1)`: readers are this getter and
+  `midi_init_track_table`'s loop-count read; writers are `midi_parse_file` (8846) and
+  sound.c's pre-existing `mpu401_write_data_polled` residual store — genuinely the SAME
+  physical cell reused by two unrelated engine subsystems, exactly as midi.h's
+  pre-existing ownership note already documented. `midi.h`'s existing `extern` of
+  sound.c's `midi_track_count` is reused unchanged.
+
+Gate: `validate_midi` FAIL=0, 311 PASS (220 PORT_CHECKED) / 26 UNPORTED (`midi_process_event`
+[E2, 14 records] + `midi_parse_file`/`midi_init_track_table` [deferred to E2, 2 records
+each] + `midi_load_sequence`/`midi_start_playback`/`midi_sound_init`/
+`midi_install_tempo_timer` [genuinely not this task's 5 targets, 2+2+1+3 records]) out of
+337 total records — all 3 self-contained targets (`midi_read_varlen` 54,
+`seq_normalize_far_ptr` 24, `midi_get_track_count` 1 — 79 records) moved UNPORTED ->
+PASS. `validate_sound` unaffected: still PASS=4414 FAIL=0 UNPORTED=25 PORT_CHECKED=3752.
+`validate_integration`: PASS (239332 B, no dup symbols, all 39 spine callees resolve, 36
+allowlisted `game_stubs.obj` symbols including the new `midi_process_event` carve-out).
+
 **Deferred from Phase 6:** the sound-**effect** pipeline (dispatch + device + tone-engine +
 hardware drivers + ISR sequencer + the now-closed-out MIDI dispatch backends) is
 reconstructed and validated (L1–L4) / documented (L5 + the MIDI backends). The 4 Task D1
-OPL2 register-level leaves AND the 6 Task D2 MIDI-to-OPL2 voice-message-bridge leaves are
-reconstructed AND validated against the MIDI-oracle trace. Genuinely deferred: the **MIDI
-engine** itself — `midi_load_sequence`/`midi_parse_file`/`midi_init_track_table`/
-`midi_process_event`/`midi_play_sequence`/`midi_sound_init`/`midi_install_tempo_timer`/
-`midi_get_track_count`/`seq_normalize_far_ptr`/`midi_read_varlen` (the load/parse/
-track-table pipeline + event-stream cursor) — separate, not-yet-started future work. The
+OPL2 register-level leaves, the 6 Task D2 MIDI-to-OPL2 voice-message-bridge leaves, AND
+the 5 Task E1 SMF-parser leaves are reconstructed AND validated against the MIDI-oracle
+trace (3 of the 5 — the self-contained ones — via the differential; `midi_parse_file`/
+`midi_init_track_table` reconstructed 1:1 but left UNPORTED pending Task E2). Genuinely
+deferred: `midi_process_event` (873c, the event-stream cursor dispatch — meta/tempo/EOT/
+channel events) and `midi_load_sequence`/`midi_play_sequence`/`midi_sound_init`/
+`midi_start_playback`/`midi_install_tempo_timer` (the load-time device-select + tempo-timer
+install) — separate, not-yet-started future work. The
 **int8-synced end-to-end gate** remains the standing
 project-wide deferral (the Unicorn capture granularity does not match the engine's
 physics-frame rate; a frame-accurate DOSBox-path capture is needed before the full game

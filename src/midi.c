@@ -401,3 +401,404 @@ void emit_midi_voice_message(void)
         opl_write_reg(dl, dh);
     }
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  SMF parser (Task E1) — midi_read_varlen (8891) / seq_normalize_far_ptr (8a23) /
+ *  midi_get_track_count (8999) / midi_init_track_table (87a2) /
+ *  midi_parse_file (8809).
+ *
+ *  ── Ordering / the Task E2 forward dependency ───────────────────────────────────
+ *  midi_read_varlen, seq_normalize_far_ptr, and midi_get_track_count are
+ *  SELF-CONTAINED leaves (verified via disassemble_function: no CALL instructions
+ *  in midi_read_varlen or seq_normalize_far_ptr; midi_get_track_count is a pure
+ *  2-global getter) — all three are registered in tools/midi_ctest.c's PORTED[]
+ *  this task and validate.
+ *
+ *  midi_init_track_table's real asm (1000:87ad..87b2) CALLS midi_read_varlen, and
+ *  — when the decoded delta is exactly 0 (the real `OR BX,DX` / `JNZ` ZF test) —
+ *  ALSO CALLS midi_process_event (1000:8809's own sibling at 873c, Task E2,
+ *  genuinely not reconstructed yet: game_stubs.c/tools/midi_ctest.c both carry a
+ *  faithful-signature carve-out stub for it so this task's real call site still
+ *  links).  midi_parse_file (8809) calls midi_init_track_table once all tracks are
+ *  walked, so it inherits the same forward dependency transitively.  Per the task
+ *  brief: BOTH bodies are reconstructed 1:1 here (including the real conditional
+ *  call), but NEITHER is registered in tools/midi_ctest.c's PORTED[] this task —
+ *  they stay UNPORTED (not a hard failure) until Task E2 lands midi_process_event
+ *  and can wire a real differential for them.
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── little helpers the parser uses to mirror the asm's own raw-vs-swapped memory
+ *  reads (MIDI multi-byte header fields are big-endian; x86 LODSW/word-compare is
+ *  little-endian) ─────────────────────────────────────────────────────────────── */
+static u16 midi_rd16_raw(const u8 *p)
+{
+    /* the asm's own LODSW / `CMP word ptr [SI],imm` — a plain little-endian word
+       read, NO byte-swap (matches raw memory order). */
+    return (u16)(p[0] | (p[1] << 8));
+}
+
+static u16 midi_bswap16(u16 v)
+{
+    /* the asm's own `XCHG AL,AH` — swaps the two bytes of a just-LODSW'd word,
+       turning the file's big-endian 16-bit field into its numeric value. */
+    return (u16)((v >> 8) | (v << 8));
+}
+
+/* ── seq_normalize_far_ptr (1000:8a23) — DS:SI far-pointer renormalization ───────
+ *  Register-entry, no stack args, no globals.  Real asm (1000:8a23..8a3a; AX/BX
+ *  PUSH'd/POP'd around the body, so untouched by the caller's view):
+ *      MOV AX,SI ; AND SI,0xf ; SHR AX,1 (x4) ; MOV BX,DS ; ADD AX,BX ; MOV DS,AX
+ *  i.e. new_DS := old_DS + (old_SI >> 4), new_SI := old_SI & 0xF — this ROLLS SI's
+ *  excess offset (everything above the low nibble) into DS.
+ *
+ *  RECONSTRUCTION FIDELITY (correcting an earlier working note): tools/midi_oracle.py's
+ *  own header comment ("a no-op stub in THIS binary (verified: RET)") and this task's
+ *  brief both mischaracterize this function as bare `RET`-only.  disassemble_function
+ *  1000:8a23 shows 11 real instructions, not a lone RET — confirmed also via
+ *  get_xrefs_to(1000:8a23): 2 real callers (midi_parse_file 885e; midi_process_event
+ *  879d, Task E2).  The asm IS real register surgery.
+ *
+ *  It is, however, a PROVABLE VALUE-PRESERVING IDENTITY: normalizing a segment:offset
+ *  pair by definition preserves the LINEAR ADDRESS it names
+ *  (new_DS*16+new_SI == old_DS*16+old_SI, since (old_SI>>4)*16 + (old_SI&0xF) ==
+ *  old_SI exactly).  This codebase's register-entry DS:SI standin for the MIDI event
+ *  cursor (`snd_seq_cursor`, sound.h) is modelled as ONE merged pointer, not a split
+ *  seg/off pair the way midi_song_data_off/_seg are (every already-ported register-
+ *  entry MIDI leaf — opl_event_note_on, midi_emit_voice_msg_w1/2/3, ... — shares that
+ *  same convention); no consumer anywhere in the reconstructed call graph inspects DS
+ *  on its own.  Splitting that shared cursor abstraction for this one call site would
+ *  ripple into every already-committed register-entry MIDI leaf for a change that is,
+ *  by the math above, unobservable to any of them.  A literal FP_SEG/FP_OFF/MK_FP
+ *  round-trip was considered and rejected: on the host replay harness `snd_seq_cursor`
+ *  points into a small dedicated `si_window` buffer, not the harness's `far_mem` arena
+ *  MK_FP indexes into, so re-deriving a "segment" from it and rebuilding a pointer via
+ *  MK_FP would silently relocate the cursor into unrelated `far_mem` bytes — corrupting
+ *  shared harness state for no representable benefit (the identity above already proves
+ *  nothing consumer-observable changes).  Reconstructed as a true no-op body against
+ *  this model; see docs/reconstruction-fidelity.md. */
+void seq_normalize_far_ptr(void)
+{
+    /* Faithful no-op against this codebase's merged DS:SI cursor model — see the
+       RECONSTRUCTION FIDELITY note above for why this is a value-preserving identity,
+       not an invented simplification. */
+}
+
+/* ── midi_read_varlen (1000:8891) — decode a 7-bits/byte SMF variable-length
+ *  quantity at the register-entry DS:SI cursor (snd_seq_cursor) ─────────────────
+ *  Reconstructed against BOTH decompile_function_by_address AND
+ *  disassemble_function (the decompile's CONCAT/bit-twiddling is an accurate but
+ *  opaque rendering of the same instructions — cross-checked, not overridden).
+ *  Standard SMF VLQ, MSB-first 7-bit groups, up to 4 bytes:
+ *    1 byte  (b1 continuation clear):            value = b1
+ *    2 bytes (b1 set, b2 clear):                 value = (b1&0x7f)<<7  | (b2&0x7f)
+ *    3 bytes (b1,b2 set, b3 clear):               value = (b1&0x7f)<<14 | (b2&0x7f)<<7 | b3
+ *    4 bytes (b1,b2,b3 set; b4 ALWAYS consumed — the asm never tests its own
+ *             continuation bit): a genuine 4th-byte quirk — see below.
+ *
+ *  RECONSTRUCTION FIDELITY (register-entry + packed return — CORRECTING the task
+ *  brief's own characterization): the asm returns via DX:AX (Watcom's native 32-bit
+ *  return convention), packed here as `CONCAT22(dx,ax)`.  The brief describes this as
+ *  "decoded value in the low word, byte-count in the high word" — that does NOT match
+ *  the asm/decompile: DX is always 0 for the 1- and 2-byte branches (verified: the
+ *  brief's own worked example, bytes `8a 70` -> 1392, decodes with DX=0, AX=1392 here
+ *  — a "byte count" would read 2, not 0), and for the 3-byte branch DX is EXACTLY
+ *  `(b1&0x7f)>>2` (the VLQ's bits 16-20) — i.e. DX:AX is the FULL decoded (up to
+ *  28-bit) numeric value, split high:low, not value-plus-metadata.  This also matches
+ *  midi_track_time_table's own pre-existing doc comment ("32-bit next-event clock") —
+ *  midi_init_track_table (Task E1, below) stores this return verbatim into that table.
+ *  Every branch below is a literal instruction-by-instruction transliteration of the
+ *  raw disasm (not the closed-form formula above) so the SAME x86 8/16-bit
+ *  truncation and CF-chained RCR behavior reproduces exactly, including the 4-byte
+ *  branch's anomaly noted next.
+ *
+ *  RECONSTRUCTION FIDELITY (4-byte branch bit-layout anomaly, DISCOVERED this task):
+ *  the 1/2/3-byte branches are clean, standard MSB-first VLQ decodes (verified
+ *  numerically against 3 independent hand test-vectors, cross-checked two ways:
+ *  literal instruction transliteration vs. the decompile's CONCAT expressions).  The
+ *  4-byte branch does NOT extend that same clean pattern — e.g. bytes `81 80 80 7F`
+ *  (a textbook 4-byte VLQ encoding 0x20007F per the standard MSB-first formula)
+ *  decodes here to DX:AX = `0x001F:0xC0C0`, NOT `0x0002:0x007F`.  This was verified
+ *  TWICE independently (literal per-instruction CF/RCR simulation, and the
+ *  decompile's own CONCAT11 formula, both by hand) and both agree with EACH OTHER
+ *  while disagreeing with the "obvious" 28-bit extension — strong evidence this is a
+ *  genuine quirk (plausibly an unexercised latent bug) in the ORIGINAL 1992 binary's
+ *  4-byte path, not a transcription error here.  4-byte SMF deltas are extremely rare
+ *  in practice (>2 million ticks between events) and the Task C2 oracle capture (54
+ *  midi_read_varlen records off the REAL Bumpy.mid) may not exercise this branch at
+ *  all — reproduced faithfully as-is either way, per "adhere to the binary, never
+ *  invent". See docs/reconstruction-fidelity.md. */
+u32 midi_read_varlen(void)
+{
+    u16 ax, dx, t16;
+    u8  b1, b2, b3, b4, cf, t8, dl, dh;
+
+    ax = 0;
+    dx = 0;
+
+    b1 = *snd_seq_cursor;  snd_seq_cursor++;                     /* 8895 LODSB */
+    if ((b1 & 0x80) == 0) {                                      /* 8896/8898 */
+        /* ── 1-byte VLQ (0..0x7f) ── */
+        ax = b1;
+        return ((u32)dx << 16) | ax;
+    }
+
+    b2 = *snd_seq_cursor;  snd_seq_cursor++;                     /* 889c LODSB */
+    if ((b2 & 0x80) == 0) {                                      /* 889d/889f */
+        /* ── 2-byte VLQ ── */
+        ax = (u16)(((u16)(b1 & 0x7f) << 8) | (b2 & 0x7f));       /* 88a1 AND AX,0x7f7f */
+        t8 = (u8)(ax & 0xff);
+        t8 = (u8)(t8 << 1);                                      /* 88a4 SHL AL,1 */
+        ax = (u16)((ax & 0xff00) | t8);
+        ax = (u16)(ax >> 1);                                     /* 88a6 SHR AX,1 */
+        return ((u32)dx << 16) | ax;
+    }
+
+    /* ── 3-or-4-byte VLQ: 88aa XCHG AX,DX — DX := {AH=b1,AL=b2} raw, AX := 0 ── */
+    dx = (u16)(((u16)b1 << 8) | b2);
+    ax = 0;
+
+    b3 = *snd_seq_cursor;  snd_seq_cursor++;                     /* 88ab LODSB */
+    if ((b3 & 0x80) == 0) {                                      /* 88ac/88ae */
+        /* ── 3-byte VLQ ── */
+        ax = (u16)((ax & 0xff00) | b3);                          /* AL := b3 */
+
+        t8 = (u8)(ax >> 8);                                      /* 88b0 XCHG AH,DL */
+        dl = (u8)(dx & 0xff);
+        ax = (u16)(((u16)dl << 8) | (ax & 0xff));
+        dx = (u16)((dx & 0xff00) | t8);
+
+        dl = (u8)(dx & 0xff);                                    /* 88b2 XCHG DL,DH */
+        dh = (u8)(dx >> 8);
+        dx = (u16)(((u16)dl << 8) | dh);
+
+        dx = (u16)(dx & 0x7f7f);                                 /* 88b4 AND DX,0x7f7f */
+
+        ax = (u16)(ax << 1);                                     /* 88b8 SHL AX,1 (CF discarded — overwritten next) */
+
+        t8 = (u8)(ax & 0xff);                                    /* 88ba SHL AL,1 */
+        cf = (u8)((t8 >> 7) & 1);
+        t8 = (u8)(t8 << 1);
+        ax = (u16)((ax & 0xff00) | t8);
+
+        t8 = (u8)(dx & 0xff);                                    /* 88bc SHR DL,1 */
+        cf = (u8)(t8 & 1);
+        t8 = (u8)(t8 >> 1);
+        dx = (u16)((dx & 0xff00) | t8);
+
+        t16 = (u16)(ax & 1);                                     /* 88be RCR AX,1 */
+        ax = (u16)((ax >> 1) | ((u16)cf << 15));
+        cf = (u8)t16;
+
+        t8 = (u8)(dx & 0xff);                                    /* 88c0 SHR DL,1 */
+        cf = (u8)(t8 & 1);
+        t8 = (u8)(t8 >> 1);
+        dx = (u16)((dx & 0xff00) | t8);
+
+        ax = (u16)((ax >> 1) | ((u16)cf << 15));                 /* 88c2 RCR AX,1 */
+
+        return ((u32)dx << 16) | ax;
+    }
+
+    /* ── 4-byte VLQ (b4 consumed unconditionally — the asm never tests its own
+     *  continuation bit; see the RECONSTRUCTION FIDELITY note above) ── */
+    b4 = *snd_seq_cursor;  snd_seq_cursor++;                     /* 88c8 LODSB */
+    ax = (u16)(((u16)b3 << 8) | b4);                             /* 88c6 MOV AH,AL; 88c8 LODSB -> AX={b3,b4} */
+
+    t16 = ax; ax = dx; dx = t16;                                 /* 88c9 XCHG AX,DX */
+
+    dx = (u16)(dx & 0x7f7f);                                     /* 88ca AND DX,0x7f7f */
+
+    t8 = (u8)(dx & 0xff);                                        /* 88ce SHL DL,1 */
+    t8 = (u8)(t8 << 1);
+    dx = (u16)((dx & 0xff00) | t8);
+
+    dx = (u16)(dx >> 1);                                         /* 88d0 SHR DX,1 */
+
+    ax = (u16)(ax << 1);                                         /* 88d2 SHL AX,1 (CF discarded) */
+
+    t8 = (u8)(ax & 0xff);                                        /* 88d4 SHL AL,1 */
+    cf = (u8)((t8 >> 7) & 1);
+    t8 = (u8)(t8 << 1);
+    ax = (u16)((ax & 0xff00) | t8);
+
+    t8 = (u8)(dx & 0xff);                                        /* 88d6 SHR DL,1 */
+    cf = (u8)(t8 & 1);
+    t8 = (u8)(t8 >> 1);
+    dx = (u16)((dx & 0xff00) | t8);
+
+    t16 = (u16)(ax & 1);                                         /* 88d8 RCR AX,1 */
+    ax = (u16)((ax >> 1) | ((u16)cf << 15));
+    cf = (u8)t16;
+
+    t8 = (u8)(dx & 0xff);                                        /* 88da SHR DL,1 */
+    cf = (u8)(t8 & 1);
+    t8 = (u8)(t8 >> 1);
+    dx = (u16)((dx & 0xff00) | t8);
+
+    ax = (u16)((ax >> 1) | ((u16)cf << 15));                     /* 88dc RCR AX,1 */
+
+    return ((u32)dx << 16) | ax;
+}
+
+/* ── midi_get_track_count (1000:8999) — SMF track-count getter ───────────────────
+ *  0 args, pure getter.  asm 1000:8999 verbatim: MOV AX,CS:[0x85a1]; AND AX,AX;
+ *  JNZ 89a7; MOV AX,CS:[0x8483]; AND AX,AX; RET.  Returns `midi_track_count`
+ *  (CODE 0x85a1) unless it's 0, in which case it falls back to `midi_data_seg`
+ *  (CODE 0x8483).
+ *
+ *  RECONSTRUCTION FIDELITY (0x85a1 name-clash — VERIFIED this task, per the task's
+ *  own ask): CODE 0x85a1 is the SAME physical cell sound.c's `midi_track_count`
+ *  (the MPU-401 poll-timeout residual write in mpu401_write_data_polled) writes.
+ *  get_xrefs_to(1000:85a1) confirms BOTH readers of this getter (midi_get_track_count
+ *  here; midi_init_track_table's loop-count read at 87a2, below) and BOTH SMF writers
+ *  (midi_parse_file's `MOV CS:[0x85a1],AX` at 8846, below; midi_process_event's
+ *  end-of-track decrement at 877d, Task E2) target the exact same address as
+ *  mpu401_write_data_polled's residual store — genuinely the SAME cell, reused by two
+ *  logically-unrelated engine subsystems (not a coincidental name), exactly as
+ *  midi.h's pre-existing ownership note already documented.  midi.h's existing
+ *  extern of sound.c's `midi_track_count` is reused unchanged; no new global. */
+s16 midi_get_track_count(void)
+{
+    s16 track_count = midi_track_count;
+    if (midi_track_count == 0) {
+        track_count = (s16)midi_data_seg;
+    }
+    return track_count;
+}
+
+/* ── midi_init_track_table (1000:87a2) — per-track state-table seed ──────────────
+ *  0 args.  Loops `midi_track_count` times (asm: `MOV CX,CS:[0x85a1]; ... LOOP 87aa`
+ *  — a real x86 LOOP, so CX==0 would wrap and loop 65536 times; midi_parse_file's
+ *  own 0<count<=0x10 guard is what keeps this from ever happening on the real path).
+ *  Per track: LDS the track's CURRENT {off,seg} from midi_track_ptr_table into the
+ *  DS:SI cursor, decode its first delta-time via midi_read_varlen; if that delta is
+ *  exactly 0 (the real `OR BX,DX` / `JNZ` ZF test — the event is due immediately),
+ *  dispatch it via midi_process_event and store WHATEVER it returns instead (Task
+ *  E2 — see the RECONSTRUCTION FIDELITY / forward-dependency note at the top of this
+ *  section); either way, store the resulting 32-bit value into
+ *  midi_track_time_table[track] and write the ADVANCED cursor back into
+ *  midi_track_ptr_table[track].  asm 1000:87a2 verbatim: MOV CX,CS:[0x85a1]; MOV
+ *  BX,0x81cc; LDS SI,CS:[BX]; CALL 8891; JNZ 87b5; CALL 873c; MOV CS:[BX+0x40],AX;
+ *  MOV CS:[BX+0x42],DX; MOV CS:[BX],SI; MOV AX,DS; MOV CS:[BX+2],AX; INC BX (x4);
+ *  LOOP 87aa. */
+void midi_init_track_table(void)
+{
+    u16 cx;
+    u16 idx;
+    u32 val;
+
+    cx  = (u16)midi_track_count;                                  /* CX (LOOP counter) */
+    idx = 0;                                                       /* BX/4 — track index */
+
+    do {
+        /* 87aa LDS SI,CS:[BX] — point the cursor at this track's current {off,seg} */
+        snd_seq_cursor = (u8 *)MK_FP(midi_track_ptr_table[idx][1],
+                                     midi_track_ptr_table[idx][0]);
+
+        val = midi_read_varlen();                                   /* 87ad CALL 8891 */
+        if (val == 0) {                                              /* 87b0 JNZ (ZF set -> fall through) */
+            val = midi_process_event();                               /* 87b2 CALL 873c (Task E2) */
+        }
+
+        midi_track_time_table[idx][0] = (u16)(val & 0xffffu);        /* 87b5 */
+        midi_track_time_table[idx][1] = (u16)(val >> 16);            /* 87b9 */
+
+        midi_track_ptr_table[idx][0] = FP_OFF(snd_seq_cursor);        /* 87bd MOV CS:[BX],SI */
+        midi_track_ptr_table[idx][1] = FP_SEG(snd_seq_cursor);        /* 87c0/87c2 MOV AX,DS; MOV CS:[BX+2],AX */
+
+        idx++;                                                        /* 87c6..87c9 INC BX x4 */
+        cx--;                                                          /* LOOP's own decrement */
+    } while (cx != 0);
+}
+
+/* ── midi_parse_file (1000:8809) — validate MThd, walk MTrk chunks ───────────────
+ *  Register-entry: DS:SI = the file image (midi_load_sequence's fall-through
+ *  arg — see midi.h's ownership note).  Validates the 14-byte MThd header
+ *  ("MThd", length==6, format!=2, 0<ntrks<=0x10, division's SMPTE bit clear),
+ *  stores midi_track_count/midi_division, then per track: normalizes the cursor
+ *  (seq_normalize_far_ptr), validates the 8-byte MTrk header ("MTrk", a 16-bit
+ *  length), records the track's event-data start into midi_track_ptr_table, and
+ *  advances the cursor past the track's data (bailing on a 16-bit offset overflow
+ *  — the asm's own `JC`).  On success (all tracks consumed) calls
+ *  midi_init_track_table and returns -1 (0xFFFF); any validation failure returns 0.
+ *  Multi-byte header fields are big-endian in the file; the asm's own
+ *  LODSW+`XCHG AL,AH` byte-swap idiom is mirrored via midi_bswap16, while the FIXED
+ *  MThd-length/format-reject checks compare RAW (un-swapped) memory the same way
+ *  the asm's literal `CMP word ptr [SI],imm` does (see midi_rd16_raw's own note).
+ *  asm 1000:8809 verbatim: see the per-line comments below (byte-for-byte matched
+ *  against disassemble_function 1000:8809..8890).
+ *
+ *  RECONSTRUCTION FIDELITY (16-bit offset overflow via FP_OFF): the asm's `ADD
+ *  SI,AX; JC 888e` bails when adding a track's byte length overflows SI's 16-bit
+ *  offset.  This reconstruction's DS:SI cursor is a genuine far pointer only on the
+ *  real Watcom -ml build (where FP_OFF(snd_seq_cursor) IS the live SI register, so
+ *  the check below is exact); the host replay harness's FP_OFF is a `far_mem`-arena-
+ *  relative approximation (this function is UNPORTED this task — see the top-of-
+ *  section note — so that approximation is never exercised by the differential). */
+int midi_parse_file(void)
+{
+    u16 track_count, division, fmt_raw;
+    u16 len_hi, len_lo, track_len;
+    u16 cx, idx;
+    u16 off_before, off_after;
+
+    if (midi_rd16_raw(snd_seq_cursor) != 0x544d) return 0;         /* 8809 "MT" */
+    snd_seq_cursor += 2;
+    if (midi_rd16_raw(snd_seq_cursor) != 0x6468) return 0;         /* 8814 "hd" */
+    snd_seq_cursor += 2;
+    if (midi_rd16_raw(snd_seq_cursor) != 0x0000) return 0;         /* 881f length hi word == 0 */
+    snd_seq_cursor += 2;
+    if (midi_rd16_raw(snd_seq_cursor) != 0x0600) return 0;         /* 8829 length lo word == 6 (raw, per asm) */
+    snd_seq_cursor += 2;
+
+    fmt_raw = midi_rd16_raw(snd_seq_cursor);
+    if (fmt_raw == 0x0200) return 0;                                /* 8831/8835 reject format==2 (checked pre-swap) */
+    snd_seq_cursor += 2;                                             /* 8837 — format value itself never read/stored */
+
+    track_count = midi_bswap16(midi_rd16_raw(snd_seq_cursor));       /* 8839/883a LODSW; XCHG AL,AH */
+    snd_seq_cursor += 2;
+    if (track_count == 0 || track_count > 0x10) return 0;             /* 883c..8844 */
+    midi_track_count = (s16)track_count;                                /* 8846 */
+
+    division = midi_bswap16(midi_rd16_raw(snd_seq_cursor));             /* 884a/884b */
+    snd_seq_cursor += 2;
+    if ((division & 0x8000) != 0) return 0;                              /* 884d/8850 reject SMPTE division */
+    midi_division = division;                                             /* 8852 */
+
+    cx  = track_count;                                                     /* 8856 MOV CX,... */
+    idx = 0;                                                                /* 885b MOV BX,0x81cc */
+
+    for (;;) {
+        seq_normalize_far_ptr();                                             /* 885e CALL 8a23 */
+
+        if (midi_rd16_raw(snd_seq_cursor) != 0x544d) return 0;                /* 8861/8862 "MT" */
+        snd_seq_cursor += 2;
+        if (midi_rd16_raw(snd_seq_cursor) != 0x6b72) return 0;                 /* 8867/8868 "rk" */
+        snd_seq_cursor += 2;
+
+        len_hi = midi_rd16_raw(snd_seq_cursor);                                 /* 886d */
+        snd_seq_cursor += 2;
+        if (len_hi != 0) return 0;                                               /* 886e/8871 */
+
+        len_lo = midi_rd16_raw(snd_seq_cursor);                                   /* 8873 (raw, pre-swap) */
+        snd_seq_cursor += 2;
+
+        midi_track_ptr_table[idx][0] = FP_OFF(snd_seq_cursor);                     /* 8874 MOV CS:[BX],SI */
+        midi_track_ptr_table[idx][1] = FP_SEG(snd_seq_cursor);                     /* 8879 MOV CS:[BX+2],DS */
+        idx++;                                                                      /* 8877/887c INC BX x4 */
+
+        track_len  = midi_bswap16(len_lo);                                           /* 887e XCHG AL,AH */
+        off_before = FP_OFF(snd_seq_cursor);
+        off_after  = (u16)(off_before + track_len);
+        if (off_after < off_before) return 0;                                         /* 8882 JC — 16-bit offset overflow */
+        snd_seq_cursor += track_len;                                                   /* 8880 ADD SI,AX */
+
+        cx--;                                                                           /* 8884 LOOP's own decrement */
+        if (cx == 0) {
+            break;
+        }
+    }
+
+    midi_init_track_table();                                                            /* 8886 CALL 87a2 */
+    return -1;                                                                            /* 8889 MOV AX,0xFFFF */
+}

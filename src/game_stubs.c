@@ -110,6 +110,16 @@
  *  removed here — midi.obj supplies the real bodies). */
 void FUN_1000_6183(void)         {}   /* 1000:6183 sweep_active_entities — out-of-scope entity sweep (carve) */
 void pit_set_counter0(void)       {}  /* 1000:7f9a — PIT hardware init (carve) */
+/* midi_process_event (1000:873c) — Task E2, NOT YET reconstructed.  Task E1's
+ * midi_init_track_table (src/midi.c) has a genuine conditional CALL to it (when
+ * midi_read_varlen's decoded delta is exactly 0 — the real `OR BX,DX`/`JNZ` ZF
+ * test); midi.obj is linked into BUMPY.EXE (src/Makefile), so this carve-out stub
+ * keeps that real call site linkable until Task E2 lands the real body (then this
+ * stub is removed, same as every other un-stubbed MIDI leaf above).  Prototype
+ * corrected to `u32` this task (was `void`) — see midi.h's note: its caller stores
+ * its AX:DX return into midi_track_time_table exactly like midi_read_varlen's own
+ * result. */
+u32 midi_process_event(void)     { return 0; }
 /* apply_contact_action (1000:6a89) — RECONSTRUCTED in player.c (Phase-9 T1); the
    no-op stub is removed (it would now be a duplicate symbol against player.obj). */
 /* play_walk_anim_default (1000:4361) — RECONSTRUCTED in player.c (audit 2026-06-28); stub removed. */
