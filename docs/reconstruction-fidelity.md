@@ -2563,6 +2563,24 @@ Follow-ups closing the "pause strip / UI text" gaps left by the real-flip presen
   The recon previously defaulted every char to space (nothing blitted); now a
   file-static string + far-ptr pair models 0x1327/0x11ae and the glyph loop reads it
   (blit seg fixed from the static 0x203b literal to `host_dgroup_seg()`).
+- **`show_text_screen` prologue restored (Game Over palette + iris — FIXED 2026-07-12)**:
+  the view_setup.c port had stubbed the whole 1000:11eb prologue ("resource-load path
+  not yet live"), so the Game Over screen (a) never loaded resource 3 and never applied
+  the `palette_mode==1` EGA palette patch → it showed the **stale gameplay palette
+  (bluish) instead of the image's red**, and (b) never ran the start draw-page bracket
+  `set_sprite_table_ptr(0)` (1000:1217) → the iris + present drew onto the stale gameplay
+  draw page → **the iris was invisible**.  Restored 1:1 from the 1000:11eb disassembly,
+  a mirror of the proven-working sibling `show_menu_select_screen` (1000:0f7a) — both
+  share resource 3 and the DGROUP 0x71e AC-index palette:
+  `set_resource_table(0x928)` → `fun_9410_set_sprite_table(0)` (start bracket) →
+  `open_resource(3,4)`/`read_chunked`/`c_close` → `if (palette_mode==1)` patch img+0x23
+  from `dgroup_pal_patch_71e` → iris → present → flip → glyphs → `(1)` end bracket.  The
+  EGA palette then flows through the existing `host_gfx_stage_image_palette` (+0x23) →
+  `host_gfx_upload_palette_to_dac` (AC-register program, OUT 0x3C0) chain; VGA
+  (palette_mode==2) uses the image's own +0x33 DAC palette.  Playable-only change; the
+  default BUMPY.EXE (game_stubs.c NOP) is byte-unchanged (view_setup.obj not in its link).
+  TEMPORAL/VISUAL — headless-unverifiable (iris is an animation; original-side EGA capture
+  env-blocked); awaits USER PLAYTEST of the Game Over screen.
 
 Validated: both builds `-wx` warning-free; `validate_screens.sh` 5/5 pixel-exact;
 `validate_screen_fns.sh` 884/884 records PASS (FAIL=0, UNPORTED=0).

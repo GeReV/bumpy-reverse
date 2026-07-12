@@ -142,6 +142,17 @@ extern char fun_75a2_poll_action(u8 arg);         /* screens.c / host_input.c */
  * show_text_screen glyph-blit call site. */
 extern void anim_blit_sprite_leaf(u16 obj_off, u16 obj_seg);
 
+/* Resource loader + EGA palette-patch table used by show_text_screen (below), mirroring
+ * show_menu_select_screen (screens.c).  open_resource/read_chunked/c_close have real
+ * bodies in host/host_resource.c under BUMPY_PLAYABLE (faithful-signature stubs in the
+ * default build).  dgroup_pal_patch_71e (DGROUP 0x71e) is the reddish EGA AC-index table
+ * — the SAME table show_text_screen (1000:11eb) and show_menu_select_screen (1000:0f7a)
+ * both copy into the loaded image's embedded palette at +0x23 when palette_mode==1. */
+extern int  open_resource(u16 res_idx, u16 mode);
+extern u32  read_chunked(int handle, u16 buf_off, u16 buf_seg, u16 len_off, u16 len_seg);
+extern void c_close(int handle);
+extern u8   dgroup_pal_patch_71e[16];   /* DGROUP 0x71e — screens.c */
+
 /* ── Host save-under buffer ────────────────────────────────────────────────────
  * hv_saveunder_buf: 4-plane RAM snapshot of host_framebuffer page-0.
  * setup_fullscreen_view captures it; restore_bg_view can read it back.
@@ -447,16 +458,22 @@ const u8 __far *host_clean_bg(void)
  * Display a fullscreen image (resource 3) + render 9 sprite-glyph characters at
  * row 0x60, then idle 2 × 50 frames.
  *
- * Structural port of 1000:11eb.  Resource-load / graphics-overlay / DAC leaves are
- * faithful stubs (screens.c); the p1_sprite glyph-blit path is live.
+ * Structural port of 1000:11eb.  Resource-load (open_resource/read_chunked/c_close)
+ * and the palette_mode==1 EGA palette patch are now LIVE via the host resource loader
+ * (host_resource.c) + the DGROUP 0x71e AC table (screens.c) — a 1:1 mirror of the
+ * sibling show_menu_select_screen (they share resource 3 and the 0x71e palette).  The
+ * graphics-overlay present/flip leaves route through screens.c's fun_7b93/fun_7bca
+ * host bodies (host_gfx.c); the p1_sprite glyph-blit path is live.
  * The engine fmemcpy's the far ptr at DGROUP 0x11ae into a stack-local text_buf
  * ptr and renders text_buf[0..8]; statically 0x11ae = {0x1327, DGROUP} — the
  * string "GAME OVER" at DGROUP 0x1327.  Modelled here as a file-static string +
  * far-ptr pair (hv_text_ptr_11ae) the loop reads through, mirroring the engine's
  * indirection (nothing else writes 0x11ae in the corpus).
  *
- * RECONSTRUCTION FIDELITY: resource-load / graphics-overlay leaves stubbed (same
- * convention as screens.c screen fns).
+ * FIX 2026-07-12: the load + start draw-page bracket + EGA palette patch were
+ * previously stubbed here, so the Game Over screen showed the stale gameplay palette
+ * (bluish, not the image's red) and no visible iris (the wipe drew onto the wrong
+ * page).  Restored 1:1 from the 1000:11eb disassembly.  See docs/reconstruction-fidelity.md.
  * ──────────────────────────────────────────────────────────────────────────── */
 
 /* DGROUP 0x1327: the "GAME OVER" string; DGROUP 0x11ae: the far ptr to it that
@@ -470,9 +487,43 @@ void show_text_screen(void)
     u8   char_idx;
     u8   col_pos;
     u8   ch;
+    int  res_handle;
+    u8   pal_idx;
 
-    /* Engine: set_resource_table + set_sprite_table_ptr + load resource 3 into
-     * fullscreen_buf.  Stubbed (resource-load path not yet live). */
+    /* ── Engine prologue (1000:11eb, verbatim order) ────────────────────────────
+     * Select the 0x928 (title) resource base, bracket the draw onto slot 0, load
+     * resource 3 (the fullscreen background — the SAME image show_menu_select_screen
+     * uses), and, for EGA, patch its embedded palette.  This whole block was previously
+     * stubbed here ("resource-load path not yet live"), which is why the Game Over
+     * screen showed the stale gameplay palette (bluish, not the image's red) and no
+     * visible iris.  It is now a 1:1 mirror of show_menu_select_screen (screens.c). */
+    set_resource_table(0x928, host_dgroup_seg());   /* 1000:120c — hr_base_idx = title */
+
+    /* 1000:1217 — set_sprite_table_ptr(0): bracket the draw onto slot 0 (the page the
+     * mode-11 sync READS FROM) BEFORE the iris.  Without this start bracket the iris +
+     * present drew onto the stale gameplay draw page, so the wipe was invisible.  The
+     * binary ends the routine with (1) — the (0)…(1) UI bracket (see screens.c). */
+    fun_9410_set_sprite_table(0);
+
+    /* 1000:1235 — load resource 3 into fullscreen_buf (raw decoded image: 16-byte EGA
+     * AC-index palette at +0x23, 48-byte VGA DAC palette at +0x33, planar raster at +99).
+     * No vec_decode: resource 3 is already in decoded form (matches the binary). */
+    res_handle = open_resource(3, 4);
+    read_chunked(res_handle, fullscreen_buf, fullscreen_buf_seg, 99, 0);
+    c_close(res_handle);
+
+    /* 1000:125a — EGA (palette_mode==1): overwrite the loaded image's embedded 16-byte
+     * palette (img+0x23) with the DGROUP 0x71e AC-index table (the reddish Game-Over /
+     * menu-select palette).  host_gfx_stage_image_palette then stages +0x23 and
+     * host_gfx_upload_palette_to_dac programs the 16 Attribute-Controller regs from it.
+     * VGA (palette_mode==2) skips this and uses the image's own +0x33 DAC palette. */
+    if (palette_mode == 1) {
+        u8 __far *img = (u8 __far *)
+            (((u32)fullscreen_buf_seg << 16) | (u32)fullscreen_buf);
+        for (pal_idx = 0; pal_idx < 0x10; pal_idx = pal_idx + 1) {
+            img[(u16)pal_idx + 0x23] = dgroup_pal_patch_71e[pal_idx];
+        }
+    }
 
     /* Iris-wipe in, present fullscreen image + upload DAC palette.
      * Engine calls gfx_overlay_thunk_01e1 + _02b1 (Ghidra names); in screens.c
