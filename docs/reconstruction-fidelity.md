@@ -281,6 +281,7 @@ L5 is reconstructed 1:1 as **documentation** (NOT runtime-gated — see below).
 | **L5 ISR tone-sequencer** (T6): `pit_timer_isr_multiplexer` (7c02), `tone_seq_callback_9631` (9631), `tone_seq_callback_96c4` (96c4), `tone_seq_callback_95b5` (95b5) | **Behavior-faithful (NOT runtime-gated)** | The PIT (IRQ0/int-8) multiplexer walks the 0x5516 cb table each tick (`current += reload`; on the 500-tick period far-call the slot's installed callback) and the three tone-sequencer callbacks advance the L3 param frame + reprogram PIT ch2 (0x42/0x43) / strobe the speaker gate (0x61) to sweep the tone. Reached ONLY via the installed far pointer — NO Ghidra function boundary, NOT hooked by the oracle, so the trace has ZERO records and there is no host differential. Transcribed verbatim from the raw disasm as documentation; the **self-modifying graphics-overlay blitter precedent** (`sprite_blit`/`bg_render`): faithful to what the binary does, validated by inspection vs the asm, not by a runtime gate. |
 | **MIDI dispatch backends** (T7 closeout): `snddrv_dispatch_b_mode0/1/4` (91cf/8e48/8af6), `snddrv_dispatch_c_mode0/1/4` (91d7/8e50/8b04), `snddrv_dispatch_d_mode0/1/4` (91df/8b0d/8e58) | **Behavior-faithful (NOT oracle-exercised)** | The last 9 stub gaps `snddrv_dispatch_b/c/d` (already-ported) fan out to. Verified via the RAW disassembly (the Ghidra decompiler's simplified view hides the real body for 6 of the 9 — e.g. `snddrv_dispatch_b_mode0` decompiles to a bare `return in_AX` even though the asm does `LODSB;ADD SI,AX`, because the decompiler doesn't track SI as an output): all 9 read/advance the caller's ambient DS:SI (a live MIDI-track byte cursor), AL (the MIDI event status byte), and/or CS:[BX+0x80] (a per-track default-channel byte) as raw REGISTERS, not stack args. Confirmed via Ghidra xrefs: their ONLY real caller is `midi_process_event` (8751/8756/875b), itself register-entry (`unaff_SI`) and genuinely unreconstructed — separate, not-yet-started MIDI-engine work (this task closes the sound-**effect** pipeline's last gaps "before the MIDI engine work begins," per the task brief). Reconstructed 1:1 from the raw asm; register-entry inputs modelled as file-scope globals (`snd_seq_event_al`/`snd_seq_cursor`/`snd_seq_default_chan`, the `snd_mpu_byte_89e2` convention) since the true caller supplying them is out of scope and the EXISTING `snddrv_dispatch_b/c/d` call sites (unchanged by this task) pass no args. `snd_seq_cursor` defaults to a zero-filled scratch buffer (not real captured MIDI data — none exists) purely so the incidental invocation from the already-validated `snddrv_dispatch_b/c/d` mode0 replay (which DOES happen — `t4_l2_dispatch` seeds mode 0) is memory-safe; never inspected/asserted by any comparator. 3 further NEW carve-out leaves discovered and stubbed (`seq_set_channel_param` 922c, `midi_emit_voice_msg_w3` 8e93, `opl_event_note_on` 8ea3 — already canonically named, none reconstructed, same class as `FUN_1000_6183`/`FUN_1000_7fef`). |
 | **MPU reset / init substep / timer teardown / status latch** (Task A3): `mpu401_reset_to_uart` (8a75), `snddrv_init_substep` (8b2a), `timer_teardown_restore` (7fef), `record_min_status_code` (945b) | **Transcription** (`mpu401_reset_to_uart`/`record_min_status_code`, oracle-inert) / **Behavior-faithful, provably dead** (`snddrv_init_substep`'s ZF branch is immaterial; `timer_teardown_restore`'s guarded body never executes) | Finishes the last 4 stubbed sound-pipeline leaves. `mpu401_reset_to_uart`: MPU-401 chip reset → UART mode, gated on `mpu401_present` (defaults 0 — early-return no-op in every scenario; not one of the oracle's 10 L4 port-I/O entry points, so no port-write record exists). `record_min_status_code`: latches AX into `last_status_code` (0x946c) — see deviation (i). `snddrv_init_substep` (renamed from `FUN_1000_8b2a`, Ghidra's own canonical name): sets `midi_seq_step_active`, calls the carved-out `maybe_opl2_detect_chip` (8fb6) then branches on its ZF-only verdict to clear the flag or call the equally carved-out `opl2_reset_all_regs` (8eeb) — see deviation (i). `timer_teardown_restore` (renamed from `FUN_1000_7fef`): register-entry (AX=table index, CX/DX=vector-8 restore far ptr — confirmed no `[BP+n]` stack access in the disasm), guarded by `isr_installed_flag` (0x54d4, defaults 0 and never set nonzero by any reconstructed code — the guarded body, including 3 DOS INT 21h vector get/sets via `int86x`/`union REGS`/`struct SREGS` and the carved-out `pit_set_counter0` (7f9a), is **provably unreached** by every scenario in the trace). All 4 wired into their ALREADY-VALIDATED call sites (`snddrv_init` calls the first two; `timer_restore` calls the third; 6 already-committed L3 fns call the fourth) with **zero effect** on any of those records — confirmed by re-running `validate_sound`: identical PASS=4414/FAIL=0/UNPORTED=25/PORT_CHECKED=3752 before and after. |
+| **OPL2 register-level driver leaves + first MIDI-oracle validation** (Task D1): `opl_read_status` (9056), `opl2_reset_all_regs` (8eeb), `maybe_opl2_detect_chip` (8fb6), `opl_set_note_params` (9241) | **Transcription** (`opl_read_status`/`opl2_reset_all_regs`) / **Behavior-faithful, ZF-only** (`maybe_opl2_detect_chip`) / **Transcription, port differential not applicable** (`opl_set_note_params`) | The 2 leaves Task A3 carved out (`maybe_opl2_detect_chip`, `opl2_reset_all_regs`) are now reconstructed for real, plus `opl_read_status` (the `IN AL,0x388` status-byte primitive both of them — and `opl_write_reg` — call) and `opl_set_note_params` (a MIDI-voice note-trigger front end that tail-calls two still-out-of-scope MIDI leaves). `opl2_reset_all_regs`: 233 `opl_write_reg` calls (18 explicit 0xff writes + a reg 0x01..0x3f zero-sweep + a reg 0x60..0xf5 zero-sweep + 2 final fixed writes) → 466 OUT events, byte-for-byte confirmed against the MIDI-oracle's capture (`local/build/render/midi_trace.bin`). `maybe_opl2_detect_chip`: the classic AdLib timer-based presence probe (reg 0x04=0x60/0x80, latch status, reg 0x02=0xff + reg 0x04=0x21, burn a 199-iteration status-read delay, latch status again, reg 0x04=0x60/0x80 again; "detected" iff `(status_after&0xe0)==0xc0 && (status_before&0xe0)==0`) — 6 writes/12 OUT + 201 `opl_read_status` calls, byte-for-byte confirmed. This is the **first task to validate reconstructed code against the MIDI-oracle trace** (`tools/midi_ctest.c`'s `PORTED[]`, previously empty since Task C3) — see deviation (k) for the `opl_set_note_params` comparator-choice + the `snd_opl_detect_zf` reconciliation, and the Phase-6 status section's Task D1 closeout for gate numbers. |
 
 **Phase-6 deviations (all accurate; stated plainly; in-code RECONSTRUCTION FIDELITY notes present):**
 
@@ -386,6 +387,44 @@ L5 is reconstructed 1:1 as **documentation** (NOT runtime-gated — see below).
   deviation, not an invented mechanism. Per deviation (i), `isr_installed_flag` gates
   this entire body and defaults 0 / is never set nonzero by any reconstructed code, so
   the masked read is provably dead on every current scenario — immaterial to any gate.
+- **(k) Task D1 — `opl_set_note_params`'s port-write differential is not applicable;
+  `snd_opl_detect_zf` reconciled for real.** `opl_set_note_params` (9241) itself issues
+  **zero** `opl_write_reg` calls — it only stores 2 bytes (`opl_note_param1`/`
+  opl_note_param2`, CODE 0x9272/0x9273) and tail-calls two out-of-scope carve-out
+  leaves, `midi_emit_voice_msg_w1` (8b81, a NEW carve-out this task discovers) and
+  `opl_event_note_on` (8ea3, already carved out).  The MIDI-oracle's sole trace record
+  for `opl_set_note_params` DOES contain 32 OUT events, but empirically (verified by
+  parsing `local/build/render/midi_trace.bin` directly) every one of them originates
+  from those two REAL, non-stub carve-out leaves (`midi_emit_voice_msg_w1`: 24 OUT /
+  12 writes; `opl_event_note_on`: 8 OUT / 4 writes — confirmed by summing their own,
+  separately-captured trace records: 24+8=32, exact).  Reproducing that port sequence
+  on the host would require reconstructing those two carve-outs for real, which is out
+  of this task's scope — a genuine capture-scope fact, not a port gap in
+  `opl_set_note_params` itself.  Rather than mark `is_l4=1` and either FAIL (host stubs
+  emit 0 of the expected 32 OUT) or invent matching writes (fabricating behavior the
+  reconstructed C doesn't have), `tools/midi_ctest.c` registers this fn under the
+  **semantic-state** comparator (`is_l4=0`): the real asm touches none of the tracked
+  MIDI sequencer-state globals either, so this is a real, reproducible, non-vacuous
+  assertion (no state corruption) rather than a weakened port gate. This mirrors the
+  project's own `opl_play_note`/`opl2_all_notes_off` "documented port-gate exclusion"
+  precedent (deviation (b)), except here the port differential is fully sidestepped by
+  a *different but still meaningful* comparator rather than dropped to UNPORTED — the
+  brief's explicit ask that this fn move off UNPORTED is met without faking a port
+  trace. Separately, `maybe_opl2_detect_chip`'s real body now SETS the file-scope
+  `snd_opl_detect_zf` flag (previously only a modelled default per deviation (i)) from
+  the detection verdict it actually computes — `snddrv_init_substep`'s existing
+  ZF-branch is unchanged and its contract is honored for real rather than by a fixed
+  default. **Nesting risk analyzed + confirmed harmless**: `snddrv_init_substep` (already
+  validated, Task A3) calls `maybe_opl2_detect_chip` then (now, for real)
+  `opl2_reset_all_regs`, which the sound harness's `device_init` scenario exercises via
+  `snddrv_init`. `snddrv_init`'s own record is validated by the **semantic-state**
+  comparator (`is_l4=0` in `tools/sound_ctest.c`'s `PORTED[]`), which never invokes
+  `cmp_ports`, and neither `midi_seq_step_active` (touched by `snddrv_init_substep`) nor
+  `opl_reg_shadow_80cc` (touched by the now-real `opl2_reset_all_regs`) is a field the
+  SND_SNAP serializes — so the 466 newly-real OUT events opl2_reset_all_regs now emits
+  inside that call chain are invisible to any `sound_ctest.c` comparator. Confirmed
+  empirically: `validate_sound` reports the IDENTICAL PASS=4414/FAIL=0/UNPORTED=25/
+  PORT_CHECKED=3752 before and after this task.
 
 **Phase-6 validation method:** per-function differential with two comparators (the L1–L3
 **semantic-state** gate: seed entry SND_SNAP → call the reconstructed C fn → assert the
@@ -448,18 +487,41 @@ unchanged: `validate_sound` still PASS=4414 FAIL=0 UNPORTED=25 PORT_CHECKED=3752
 wired into already-validated call sites with zero effect); `validate_int8` (the
 end-to-end replay gate) still passes its full 150-frame replay unchanged. 3 further
 out-of-scope carve-out leaves (`maybe_opl2_detect_chip` 8fb6, `opl2_reset_all_regs`
-8eeb, `pit_set_counter0` 7f9a) discovered and stubbed alongside them. The sound-**effect**
+8eeb, `pit_set_counter0` 7f9a) discovered and stubbed alongside them (the first two are
+now reconstructed for real — see the Task D1 closeout below). The sound-**effect**
 pipeline now has zero remaining stub gaps of its own; only the genuinely separate MIDI
-engine + the 2 newly-discovered OPL2-init leaves + the unrelated ISR-install subsystem
+engine + the unrelated ISR-install subsystem
 (`uninstall_interrupt_handler`/`pit_set_counter0_wrap`) remain out of scope.
+
+**Closeout (Task D1 — OPL2 register-level driver leaves + first MIDI-oracle validation,
+see the fidelity-table row + deviation (k) above):** the 2 leaves Task A3 carved out —
+`maybe_opl2_detect_chip` (8fb6) and `opl2_reset_all_regs` (8eeb) — are now reconstructed
+1:1, along with `opl_read_status` (9056, the `IN AL,0x388` primitive both call) and
+`opl_set_note_params` (9241, a MIDI-voice note-trigger front end). This is the first
+task to validate reconstructed code against the Task C2 MIDI-oracle trace
+(`local/build/render/midi_trace.bin` via `tools/midi_ctest.c`): `tools/midi_ctest.c`'s
+`PORTED[]` registry — empty since Task C3 — gains its first 4 entries, moving
+`opl_read_status`/`opl2_reset_all_regs`/`maybe_opl2_detect_chip` from UNPORTED to
+PORT_CHECKED/PASS (204 records total: 202+1+1) and `opl_set_note_params` to PASS via the
+semantic-state comparator (1 record — see deviation (k) for why the port-write
+comparator does not apply to it). Gate: `validate_midi` FAIL=0, 205 PASS (204
+PORT_CHECKED) / 132 UNPORTED (the remaining midi.c-side parser/sequencer/voice-dispatch
+records — genuinely unstarted MIDI-engine work) out of 337 total records. `validate_sound`
+unaffected: still PASS=4414 FAIL=0 UNPORTED=25 PORT_CHECKED=3752, identical to the
+pre-task baseline (see deviation (k)'s nesting-risk analysis). One further out-of-scope
+carve-out leaf discovered: `midi_emit_voice_msg_w1` (8b81, called from
+`opl_set_note_params`) — same class as the other MIDI-note carve-outs, added to the
+`validate_integration` allowlist alongside them.
 
 **Deferred from Phase 6:** the sound-**effect** pipeline (dispatch + device + tone-engine +
 hardware drivers + ISR sequencer + the now-closed-out MIDI dispatch backends) is
-reconstructed and validated (L1–L4) / documented (L5 + the MIDI backends). Genuinely
-deferred: the **MIDI engine** itself — `midi_process_event`/`midi_play_sequence`/
-`midi_sound_init` and the note-handling leaves the MIDI dispatch backends reach
-(`seq_set_channel_param`/`midi_emit_voice_msg_w2`/`w3`/`opl_event_note_on`) — separate,
-not-yet-started future work. The **int8-synced end-to-end gate** remains the standing
+reconstructed and validated (L1–L4) / documented (L5 + the MIDI backends). The 4 Task D1
+OPL2 register-level leaves are reconstructed AND validated against the MIDI-oracle trace.
+Genuinely deferred: the **MIDI engine** itself — `midi_process_event`/`midi_play_sequence`/
+`midi_sound_init` and the note-handling leaves the MIDI dispatch backends (+
+`opl_set_note_params`) reach (`seq_set_channel_param`/`midi_emit_voice_msg_w1`/`w2`/`w3`/
+`opl_event_note_on`) — separate, not-yet-started future work. The **int8-synced end-to-end
+gate** remains the standing
 project-wide deferral (the Unicorn capture granularity does not match the engine's
 physics-frame rate; a frame-accurate DOSBox-path capture is needed before the full game
 loop can be replay-validated tick-for-tick — unchanged from Phases 2/3/4/5). (At the time of

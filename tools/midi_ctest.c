@@ -57,6 +57,12 @@
  * midi_* / opl_event_* symbols this task's future entries would name do not exist as
  * function bodies, so referencing them now would fail to link).
  *
+ * UPDATE (Task D1): the FIRST 4 PORTED[] entries land — the OPL2 register-level driver
+ * leaves reconstructed in src/sound.c (opl_read_status/opl2_reset_all_regs/
+ * maybe_opl2_detect_chip/opl_set_note_params). src/midi.c itself is still the
+ * globals-only skeleton described above; see the PORTED[] doc comment below for the
+ * is_l4 reasoning per fn.
+ *
  * Build/run (also wrapped by tools/validate_midi.sh):
  *     cc -O2 -Wall -Werror -o /tmp/midi_ctest tools/midi_ctest.c && \
  *       /tmp/midi_ctest local/build/render/midi_trace.bin
@@ -442,26 +448,68 @@ u8  prev_game_mode;         /* player.c 0x8552 */
 
 /* ── HOST stubs for the game_stubs.c carve-outs both TUs' compiled bodies
  *  reference — verbatim from tools/sound_ctest.c ────────────────────────────────
- *  seq_set_channel_param / midi_emit_voice_msg_w3 / opl_event_note_on are ALSO
- *  prototyped in src/midi.h (same call-tree map) but midi.c does not define them
- *  (Task C1 report) — these are the only bodies satisfying either TU's reference,
- *  no clash. */
+ *  seq_set_channel_param / midi_emit_voice_msg_w1 / midi_emit_voice_msg_w3 /
+ *  opl_event_note_on are ALSO prototyped in src/midi.h (same call-tree map) but
+ *  midi.c does not define them (Task C1 report) — these are the only bodies
+ *  satisfying either TU's reference, no clash.  midi_emit_voice_msg_w1 is a NEW
+ *  carve-out Task D1 discovers (opl_set_note_params calls it).
+ *  maybe_opl2_detect_chip / opl2_reset_all_regs are NO LONGER stubbed here —
+ *  RECONSTRUCTED in src/sound.c (Task D1; no host stub, they come from the
+ *  included TU, and are now PORTED[] entries below). */
 void seq_set_channel_param(void)  {}
+void midi_emit_voice_msg_w1(void) {}
 void midi_emit_voice_msg_w3(void) {}
 void opl_event_note_on(void)      {}
 void FUN_1000_6183(void)         {}
-void maybe_opl2_detect_chip(void) {}
-void opl2_reset_all_regs(void)    {}
 void pit_set_counter0(void)       {}
 void p1_try_trigger_pending_action(void) {}   /* 1000:654e — player.c (host no-op) */
+
+/* ── Task D1 zero-arg registry wrappers: OPL2 register-level driver leaves ────────────
+ *  opl_read_status / opl2_reset_all_regs / maybe_opl2_detect_chip are genuine, self-
+ *  contained port emitters (or pure IN) — no out-of-scope leaf anywhere in their own
+ *  call tree — so they are called bare, matching tools/sound_ctest.c's
+ *  call_pc_speaker_silence-style deterministic-driver wrappers. */
+static void call_opl_read_status(void)        { (void)opl_read_status(); }
+static void call_opl2_reset_all_regs(void)    { opl2_reset_all_regs(); }
+static void call_maybe_opl2_detect_chip(void) { maybe_opl2_detect_chip(); }
+static void call_opl_set_note_params(void)
+{
+    /* opl_set_note_params is a genuine STACK-ARG near fn (chan/note_param1/
+     * note_param2 pushed by the caller) — unlike the register-entry targets above,
+     * the fixed MIDI_SNAP shape (registers + globals) does not serialize stack args,
+     * so there is no entry-snap recovery path for this ABI.  This fn is registered
+     * below under the SEMANTIC comparator (is_l4=0), which does not depend on the
+     * values passed (the real asm touches none of the tracked MIDI sequencer-state
+     * globals for ANY input — see its own RECONSTRUCTION FIDELITY note in
+     * src/sound.c) — any concrete values exercise the same, real, reproducible
+     * differential. */
+    opl_set_note_params(0, 0, 0);
+}
 
 /* ════════════════════════════════════════════════════════════════════════════
  *  PORTED REGISTRY — engine seg-1000 offset -> reconstructed-C callable.
  *
- *  Task C3 BASELINE: EMPTY. No entry references any midi_* / seq_* / opl_event_* body
- *  yet — none exist (src/midi.c is a globals-only skeleton; Phase D/E ports them).
- *  Referencing an unported function's C name here would fail to LINK, not just
- *  fail a comparator — so the registry starts genuinely empty, not all-NULL.
+ *  Task C3 BASELINE was EMPTY (no midi_* / seq_* / opl_event_* body existed yet).
+ *  Task D1 adds the FIRST 4 entries — the OPL2 register-level driver leaves
+ *  reconstructed in src/sound.c (opl_read_status / opl2_reset_all_regs /
+ *  maybe_opl2_detect_chip / opl_set_note_params) — moving them from UNPORTED to
+ *  PORT_CHECKED/PASS.  midi.c itself is still a globals-only skeleton (Phase D/E
+ *  ports its own midi_* / seq_* bodies later); referencing one of ITS unported names
+ *  here would still fail to LINK.
+ *
+ *  is_l4 choice for the 4 Task D1 entries (see each fn's own RECONSTRUCTION FIDELITY
+ *  note in src/sound.c for the full reasoning): opl_read_status / opl2_reset_all_regs
+ *  / maybe_opl2_detect_chip have NO nested out-of-scope leaf anywhere in their call
+ *  tree, so their trace record's OUT events are entirely their OWN -> is_l4=1
+ *  (comparator B, cmp_ports) validates the real OUT sequence byte-for-byte (466 / 12
+ *  OUT events respectively for the reset/detect fns; 0 OUT + the IN replay for the
+ *  status read).  opl_set_note_params is DIFFERENT: its own code emits ZERO ports
+ *  directly — every one of the 32 OUT events in ITS trace record comes from the two
+ *  carve-out leaves it calls (midi_emit_voice_msg_w1: 24, opl_event_note_on: 8 — both
+ *  out of this task's scope, confirmed by summing their own separately-captured
+ *  records) -> is_l4=0 (comparator A, cmp_semantic) is used instead: a real,
+ *  reproducible assertion (none of the tracked sequencer-state globals are touched)
+ *  rather than faking a port sequence this task cannot produce.
  *
  *  ─────────────────────────────────────────────────────────────────────────────
  *  >>> Task D/E: ADD ONE ENTRY HERE PER FUNCTION AS ITS BODY LANDS IN src/midi.c <<<
@@ -488,7 +536,11 @@ typedef struct { u16 off; const char *name; int is_l4; void (*fn)(void);
                  int check_tbl; } ported_t;
 
 static const ported_t PORTED[] = {
-    /* empty — see the baseline note above */
+    /* Task D1 — OPL2 register-level driver leaves (src/sound.c). */
+    { 0x9056, "opl_read_status",        1, call_opl_read_status,        0 },
+    { 0x8eeb, "opl2_reset_all_regs",    1, call_opl2_reset_all_regs,    0 },
+    { 0x8fb6, "maybe_opl2_detect_chip", 1, call_maybe_opl2_detect_chip, 0 },
+    { 0x9241, "opl_set_note_params",    0, call_opl_set_note_params,    0 },
 };
 #define PORTED_N (sizeof(PORTED) / sizeof(PORTED[0]))
 
@@ -591,10 +643,11 @@ int main(int argc, char **argv)
     printf("midi_ctest: replay harness over %s\n", path);
     printf("  trace: MIDTRC01 v%u, %u scenarios, %u fn-names (SNAP=%d B)\n",
            ver, nsc, nfn, SNAP_SIZE);
-    printf("  src/midi.c: BASELINE (globals-only skeleton, Task C1) — PORTED[] is "
-           "empty; every record reports UNPORTED. src/sound.c's OPL2/MPU/PIT drivers "
-           "are linked in (dual-#include) but not yet exercised through any MIDI-side "
-           "entry. Expected FAIL=0.\n");
+    printf("  src/midi.c: still a globals-only skeleton (Task C1) — no midi_*/seq_* body "
+           "PORTED yet, those records report UNPORTED. src/sound.c's 4 OPL2 register-level "
+           "driver leaves (opl_read_status/opl2_reset_all_regs/maybe_opl2_detect_chip/"
+           "opl_set_note_params) ARE now PORTED (Task D1) and PORT_CHECKED/PASS below. "
+           "Expected FAIL=0.\n");
 
     for (s = 0; s < nsc; s++) {
         u8 sid, name_len;

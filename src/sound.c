@@ -602,34 +602,22 @@ int mpu401_reset_to_uart(void)
  *  else runs the OPL register-init leaf opl2_reset_all_regs (1000:8eeb).  Returns the
  *  flag.  asm 1000:8b2a verbatim.
  *
- *  CARVE-OUT: maybe_opl2_detect_chip + opl2_reset_all_regs are further out-of-scope
- *  leaves this port newly reaches (guidance: carve out anything beyond the 4 target
- *  fns) — both already carry canonical Ghidra names (a prior naming pass) but neither
- *  is reconstructed here: maybe_opl2_detect_chip is an OPL2-status-register probe
- *  (reads port 0x388 into AL/DL, tests bit patterns) and opl2_reset_all_regs is an
- *  ~20-register OPL init sequence with 2 status-poll loops — genuine OPL-driver work,
- *  separate from this task's MPU/init/timer/status-latch scope.  Faithful-signature
- *  no-op carve-out stubs in game_stubs.c + tools/sound_ctest.c (the established
- *  `void f(void)` convention, e.g. FUN_1000_6183 / the 3 MIDI-note carve-outs above).
+ *  Task D1 PORTS maybe_opl2_detect_chip + opl2_reset_all_regs FOR REAL (see their
+ *  definitions below, alongside opl_write_reg/opl_read_status) — no longer carve-out
+ *  stubs; prototyped in sound.h now.
  *
  *  RECONSTRUCTION FIDELITY (the ZF-only branch): maybe_opl2_detect_chip's asm computes
  *  its detected/not-detected verdict into AH, then executes `AND AH,AH` (setting ZF)
  *  BEFORE popping its saved AX/CX/DX off the stack — so by the time it RETs, the AX
  *  register the caller sees is the CALLER's OWN original AX (restored by the POPs), not
  *  the verdict; only the ZERO FLAG survives to convey the result.  A void-returning C
- *  stub cannot convey a flags-only outcome, so the branch this fn takes on that verdict
- *  is modelled via the file-scope `snd_opl_detect_zf` (defaulting to "not detected",
- *  matching the snd_sched_carry_in modelled-flag convention).  The exact default is
- *  IMMATERIAL to the validated state: both destinations (clearing
- *  midi_seq_step_active, a global not in the SND_SNAP, or calling the equally-carved-
- *  out opl2_reset_all_regs) have zero observable effect on any comparator-asserted
- *  global — so wiring this real body into snddrv_init's already-validated call site
- *  (below) cannot regress the device_init scenario either way. */
+ *  function cannot convey a flags-only outcome directly, so the branch this fn takes on
+ *  that verdict is modelled via the file-scope `snd_opl_detect_zf` (1 = ZF set = "not
+ *  detected", matching the snd_sched_carry_in modelled-flag convention) — the REAL
+ *  maybe_opl2_detect_chip body (below) SETS this flag from the verdict it actually
+ *  computes, so this already-validated ZF-branch keeps its exact existing contract. */
 u16 midi_seq_step_active;             /* DGROUP 0x557e */
 static u8 snd_opl_detect_zf = 1;      /* modelled ZF from maybe_opl2_detect_chip (1=not detected) */
-
-extern void maybe_opl2_detect_chip(void);   /* 1000:8fb6 — OPL2 chip-status probe (carve) */
-extern void opl2_reset_all_regs(void);      /* 1000:8eeb — OPL2 register init (carve) */
 
 u16 snddrv_init_substep(void)
 {
@@ -643,14 +631,14 @@ u16 snddrv_init_substep(void)
     return midi_seq_step_active;
 }
 
-/* out-of-scope MIDI-note carve-outs the 9 MIDI dispatch backends (below) reach — a
- *  NEW carve-out boundary this task discovered (see the "MIDI dispatch backends"
- *  section).  All three already carry canonical Ghidra names from a prior naming pass;
+/* out-of-scope MIDI-note carve-outs the 9 MIDI dispatch backends (below) reach, PLUS
+ *  midi_emit_voice_msg_w1 (1000:8b81) — a NEW carve-out boundary Task D1 discovers:
+ *  opl_set_note_params (1000:9241, reconstructed below) tail-calls it before storing the
+ *  note params.  All four already carry canonical Ghidra names from a prior naming pass;
  *  none is reconstructed here (genuinely out of scope — separate future MIDI-engine
- *  work), matching the FUN_1000_6183 precedent below (and the pit_set_counter0 /
- *  maybe_opl2_detect_chip / opl2_reset_all_regs carve-outs Task A3 adds just above and
- *  just below). */
+ *  work), matching the FUN_1000_6183 / pit_set_counter0 precedent. */
 extern void seq_set_channel_param(void);     /* 1000:922c — OPL/PC-spk program-change (carve) */
+extern void midi_emit_voice_msg_w1(void);    /* 1000:8b81 — OPL program-change entry (carve), reached from opl_set_note_params (D1) */
 extern void midi_emit_voice_msg_w3(void);    /* 1000:8e93 — OPL program-change fwd chain (carve) */
 extern void opl_event_note_on(void);         /* 1000:8ea3 — OPL note-on -> opl_play_note (carve) */
 
@@ -1698,6 +1686,165 @@ void opl2_all_notes_off(void)
         opl_play_note(0, 0, 0, (u16)voice_index);
         voice_index = voice_index + 1;
     } while (voice_index < 10);
+}
+
+/* ── opl_read_status (1000:9056) — read the OPL2/AdLib status byte: PORTED (Task D1) ──
+ *  IN AL,0x388.  asm 1000:9056 verbatim: PUSH DX; MOV DX,0x388; IN AL,DX; POP DX; RET. */
+u8 opl_read_status(void)
+{
+    return (u8)inp(0x388);
+}
+
+/* ── opl2_reset_all_regs (1000:8eeb) — OPL2 full-register init sequence: PORTED (D1) ──
+ *  233 back-to-back opl_write_reg calls (each 2 OUT + 41 settle-read status IN's, per
+ *  opl_write_reg's own header) programming the ENTIRE OPL2 register file to a known
+ *  state: 18 individually-coded 0xff writes (envelope/wave-select-adjacent regs 0x40-
+ *  0x42/0x48-0x4a/0x50-0x52/0x43-0x45/0x4b-0x4d/0x53-0x55 — the operator release/sustain
+ *  regs for all 9x2 operators), then two zero-fill sweeps (reg 0x01..0x3f, reg 0x60..0xf5
+ *  — blanking the rest of the OPL2 register space including the CSW/AM-VIB/freq/level/
+ *  waveform regs), then 2 final fixed writes (reg 0x04=0x06 timer-control, reg 0xbd=0x00
+ *  rhythm/depth).  asm 1000:8eeb verbatim: 18 explicit MOV AH,n/MOV AL,0xff/CALL 9007
+ *  triples (each wrapped in a dead PUSH AX/POP AX in the original — the Watcom-recompiled
+ *  1:1 body drops that dead register save/restore, matching the project's stack-probe-
+ *  omission convention), then `MOV AX,0x100; (loop) CALL 9007; INC AH; CMP AH,0x40; JNZ
+ *  loop` (regs 0x01..0x3f, val 0), then `MOV AX,0x6000; (loop) CALL 9007; INC AH; CMP
+ *  AH,0xf6; JNZ loop` (regs 0x60..0xf5, val 0), then `MOV AX,0x406; CALL 9007` and
+ *  `MOV AX,0xbd00; CALL 9007`.  18+63+150+1+1 = 233 writes -> 466 total OUT 0x388/0x389
+ *  events, byte-for-byte confirmed against the Task C2 MIDI-oracle's sole capture record
+ *  for this fn (n_io=10019, out=466, in=9553; local/build/render/midi_trace.bin). */
+void opl2_reset_all_regs(void)
+{
+    u8 reg;
+
+    opl_write_reg(0x40, 0xff);
+    opl_write_reg(0x41, 0xff);
+    opl_write_reg(0x42, 0xff);
+    opl_write_reg(0x48, 0xff);
+    opl_write_reg(0x49, 0xff);
+    opl_write_reg(0x4a, 0xff);
+    opl_write_reg(0x50, 0xff);
+    opl_write_reg(0x51, 0xff);
+    opl_write_reg(0x52, 0xff);
+    opl_write_reg(0x43, 0xff);
+    opl_write_reg(0x44, 0xff);
+    opl_write_reg(0x45, 0xff);
+    opl_write_reg(0x4b, 0xff);
+    opl_write_reg(0x4c, 0xff);
+    opl_write_reg(0x4d, 0xff);
+    opl_write_reg(0x53, 0xff);
+    opl_write_reg(0x54, 0xff);
+    opl_write_reg(0x55, 0xff);
+
+    for (reg = 0x01; reg != 0x40; reg++) {    /* MOV AX,0x100;  INC AH; CMP AH,0x40; JNZ */
+        opl_write_reg(reg, 0x00);
+    }
+    for (reg = 0x60; reg != 0xf6; reg++) {    /* MOV AX,0x6000; INC AH; CMP AH,0xf6; JNZ */
+        opl_write_reg(reg, 0x00);
+    }
+
+    opl_write_reg(0x04, 0x06);                /* MOV AX,0x406  */
+    opl_write_reg(0xbd, 0x00);                /* MOV AX,0xbd00 */
+}
+
+/* ── maybe_opl2_detect_chip (1000:8fb6) — OPL2 chip-detect probe: PORTED (Task D1) ──
+ *  The classic AdLib/OPL2 timer-based presence probe: reset both OPL timers (reg
+ *  0x04=0x60, then reg 0x04=0x80 — mask both), latch the status byte (status_before;
+ *  timer flags should read clear on a real chip), program Timer1's counter (reg
+ *  0x02=0xff) and start/unmask Timer1 (reg 0x04=0x21), burn a fixed ~199-iteration
+ *  status-read delay (LOOP CX=0xc7) for Timer1 to expire, latch the status byte again
+ *  (status_after — should now show the Timer1-expired + IRQ-request flags on a real
+ *  chip), then reset/mask the timers again (reg 0x04=0x60, reg 0x04=0x80).  Verdict:
+ *  "detected" iff (status_after & 0xe0)==0xc0 AND (status_before & 0xe0)==0.  asm
+ *  1000:8fb6 verbatim: 6 opl_write_reg calls -> 12 OUT events + 201 opl_read_status calls
+ *  (1 + a 199-iteration LOOP + 1) -> 201 IN events, byte-for-byte confirmed against the
+ *  Task C2 MIDI-oracle's sole capture record for this fn (n_io=459, out=12, in=447).
+ *
+ *  RECONSTRUCTION FIDELITY (ZF-only return — see snddrv_init_substep's own note above):
+ *  the asm computes the verdict into AH then executes `AND AH,AH` (setting ZF) BEFORE
+ *  popping the ORIGINAL caller's AX/CX/DX back off the stack — so by RET the caller's
+ *  AX/CX/DX are its own unchanged values; only the ZERO FLAG (ZF = AH==0, i.e. "NOT
+ *  detected") survives to the caller.  Modelled via the file-scope snd_opl_detect_zf flag
+ *  (1 = ZF set = not detected), matching the modelled-flag convention already established
+ *  at snddrv_init_substep.  In the MIDI-oracle capture (no real OPL2 chip behind the
+ *  Unicorn IN hook — port 0x388 always reads 0x00) status_before==status_after==0, so
+ *  (status_after&0xe0)==0 != 0xc0 -> "not detected", matching the pre-existing default
+ *  (snd_opl_detect_zf==1). */
+void maybe_opl2_detect_chip(void)
+{
+    u8  status_before, status_after;
+    u8  detected;
+    u16 delay;
+
+    opl_write_reg(0x04, 0x60);
+    opl_write_reg(0x04, 0x80);
+    status_before = opl_read_status();
+
+    opl_write_reg(0x02, 0xff);
+    opl_write_reg(0x04, 0x21);
+    delay = 0xc7;                              /* MOV CX,0xc7 */
+    do {                                       /* CALL 9056; LOOP 8fd8 */
+        (void)opl_read_status();
+        delay--;
+    } while (delay != 0);
+    status_after = opl_read_status();
+
+    opl_write_reg(0x04, 0x60);
+    opl_write_reg(0x04, 0x80);
+
+    detected = 0;
+    if ((u8)(status_after & 0xe0) == 0xc0 && (u8)(status_before & 0xe0) == 0x00) {
+        detected = 1;
+    }
+    snd_opl_detect_zf = (u8)(detected == 0);   /* AND AH,AH -> ZF = (AH==0) */
+}
+
+/* CODE-segment scratch bytes at 1000:9272/0x9273 — immediately following
+ * opl_set_note_params's own RET (1000:9271) — the 2 note-trigger bytes it stages for
+ * opl_event_note_on. */
+u8 opl_note_param1;   /* CODE 0x9272 */
+u8 opl_note_param2;   /* CODE 0x9273 */
+
+/* ── opl_set_note_params (1000:9241) — MIDI-voice note-trigger front end: PORTED (D1) ──
+ *  Stack-arg near fn: chan=[BP+4] (word), note_param1(byte)=[BP+6], note_param2(byte)=
+ *  [BP+8].  Tail-calls the out-of-scope midi_emit_voice_msg_w1 (1000:8b81; BX=chan,
+ *  AH=1 in the real asm — see the RECONSTRUCTION FIDELITY note below), stores
+ *  note_param1/note_param2 into the CODE-segment scratch bytes at 0x9272/0x9273, then
+ *  tail-calls the out-of-scope opl_event_note_on (1000:8ea3; AL=1, DS:SI->0x9272 in the
+ *  real asm) to actually trigger the note.  asm 1000:9241 verbatim: PUSH BP; MOV BP,SP;
+ *  PUSH DS; PUSH SI; MOV AX,0x1000; MOV DS,AX; MOV SI,0x9272; MOV BX,[BP+4]; MOV AH,1;
+ *  CALL 8b81; MOV AX,0x1000; MOV DS,AX; MOV SI,0x9272 (DS:SI reloaded — clobbered by the
+ *  w1 call); MOV AL,[BP+6]; MOV [SI],AL; MOV AL,[BP+8]; MOV [SI+1],AL; MOV AL,1;
+ *  CALL 8ea3; POP SI; POP DS; POP BP; RET.
+ *
+ *  RECONSTRUCTION FIDELITY (carve-out register inputs not wired): midi_emit_voice_msg_w1
+ *  and opl_event_note_on are out-of-scope carve-out leaves (game_stubs.c no-ops), matching
+ *  the project's existing precedent for calling them (e.g. snddrv_dispatch_d_mode0/mode1's
+ *  bare `seq_set_channel_param();` / `opl_event_note_on();` calls above) — the real asm's
+ *  BX/AH/AL/DS:SI register inputs to those two leaves are therefore NOT wired here (a stub
+ *  takes no args); `chan` is read off the stack (matching the real ABI) but only feeds
+ *  those carved-out calls, so it is otherwise unused on this host build.
+ *
+ *  RECONSTRUCTION FIDELITY (port-write differential not meaningful here — a capture-scope
+ *  fact, not a weakened gate): opl_set_note_params' OWN code issues ZERO opl_write_reg
+ *  calls.  Every one of the 32 OUT events the Task C2 MIDI-oracle capture recorded for
+ *  this fn's sole trace record (n_io=688, out=32, in=656) originates from the REAL
+ *  (non-stub) midi_emit_voice_msg_w1 (24 OUT: 12 real opl_write_reg calls it makes) +
+ *  opl_event_note_on (8 OUT: 4 more) it calls — both out of THIS task's scope, confirmed
+ *  by summing their OWN separately-captured records (24+8=32, exact).  Reproducing that
+ *  port sequence on the host would require reconstructing those two carve-outs for real,
+ *  which is not this task.  So tools/midi_ctest.c registers this fn with the SEMANTIC-
+ *  state comparator (not the port-write one): the real asm touches none of the tracked
+ *  MIDI sequencer-state globals either (confirmed via the disasm above — it only writes
+ *  the untracked opl_note_param1/param2 scratch bytes), so the differential still asserts
+ *  something true and reproducible (no sequencer-state corruption) without faking a port
+ *  sequence this task cannot produce.  See docs/reconstruction-fidelity.md. */
+void opl_set_note_params(u16 chan, u8 note_param1, u8 note_param2)
+{
+    (void)chan;                 /* real asm: BX=chan (carved-out midi_emit_voice_msg_w1 input) */
+    midi_emit_voice_msg_w1();   /* carve-out (see FIDELITY note above); real asm: AH=1 */
+    opl_note_param1 = note_param1;
+    opl_note_param2 = note_param2;
+    opl_event_note_on();        /* carve-out; real asm: AL=1, DS:SI -> 0x9272/0x9273 */
 }
 
 /* ── pc_speaker_silence (1000:9115) — silence the PC speaker ─────────────────────────

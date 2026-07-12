@@ -465,13 +465,16 @@ u8  prev_game_mode;         /* player.c 0x8552 */
  *  (called from snddrv_init_substep) and pit_set_counter0 (called from
  *  timer_teardown_restore's dead-on-this-harness guarded body).
  *  p1_try_trigger_pending_action (1000:654e) is a player.c fn play_state_sound calls —
- *  host no-op (mutates only player anim-channel state, outside the sound SNAP). */
+ *  host no-op (mutates only player anim-channel state, outside the sound SNAP).
+ *  maybe_opl2_detect_chip / opl2_reset_all_regs are NO LONGER stubbed here — RECONSTRUCTED
+ *  in src/sound.c (Task D1; no host stub, they come from the included TU).
+ *  midi_emit_voice_msg_w1 is a NEW carve-out Task D1 discovers (opl_set_note_params calls
+ *  it) — same class as the other 3 MIDI-note carve-outs below. */
 void seq_set_channel_param(void)  {}
+void midi_emit_voice_msg_w1(void) {}
 void midi_emit_voice_msg_w3(void) {}
 void opl_event_note_on(void)      {}
 void FUN_1000_6183(void)         {}
-void maybe_opl2_detect_chip(void) {}
-void opl2_reset_all_regs(void)    {}
 void pit_set_counter0(void)       {}
 void p1_try_trigger_pending_action(void) {}   /* 1000:654e — player.c (host no-op) */
 

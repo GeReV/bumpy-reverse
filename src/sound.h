@@ -179,6 +179,13 @@ void opl2_all_notes_off(void);                     /* 1000:8e2f — PORTED (T5) 
 void opl_write_reg(u8 reg, u8 val);               /* 1000:9007 — PORTED (T5) OPL reg write */
 void opl_play_note(u8 param_1, u8 param_2, u16 param_3, u16 param_4); /* 1000:905d (excl) */
 
+/* ── PORTED (Task D1 — OPL2 register-level driver leaves) ────────────────────────────
+ *  See the per-fn RECONSTRUCTION FIDELITY notes at each definition in sound.c. */
+u8   opl_read_status(void);                        /* 1000:9056 — PORTED (D1) OPL2 status IN */
+void opl2_reset_all_regs(void);                    /* 1000:8eeb — PORTED (D1) OPL2 reg init  */
+void maybe_opl2_detect_chip(void);                 /* 1000:8fb6 — PORTED (D1) OPL2 chip-detect (ZF-only; see snd_opl_detect_zf's caller, snddrv_init_substep) */
+void opl_set_note_params(u16 chan, u8 note_param1, u8 note_param2); /* 1000:9241 — PORTED (D1) */
+
 /* L4 hardware-backend state (owned in sound.c). */
 extern u8 opl_reg_shadow_80cc[0x100];   /* CODE   0x80cc — OPL register write-back shadow */
 extern u8 opl_fnum_lo_5593[0x100];      /* DGROUP 0x5593 — per-note F-number low (runtime) */
@@ -186,6 +193,8 @@ extern u8 opl_fnum_hi_559c[0x100];      /* DGROUP 0x559c — per-note F-number w
 extern u8 opl_chan_data_55b4[0x100];    /* DGROUP 0x55b4 — per-channel data (runtime)       */
 extern u8 opl_chan_idx_5614[0x100];     /* DGROUP 0x5614 — per-channel block index (runtime) */
 extern u8 snd_mpu_byte_89e2;            /* the byte mpu401_write_data_polled writes (engine AH; host-staged) */
+extern u8 opl_note_param1;              /* CODE   0x9272 — opl_set_note_params' staged note byte 1 */
+extern u8 opl_note_param2;              /* CODE   0x9273 — opl_set_note_params' staged note byte 2 */
 
 /* ── PORTED (Phase-6 T6 — L5 ISR tone-sequencer; reconstructed 1:1, NOT runtime-gated) ──
  *  The PIT (IRQ0 / int-8) timer ISR multiplexer + the far tone-sequencer callbacks it
