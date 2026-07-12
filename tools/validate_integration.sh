@@ -79,9 +79,8 @@ CARVEOUT_ALLOWLIST=(
   # P2 indirect-call backend carve
   p2_dispatch_move_state_handler
   # out-of-scope sound L4/L6 device drivers + helpers
-  record_min_status_code mpu401_reset_to_uart FUN_1000_8b2a FUN_1000_91cf
-  FUN_1000_8af6 FUN_1000_8e48 FUN_1000_91d7 FUN_1000_8b04 FUN_1000_8e50
-  FUN_1000_91df FUN_1000_8b0d FUN_1000_8e58 FUN_1000_7fef FUN_1000_6183
+  FUN_1000_6183 seq_set_channel_param midi_emit_voice_msg_w3 opl_event_note_on
+  maybe_opl2_detect_chip opl2_reset_all_regs pit_set_counter0
   # out-of-scope player handler-table targets
   play_walk_anim_default p1_set_pixel_from_cell step_walk_anim FUN_1000_4802
   move_walk_right_anim_step enter_mode_0b_jump_start move_anim_step_to_mode0c

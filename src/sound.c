@@ -394,9 +394,10 @@ switchD_1000_6e7e_default:
  *  NOTE on the record_min_status_code arg: the ORIGINAL (decomp 1000:9488) does NOT pass
  *  param_1 — it passes the PACKED ENTRY-FLAGS word, the bit-OR of the CPU flags captured at
  *  entry: (in_NT<<14)|(in_OF<<11)|(in_IF<<9)|(in_TF<<8)|(in_SF<<7)|(in_ZF<<6)|(in_AF<<4)|
- *  (in_PF<<2)|in_CF.  Because record_min_status_code is a no-op stub (records into CS:[0x946c],
- *  not part of any validated frame/port sequence), we hand it the available value (param_1)
- *  in lieu of reconstructing the host-absent FLAGS register — observationally identical.
+ *  (in_PF<<2)|in_CF.  record_min_status_code is PORTED (records into CS:[0x946c] via
+ *  last_status_code, not part of any validated frame/port sequence), so we hand it the
+ *  available value (param_1) in lieu of reconstructing the host-absent FLAGS register —
+ *  observationally identical.
  *  Deeper callee FUN_1000_7df9 = set_timer_slot_raw (PORTED T4); speaker_gate_reset PORTED T5. */
 u16 schedule_timer_callback_a(u16 param_1, u16 param_2, u16 param_3, u16 param_4,
                               u16 param_5, u16 param_6, u16 param_7, u16 param_8)
@@ -405,7 +406,7 @@ u16 schedule_timer_callback_a(u16 param_1, u16 param_2, u16 param_3, u16 param_4
     u8  in_CF = snd_sched_carry_in;   /* modelled entry carry (see FIDELITY note) */
 
     record_min_status_code(param_1);  /* ORIGINAL: packed entry-FLAGS word (in_NT..in_CF
-                                        *  bit-OR); param_1 stands in (callee is a no-op stub) */
+                                        *  bit-OR); param_1 stands in for it (callee is PORTED) */
     ret_status = 0xffff;
     if (!in_CF) {
         snd_param_frame[0] = param_2;   /* DAT_1000_9788 */
@@ -442,7 +443,7 @@ u16 schedule_timer_callback_b(u16 param_1, u16 param_2, u16 param_3, u16 param_4
     u16 ret_status;
     u8  in_CF = snd_sched_carry_in;
 
-    record_min_status_code(param_1);    /* ORIGINAL: packed entry-FLAGS word (no-op stub) */
+    record_min_status_code(param_1);    /* ORIGINAL: packed entry-FLAGS word (record_min_status_code is PORTED) */
     ret_status = 0xffff;
     if (!in_CF) {
         snd_param_frame[0] = param_2;   /* DAT_1000_9788 */
@@ -472,7 +473,7 @@ u16 schedule_timer_callback_c(u16 param_1, u16 param_2)
     u16 ret_status;
     u8  in_CF = snd_sched_carry_in;
 
-    record_min_status_code(param_1);    /* ORIGINAL: packed entry-FLAGS word (no-op stub) */
+    record_min_status_code(param_1);    /* ORIGINAL: packed entry-FLAGS word (record_min_status_code is PORTED) */
     ret_status = 0xffff;
     if (!in_CF) {
         snd_param_frame[9] = 0xf;       /* DAT_1000_979a (byte 0x0f) */
@@ -676,9 +677,14 @@ extern void FUN_1000_6183(void);          /* 1000:6183   out-of-scope entity swe
  *  and is never set nonzero by any function this codebase reconstructs or exercises —
  *  so the entire guarded body (the vector restore, the INT 21h calls, the table read,
  *  the pit_set_counter0 call) is PROVABLY UNREACHED by every scenario in the trace; the
- *  exact register-stand-in values are therefore immaterial to the gate.  Ported 1:1 for
- *  faithfulness + the BUMPY.EXE link (documented, same "reconstructed as documentation,
- *  not runtime-gated" precedent as the L5 ISR tone sequencer later in this file).
+ *  exact register-stand-in values are therefore immaterial to the gate.  DEVIATION: the
+ *  table read below masks snd_isr_restore_index with `& (table-length - 1)`, which the asm
+ *  (`MOV BX,0x54de; ADD AX,AX; ADD BX,AX`) does NOT do (unconditional, no mask); the mask is
+ *  an invented defensive clamp over the table's un-groundable real extent (kept to avoid a
+ *  real C-array OOB, not a reproduction of engine behavior) — immaterial since the guarded
+ *  body is provably dead per above.  Ported 1:1 for faithfulness + the BUMPY.EXE link
+ *  (documented, same "reconstructed as documentation, not runtime-gated" precedent as the
+ *  L5 ISR tone sequencer later in this file).
  *
  *  CARVE-OUT: pit_set_counter0 (1000:7f9a) is a further out-of-scope PIT hardware-init
  *  leaf this port reaches (also called by the unrelated, unreconstructed
@@ -1743,8 +1749,9 @@ void speaker_gate_strobe(void)
  *  If sound_mode (DGROUP 0x683e) == 0: record_min_status_code(0) then speaker_gate_strobe.
  *  Else: record_min_status_code(0xff) only.  asm 1000:946e: MOV AX,[0x683e]; CMP 0;
  *  MOV AX,0xff; JZ .latch_strobe; MOV AX,0; CALL 945b; JMP end; .latch_strobe: CALL 945b;
- *  CALL 9451(strobe).  record_min_status_code is a stub (records into CS:[0x946c]); the
- *  validated OUT is the strobe's OUT 0x61 (sound_mode==0 capture: OUT 0x61=0xfc). */
+ *  CALL 9451(strobe).  record_min_status_code is PORTED (records into CS:[0x946c] via
+ *  last_status_code); the validated OUT is the strobe's OUT 0x61 (sound_mode==0 capture:
+ *  OUT 0x61=0xfc). */
 void record_status_and_strobe_speaker(void)
 {
     if (sound_mode == 0) {
@@ -1785,7 +1792,7 @@ void record_status_and_strobe_speaker(void)
  *
  *  The CS-relative entry-guard `call 0x9439; jne exit` reads sound_mode (DGROUP 0x683e) and
  *  skips the body when sound_mode != 0; 0x9434 is the noop JMP-thunk chain (AL preserved);
- *  0x945b = record_min_status_code (no-op stub); 0x7df9 = set_timer_slot_raw (PORTED); 0x7e1f
+ *  0x945b = record_min_status_code (PORTED); 0x7df9 = set_timer_slot_raw (PORTED); 0x7e1f
  *  = the channel-slot clear (modelled by isr_disable_timer_slot below); 0x9451 =
  *  speaker_gate_strobe (PORTED).  Stack-probe / register-save prologue omitted (convention).
  * ════════════════════════════════════════════════════════════════════════════ */

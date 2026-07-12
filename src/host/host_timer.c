@@ -180,8 +180,9 @@ void install_interrupt_handler(void)
  * NOTE: teardown is NOT called install_interrupt_handler's own name because the
  * engine symbol install_interrupt_handler has no paired "uninstall" entry point
  * in the reconstruction's public interface (the engine's timer_teardown is
- * FUN_1000_7fef, a carve-out in game_stubs.c).  The host exposes this as a
- * separate internal symbol used by host_boot.c's atexit/exit path. */
+ * timer_teardown_restore, 1000:7fef, PORTED in sound.c — Task A3).  The host
+ * exposes this as a separate internal symbol used by host_boot.c's atexit/exit
+ * path. */
 void host_timer_teardown(void)
 {
     /* Restore old INT 8 vector. */

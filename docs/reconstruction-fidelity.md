@@ -376,6 +376,16 @@ L5 is reconstructed 1:1 as **documentation** (NOT runtime-gated — see below).
   them; `validate_sound` is unaffected (`PASS=4414 FAIL=0 UNPORTED=25
   PORT_CHECKED=3752`, identical to the pre-task baseline) and `validate_int8` (the
   end-to-end replay gate) still passes its full 150-frame replay unchanged.
+- **(j) Defensive index mask in `timer_teardown_restore`'s table read (Task A3 review
+  fix).** The reload-table read (`timer_restore_reload_value = timer_restore_table[
+  snd_isr_restore_index & (len-1)]`) adds a masking clamp the asm does NOT have (`MOV
+  BX,0x54de; ADD AX,AX; ADD BX,AX; MOV AX,[BX]` — unconditional, no mask). `sound.c`'s
+  `timer_restore_table[8]`'s real extent past what the disasm establishes is
+  un-groundable, so the mask is KEPT as a defensive clamp against a real C-array OOB
+  rather than as a reproduction of engine behavior — an intentional, documented
+  deviation, not an invented mechanism. Per deviation (i), `isr_installed_flag` gates
+  this entire body and defaults 0 / is never set nonzero by any reconstructed code, so
+  the masked read is provably dead on every current scenario — immaterial to any gate.
 
 **Phase-6 validation method:** per-function differential with two comparators (the L1–L3
 **semantic-state** gate: seed entry SND_SNAP → call the reconstructed C fn → assert the
