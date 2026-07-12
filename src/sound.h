@@ -140,6 +140,14 @@ int  arm_timer_callback(int channel, int reload, u16 cb_off, u16 cb_seg); /* 100
 int  disable_timer_callback(int channel);         /* 1000:7f65 — PORTED (T4) */
 int  get_timer_slot_field(int slot_index);        /* 1000:7e3d — PORTED (T4) */
 void timer_restore(void);                         /* 1000:7fde — PORTED (T4) */
+int  set_timer_slot_reg(int channel);             /* 1000:7e1f — PORTED (Task A3; renamed
+                                                        from the local `isr_disable_timer_slot`
+                                                        + exposed non-static this task so
+                                                        src/midi.c's midi_sound_init/
+                                                        midi_play_sequence can reuse the SAME
+                                                        reconstructed body — see the
+                                                        RECONSTRUCTION FIDELITY note at its
+                                                        definition in sound.c) */
 
 /* ── PORTED (Task A3 — MPU reset / init substep / timer teardown / status latch) ──────
  *  Finishes the last 4 stubbed leaves of the sound-effect pipeline.  See the per-fn

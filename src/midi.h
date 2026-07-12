@@ -156,31 +156,35 @@ extern s16 midi_track_count;     /* sound.c-owned — CODE 0x85a1 (the SMF seque
  * sound.c itself uses for player.c's cross-module globals via player.h). */
 
 /* ── MIDI/SMF-sequencer function prototypes ───────────────────────────────────────
- *  Task E1 lands the FIRST 5 SMF-parser bodies: midi_read_varlen (8891),
+ *  Task E1 landed the FIRST 5 SMF-parser bodies: midi_read_varlen (8891),
  *  midi_parse_file (8809), midi_init_track_table (87a2), midi_get_track_count
- *  (8999), seq_normalize_far_ptr (8a23) — all RECONSTRUCTED in midi.c now.  See the
- *  per-fn RECONSTRUCTION FIDELITY notes there for: midi_read_varlen's packed-return
- *  correction, seq_normalize_far_ptr's real-vs-modelled-no-op correction, and
- *  midi_parse_file/midi_init_track_table's forward dependency on midi_process_event
- *  (Task E2, still unreconstructed — game_stubs.c carries a carve-out stub for it
- *  meanwhile).  midi_load_sequence / midi_start_playback / midi_install_tempo_timer /
- *  midi_play_sequence / midi_sound_init remain simply UNDEFINED pending future
- *  reconstruction — nothing in the currently-reconstructed call graph reaches them
- *  yet, so game_stubs.c carries no stub for them.  The Phase-E MIDI-to-OPL
+ *  (8999), seq_normalize_far_ptr (8a23).  Task E2 completes the module: the
+ *  sequencer-driver + tempo-timer layer (midi_load_sequence 87cd,
+ *  midi_start_playback 8722, midi_sound_init 89a8, midi_play_sequence 8977,
+ *  midi_install_tempo_timer 86e9) PLUS the per-track event-stream cursor
+ *  (midi_process_event 873c) midi_init_track_table calls conditionally — ALL SIX
+ *  RECONSTRUCTED in midi.c now (its former game_stubs.c/tools/midi_ctest.c
+ *  carve-out stub REMOVED).  Reconstructing midi_process_event also UNBLOCKS
+ *  midi_parse_file's/midi_init_track_table's own differential (both real bodies
+ *  since Task E1, now PORTED[] in tools/midi_ctest.c — see the per-fn
+ *  RECONSTRUCTION FIDELITY notes in midi.c for: midi_read_varlen's packed-return
+ *  correction, seq_normalize_far_ptr's real-vs-modelled-no-op correction,
+ *  midi_load_sequence's song_data/aux_ptr NAME CAVEAT, and
+ *  midi_install_tempo_timer's tempo-ISR carve-out).  The Phase-E MIDI-to-OPL
  *  voice/channel-dispatch block further down (opl_event_note_on /
  *  midi_emit_voice_msg_w1/w2/w3 / emit_midi_voice_message / seq_set_channel_param)
  *  is RECONSTRUCTED in midi.c (Task D2) — see the per-fn RECONSTRUCTION FIDELITY
  *  notes there. */
 
 /* Phase D — load/parse/track-table pipeline. */
-int  midi_load_sequence(void *song_data, void *aux_ptr, u16 flag);  /* 1000:87cd */
-int  midi_parse_file(void);                                         /* 1000:8809 — RECONSTRUCTED (Task E1); register-entry (DS:SI = file image); PORTED[] entry deferred to Task E2 (see fidelity note) */
-void midi_init_track_table(void);                                   /* 1000:87a2 — RECONSTRUCTED (Task E1); PORTED[] entry deferred to Task E2 (see fidelity note) */
-void midi_start_playback(void);                                     /* 1000:8722 */
-void midi_install_tempo_timer(void);                                /* 1000:86e9 */
+int  midi_load_sequence(void *song_data, void *aux_ptr, u16 flag);  /* 1000:87cd — RECONSTRUCTED (Task E2); genuine stack-arg cdecl16near; see the song_data/aux_ptr NAME CAVEAT at its definition; PORTED (2 records) */
+int  midi_parse_file(void);                                         /* 1000:8809 — RECONSTRUCTED (Task E1); register-entry (DS:SI = file image); PORTED (Task E2, check_tbl=1; 2 records) */
+void midi_init_track_table(void);                                   /* 1000:87a2 — RECONSTRUCTED (Task E1); PORTED (Task E2, check_tbl=1; 2 records) */
+void midi_start_playback(void);                                     /* 1000:8722 — RECONSTRUCTED (Task E2); PORTED (2 records) */
+void midi_install_tempo_timer(void);                                /* 1000:86e9 — RECONSTRUCTED (Task E2); tempo-ISR carve-out — UNPORTED-for-validation (see fidelity note at its definition + docs/reconstruction-fidelity.md) */
 s16  midi_get_track_count(void);                                    /* 1000:8999 — RECONSTRUCTED (Task E1); PORTED, register-return checked */
-int  midi_play_sequence(void *song, void *aux_ptr, u16 flag);        /* 1000:8977 — device-gated; falls through to midi_load_sequence */
-void midi_sound_init(void);                                          /* 1000:89a8 */
+int  midi_play_sequence(void *song, void *aux_ptr, u16 flag);        /* 1000:8977 — RECONSTRUCTED (Task E2); device-gated; falls through (real tail JMP) to midi_load_sequence; PORTED but genuinely 0 records in the Task C2 capture (its OWN function-boundary hook is orphaned by the JMP — see tools/midi_ctest.c) */
+void midi_sound_init(void);                                          /* 1000:89a8 — RECONSTRUCTED (Task E2); PORTED (1 record) */
 
 /* Phase D/E — per-track event-stream cursor (register-entry: DS:SI = cursor, BX = track base). */
 void seq_normalize_far_ptr(void);   /* 1000:8a23 — RECONSTRUCTED (Task E1); CORRECTION: contrary to an
@@ -201,16 +205,12 @@ u32  midi_read_varlen(void);        /* 1000:8891 — RECONSTRUCTED (Task E1); PO
                                         midi_track_time_table's own "32-bit next-event clock" doc
                                         comment); see the fidelity note at its definition for the 4-byte
                                         branch's bit-layout anomaly. */
-u32  midi_process_event(void);      /* 1000:873c — Task E2, NOT YET reconstructed.  CORRECTION: this was
-                                        previously declared `void`; disassembly of its caller
-                                        midi_init_track_table (1000:87b2..87b9) shows its AX:DX return
-                                        value is stored into midi_track_time_table exactly like
-                                        midi_read_varlen's own DX:AX result, so it must return u32.
-                                        game_stubs.c carries a faithful-signature carve-out stub
-                                        (`return 0`) so midi_init_track_table's real conditional call to
-                                        it (Task E1) still links; tools/midi_ctest.c carries the matching
-                                        host stub.  Dispatch meta/tempo/EOT/channel events, advance
-                                        DS:SI. */
+u32  midi_process_event(void);      /* 1000:873c — RECONSTRUCTED (Task E2); PORTED (14 records), return
+                                        value + linear DS:SI advance checked via an extra_check hook
+                                        (tools/midi_ctest.c).  Dispatches meta/tempo/EOT/channel events,
+                                        advances DS:SI; see the fidelity note at its definition for the
+                                        signed/unsigned CMP equivalence + the raw (non-swapped) meta
+                                        type/len read. */
 
 /* Phase E — MIDI-to-OPL voice/channel dispatch (register-entry throughout; reached
  * from the ALREADY-PORTED snddrv_dispatch_b/c/d mode0/mode1 backends in sound.c).

@@ -735,6 +735,16 @@ void timer_teardown_restore(void)
 /* ════════════════════════════════════════════════════════════════════════════
  *  MIDI dispatch backends — snddrv_dispatch_b/c/d's 9 mode{0,1,4} backends.
  *
+ *  UPDATE (Task E2): `midi_process_event` (1000:873c) — described below as
+ *  "not-yet-started MIDI-engine work" at the time this section was written — is now
+ *  RECONSTRUCTED in src/midi.c; it calls these 9 leaves EXACTLY as this section
+ *  already documented (dispatch_b/c/d at 8751/8756/875b), staging
+ *  snd_seq_event_al/snd_seq_cursor/snd_seq_default_chan first.  Left unchanged below
+ *  (still historically accurate) other than this note — these 9 leaves themselves
+ *  remain NOT independently oracle-exercised (see "NOT ORACLE-EXERCISED" below);
+ *  midi_process_event's OWN Task C2 capture records validate its callER side
+ *  (the staged globals + dispatch call), not these callees' internal bodies.
+ *
  *  snddrv_dispatch_b/c/d (85db/8600/8626, already PORTED above) fan out by snddrv_mode
  *  to these 9 leaves.  Their ONLY real caller is `midi_process_event` (1000:8751 calls
  *  dispatch_b, 8756 dispatch_c, 875b dispatch_d — confirmed via Ghidra xrefs), a MIDI
@@ -2035,15 +2045,30 @@ void record_status_and_strobe_speaker(void)
  *  The CS-relative entry-guard `call 0x9439; jne exit` reads sound_mode (DGROUP 0x683e) and
  *  skips the body when sound_mode != 0; 0x9434 is the noop JMP-thunk chain (AL preserved);
  *  0x945b = record_min_status_code (PORTED); 0x7df9 = set_timer_slot_raw (PORTED); 0x7e1f
- *  = the channel-slot clear (modelled by isr_disable_timer_slot below); 0x9451 =
+ *  = the channel-slot clear (modelled by set_timer_slot_reg below); 0x9451 =
  *  speaker_gate_strobe (PORTED).  Stack-probe / register-save prologue omitted (convention).
  * ════════════════════════════════════════════════════════════════════════════ */
 
-/* isr_disable_timer_slot (1000:7e1f) — clear channel's 0x549c slot (value=0, cb=0:0).
+/* set_timer_slot_reg (1000:7e1f) — clear channel's 0x549c slot (value=0, cb=0:0).
  *  Validates channel 0..3, then set_timer_slot_raw(channel, 0, 0, 0) (the asm adds 2 to
  *  BX and tail-calls the 0x7e62 writer with AX=CX=DX=0).  The tone-sequencer retire path
- *  calls it with channel 2. */
-static int isr_disable_timer_slot(int channel)
+ *  calls it with channel 2.
+ *
+ *  RECONSTRUCTION FIDELITY (name + linkage, Task E2): this fn was originally
+ *  reconstructed here (Task A3) under the LOCAL name `isr_disable_timer_slot` with
+ *  `static` linkage (only the 2 L5 tone-sequencer retire paths below called it).
+ *  Ghidra's OWN canonical label for 1000:7e1f is `set_timer_slot_reg` (confirmed via
+ *  get_function_by_address/decompile_function_by_address: register-entry, `in_AX` =
+ *  channel, matching this fn's `channel` param exactly) — Task E2's
+ *  midi_sound_init (1000:89a8) and midi_play_sequence (1000:8977) BOTH also CALL
+ *  this SAME physical address (`MOV AX,0x0; CALL 0x1000:7e1f`, confirmed via raw
+ *  disassembly of both callers), from src/midi.c, a DIFFERENT translation unit.
+ *  Reusing the ALREADY-reconstructed body (not duplicating it) requires exposing it;
+ *  renamed to match Ghidra's canonical name (avoiding a second, invented name for the
+ *  same engine function) and un-`static`-ed + prototyped in sound.h. Pure rename +
+ *  linkage change — no behavior differs; sound_ctest.c never referenced the old
+ *  name (grep-verified), so this does not affect any already-validated differential. */
+int set_timer_slot_reg(int channel)
 {
     if ((-1 < channel) && (channel < 4)) {
         set_timer_slot_raw(channel, 0, 0, 0);
@@ -2082,7 +2107,7 @@ void tone_seq_callback_9631(void)
     snd_param_frame[0] -= 1;            /* dec word cs:[0x9788] */
     if (snd_param_frame[0] == 0) {      /* jne 0x9691 */
         record_min_status_code(0xff);          /* MOV AX,0xff; CALL 0x945b */
-        isr_disable_timer_slot(2);             /* MOV AX,2;    CALL 0x7e1f */
+        set_timer_slot_reg(2);             /* MOV AX,2;    CALL 0x7e1f */
         speaker_gate_strobe();                 /* CALL 0x9451 */
         return;                                /* jmp 0x96ba (exit) */
     }
@@ -2136,7 +2161,7 @@ void tone_seq_callback_96c4(void)
         snd_param_frame[0] -= 1;               /* dec word cs:[0x9788] */
         if (snd_param_frame[0] == 0) {         /* jne 0x973d */
             record_min_status_code(0xff);          /* MOV AX,0xff; CALL 0x945b */
-            isr_disable_timer_slot(2);             /* MOV AX,2;    CALL 0x7e1f */
+            set_timer_slot_reg(2);             /* MOV AX,2;    CALL 0x7e1f */
             speaker_gate_strobe();                 /* CALL 0x9451 */
             return;                                /* jmp 0x977e (exit) */
         }

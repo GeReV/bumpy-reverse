@@ -440,15 +440,18 @@ void emit_midi_voice_message(void)
  *
  *  midi_init_track_table's real asm (1000:87ad..87b2) CALLS midi_read_varlen, and
  *  — when the decoded delta is exactly 0 (the real `OR BX,DX` / `JNZ` ZF test) —
- *  ALSO CALLS midi_process_event (1000:8809's own sibling at 873c, Task E2,
- *  genuinely not reconstructed yet: game_stubs.c/tools/midi_ctest.c both carry a
- *  faithful-signature carve-out stub for it so this task's real call site still
- *  links).  midi_parse_file (8809) calls midi_init_track_table once all tracks are
- *  walked, so it inherits the same forward dependency transitively.  Per the task
- *  brief: BOTH bodies are reconstructed 1:1 here (including the real conditional
- *  call), but NEITHER is registered in tools/midi_ctest.c's PORTED[] this task —
- *  they stay UNPORTED (not a hard failure) until Task E2 lands midi_process_event
- *  and can wire a real differential for them.
+ *  ALSO CALLS midi_process_event (1000:8809's own sibling at 873c).  midi_parse_file
+ *  (8809) calls midi_init_track_table once all tracks are walked, so it inherits the
+ *  same forward dependency transitively.
+ *
+ *  UPDATE (Task E2): midi_process_event is now RECONSTRUCTED below (see its own
+ *  section, "sequencer driver + tempo timer") — the game_stubs.c / tools/midi_ctest.c
+ *  carve-out stubs for it are REMOVED (duplicate-symbol once midi.obj supplies the
+ *  real body).  This UNBLOCKS the differential for midi_parse_file and
+ *  midi_init_track_table themselves: both now have PORTED[] entries in
+ *  tools/midi_ctest.c (semantic-state, check_tbl=1 — their contract IS the
+ *  midi_track_ptr_table/midi_track_time_table install) and validate against the
+ *  Task C2 capture's real-Bumpy.mid cascade (2 records each, moved UNPORTED -> PASS).
  * ════════════════════════════════════════════════════════════════════════════ */
 
 /* ── little helpers the parser uses to mirror the asm's own raw-vs-swapped memory
@@ -847,4 +850,301 @@ int midi_parse_file(void)
 
     midi_init_track_table();                                                            /* 8886 CALL 87a2 */
     return -1;                                                                            /* 8889 MOV AX,0xFFFF */
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  Sequencer driver + tempo timer (Task E2) — midi_process_event (873c) /
+ *  midi_load_sequence (87cd) / midi_start_playback (8722) / midi_sound_init (89a8) /
+ *  midi_play_sequence (8977) / midi_install_tempo_timer (86e9).
+ *
+ *  This is the "outer" load/play/tempo-install layer wrapping the Task E1 SMF
+ *  parser, PLUS the per-track event-stream cursor (midi_process_event) the parser's
+ *  own midi_init_track_table calls conditionally.  Reconstructing midi_process_event
+ *  here completes the MIDI engine's call graph and — per the top-of-section note
+ *  above — UNBLOCKS midi_parse_file's and midi_init_track_table's own differential
+ *  (both real bodies since Task E1, left UNPORTED pending this function).
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── midi_process_event (1000:873c) — per-track event-stream cursor ──────────────
+ *  Register-entry: DS:SI = snd_seq_cursor (the track's live byte cursor, positioned
+ *  right where a JUST-DECODED delta of exactly 0 left it — midi_init_track_table's
+ *  own conditional call site, 87b2, only reaches this fn when midi_read_varlen's
+ *  decoded delta is 0, i.e. the next event is already due); BX = the caller's
+ *  per-track table-entry pointer (purely ambient — confirmed via
+ *  disassemble_function: no `MOV BX,...` anywhere in this fn's own body; it is only
+ *  ever read, via CS:[BX+0x80], by the marker-event branch below).
+ *
+ *  Decodes and dispatches a run of consecutive due events, looping INTERNALLY
+ *  whenever a freshly-decoded delta is again exactly 0 (asm label 873d is the loop
+ *  head — NOT the function's own entry point 873c, so internal iterations are
+ *  invisible to the Task C2 oracle's function-boundary hook: each TOP-LEVEL call
+ *  from midi_init_track_table produces exactly one trace record no matter how many
+ *  events it processes internally).  Confirmed against the capture: 14 total
+ *  records across 2 full real-Bumpy.mid cascades of a 7-track file — exactly one
+ *  record per track per cascade (2 EOT records observed per cascade too, i.e. some
+ *  tracks' very first event counted is their own End-of-Track).
+ *
+ *  Per iteration: LODSB the next status byte (asm 873d).
+ *    - high bit CLEAR (873e/8740): not a real status byte — this engine has NO
+ *      running-status support.  Consume one more byte (LODSB, discarded — asm 8742)
+ *      and loop back to the shared tail below.
+ *    - 0x80..0xEF, a channel-voice message (8747/8749 `CMP AL,0xf0; JL` — signed,
+ *      but equivalent to unsigned `al<0xf0` here since both operands' sign bits are
+ *      already known set, same "no overflow within one half-range" argument this
+ *      codebase's other constant-comparison notes use): stage AL into
+ *      snd_seq_event_al and dispatch snddrv_dispatch_d (already-PORTED, sound.c) —
+ *      asm 875b.
+ *    - 0xF0, SysEx (874b): stage AL, dispatch snddrv_dispatch_c — asm 8756.
+ *    - 0xF7, SysEx continuation (874d/874f): stage AL, dispatch snddrv_dispatch_b —
+ *      asm 8751.
+ *    - otherwise, a META event (0xF8..0xFF; in practice 0xFF): LODSW the
+ *      {type,len} pair (asm 8760 — AL/low-memory-byte = type, AH/next-byte = len;
+ *      NO byte-swap here, unlike the big-endian MThd/MTrk header fields
+ *      midi_parse_file reads via midi_bswap16 — a meta event's type+len bytes are
+ *      read RAW, matching the asm's own LODSW with no XCHG AL,AH afterward):
+ *        type==0x51, Set Tempo (FF 51 03 tt tt tt): store the 24-bit tempo value
+ *          split hi(u8)/lo(u16, byte-swapped) — asm 8765..876d.
+ *        type==0x2f, End of Track (FF 2F 00): consume 2 more bytes (LODSW,
+ *          discarded — asm 8777), decrement midi_track_count, and RETURN
+ *          0xFFFFFFFF IMMEDIATELY (asm 8778..8782 jumps straight to the epilogue,
+ *          skipping the shared tail entirely — no midi_read_varlen call, no
+ *          seq_normalize_far_ptr).
+ *        type==0x20, MIDI Channel Prefix (FF 20 01 cc): store the channel byte into
+ *          CS:[BX+0x80] — asm 8788/8789.  Modelled as `snd_seq_default_chan`, the
+ *          SAME flat-global convention the 9 already-PORTED snddrv_dispatch_b/c/d
+ *          modeX backends already use to READ this exact byte (sound.c) — BX itself
+ *          stays unmodelled ambient state, per that precedent.
+ *        otherwise: skip `len` (AH, zero-extended — CH was cleared at 8745) bytes —
+ *          asm 8790/8792.
+ *    Shared tail (asm label 8796, reached by every branch EXCEPT End-of-Track):
+ *      delta = midi_read_varlen(); if (delta != 0) break the loop (asm 8799 JNZ);
+ *      else loop back to re-process another due event immediately (asm 879b JMP
+ *      873d).
+ *    After the loop: seq_normalize_far_ptr() (asm 879d), return the decoded delta.
+ *
+ *  RECONSTRUCTION FIDELITY: none needed beyond the two notes above (the signed/
+ *  unsigned CMP equivalence; the raw, non-swapped meta type/len read) — every branch
+ *  is a literal transliteration of the raw disassembly (1000:873c..87a1), verified
+ *  byte-for-byte against the Task C2 capture (14 records: division/tempo/track_count/
+ *  chan_param_table unconditionally diffed via cmp_semantic, PLUS the return value
+ *  and the SI/DS-pair's LINEAR byte advance via an extra_check hook in
+ *  tools/midi_ctest.c — the naive `ex.si - ent.si` word delta the sibling
+ *  midi_read_varlen check uses does NOT apply here, since THIS fn's own
+ *  seq_normalize_far_ptr call can roll offset into segment between entry and exit;
+ *  the linear address `ds*16+si` is what must match). */
+u32 midi_process_event(void)
+{
+    u8  al;
+    u8  meta_type, meta_len;
+    u16 type_len;
+    u32 delta;
+
+    for (;;) {
+        al = *snd_seq_cursor;  snd_seq_cursor++;                       /* 873d LODSB */
+
+        if ((al & 0x80) == 0) {
+            /* not a real status byte -- no running-status support; eat one more
+               byte and fall through to the shared tail (asm 8742/8743). */
+            (void)*snd_seq_cursor;  snd_seq_cursor++;
+        } else if (al < 0xf0) {
+            /* channel-voice message (0x80..0xEF) -- asm 875b */
+            snd_seq_event_al = al;
+            snddrv_dispatch_d();
+        } else if (al == 0xf0) {
+            /* SysEx -- asm 8756 */
+            snd_seq_event_al = al;
+            snddrv_dispatch_c();
+        } else if (al == 0xf7) {
+            /* SysEx continuation -- asm 8751 */
+            snd_seq_event_al = al;
+            snddrv_dispatch_b();
+        } else {
+            /* meta event: FF <type> <len> ... -- asm 8760 LODSW (AL=type, AH=len,
+               raw/un-swapped) */
+            type_len  = midi_rd16_raw(snd_seq_cursor);
+            snd_seq_cursor += 2;
+            meta_type = (u8)(type_len & 0xffu);
+            meta_len  = (u8)(type_len >> 8);
+
+            if (meta_type == 0x51) {
+                /* Set Tempo (FF 51 03 tt tt tt) -- asm 8765..876d */
+                midi_tempo_hi = *snd_seq_cursor;  snd_seq_cursor++;
+                midi_tempo_lo = midi_bswap16(midi_rd16_raw(snd_seq_cursor));
+                snd_seq_cursor += 2;
+            } else if (meta_type == 0x2f) {
+                /* End of Track (FF 2F 00) -- asm 8777..8782: consume 2 more bytes
+                   (discarded), decrement the track count, RETURN IMMEDIATELY -- no
+                   midi_read_varlen call, no seq_normalize_far_ptr. */
+                snd_seq_cursor += 2;
+                midi_track_count--;
+                return 0xffffffffUL;
+            } else if (meta_type == 0x20) {
+                /* MIDI Channel Prefix (FF 20 01 cc) -- asm 8788/8789 */
+                snd_seq_default_chan = *snd_seq_cursor;  snd_seq_cursor++;
+            } else {
+                /* unhandled meta event: skip its `len` data bytes -- asm 8790/8792 */
+                snd_seq_cursor += meta_len;
+            }
+        }
+
+        delta = midi_read_varlen();                                     /* 8796 */
+        if (delta != 0) {                                                 /* 8799 JNZ */
+            break;
+        }
+        /* delta == 0: another event is already due -- loop back (879b JMP 873d) */
+    }
+
+    seq_normalize_far_ptr();                                              /* 879d */
+    return delta;
+}
+
+/* ── midi_load_sequence (1000:87cd) — stage song/aux far ptrs + flag, parse, start ──
+ *  Genuine stack-arg __cdecl16near (PUSH BP; MOV BP,SP prologue) — the only Task E2
+ *  target with a real stack frame.  3 args, cdecl (right-to-left push order,
+ *  confirmed via the raw stack offsets used: BP+4 = 1st arg, BP+8 = 2nd, BP+0xc =
+ *  3rd — matching midi_play_sequence's own tail-JMP into this same address reusing
+ *  an IDENTICAL 5-word arg list, per tools/midi_oracle.py's own ABI note).
+ *
+ *  RECONSTRUCTION FIDELITY / NAME CAVEAT (verified via raw disasm; independently
+ *  corroborated by the Task C2 oracle's OWN header comment, tools/midi_oracle.py
+ *  lines 29-38): despite the established prototype's parameter NAMES ("song_data"
+ *  1st, "aux_ptr" 2nd — kept unchanged here, matching the brief + Ghidra's own
+ *  decompiled signature), the data flow the asm ACTUALLY performs is the OPPOSITE
+ *  of what those names suggest:
+ *    - `song_data` (1st param, BP+4) is stored into `midi_aux_ptr_off`/`_seg`
+ *      (asm 87e8 LDS SI,[BP+4]; 87eb/87f2) — AND, since that LDS is never reloaded
+ *      before the 87f6 CALL, this same value is ALSO the DS:SI "file image" argument
+ *      midi_parse_file's own register-entry ABI reads (confirmed: midi_parse_file's
+ *      captured entry snap shows DS:SI pointing exactly at the real Bumpy.mid bytes
+ *      fed through THIS parameter in the Task C2 capture).
+ *    - `aux_ptr` (2nd param, BP+8) is stored into `midi_song_data_off`/`_seg`
+ *      (asm 87db LES SI,[BP+8]; 87de/87e4) — the table midi_emit_voice_msg_w1
+ *      (Task D2) walks for per-channel instrument/patch lookups.
+ *  This is the SAME "Task C1 globals-only skeleton speculatively named a global
+ *  before any body reconstruction confirmed its real data flow" pattern as the
+ *  pre-existing `midi_data_seg` a.k.a. "midi_load_flag" caveat (midi.h) — NOT
+ *  renamed here for the identical reason: the global names are ALREADY relied on by
+ *  the Task D2 body (midi_emit_voice_msg_w1's own `midi_song_data_off/_seg` reads)
+ *  plus the FROZEN MIDI_SNAP trace field names + tools/midi_ctest.c; renaming would
+ *  ripple far outside this task's scope for a purely cosmetic fix. Documented, not
+ *  silently swapped. See docs/reconstruction-fidelity.md. */
+int midi_load_sequence(void *song_data, void *aux_ptr, u16 flag)
+{
+    int parsed;
+
+    midi_data_seg = flag;                            /* 87d4/87d7 (a.k.a. "midi_load_flag") */
+
+    midi_aux_ptr_off = FP_OFF(song_data);             /* 87e8 LDS SI,[BP+4]; 87eb            */
+    midi_aux_ptr_seg = FP_SEG(song_data);             /* 87f0 MOV AX,DS; 87f2                */
+
+    midi_song_data_off = FP_OFF(aux_ptr);             /* 87db LES SI,[BP+8]; 87de            */
+    midi_song_data_seg = FP_SEG(aux_ptr);             /* 87e2 MOV SI,ES; 87e4                */
+
+    /* DS:SI is left pointing at song_data (the LDS at 87e8 is never reloaded before
+       the 87f6 CALL below) -- midi_parse_file's own register-entry "file image"
+       input. */
+    snd_seq_cursor = (u8 *)song_data;
+
+    parsed = midi_parse_file();                        /* 87f6 */
+    if (parsed != 0) {                                   /* 87f9/87fb AND AX,AX; JZ */
+        midi_start_playback();                            /* 87fd */
+    }
+    return (parsed != 0);                                 /* 8800/returns bool-like int */
+}
+
+/* ── midi_start_playback (1000:8722) — post-load: install the tempo timer ────────
+ *  0 args; a register-preserving wrapper (PUSH/POP BX,DX,DS,ES bracket the single
+ *  CALL — preserved-only registers, not modelled, per this project's convention). */
+void midi_start_playback(void)
+{
+    midi_install_tempo_timer();                          /* 8726 */
+}
+
+/* ── midi_sound_init (1000:89a8) — sound-subsystem init: reset timer slot 0, then
+ *  kick the mode-0/1/4 dispatch ───────────────────────────────────────────────────
+ *  0 args.  asm 89a8 verbatim: PUSH DS; MOV AX,0x203b; MOV DS,AX (a DGROUP-segment
+ *  fixup bracketing the near CALL below — not independently meaningful state, same
+ *  as every other near-CALL DS-fixup already documented in this file); MOV AX,0x0;
+ *  CALL 0x1000:7e1f (set_timer_slot_reg, register-entry AX=channel — ALREADY
+ *  reconstructed in sound.c under a different local name; renamed + exposed
+ *  non-static this task so this TU can reuse the SAME body — see the
+ *  RECONSTRUCTION FIDELITY note at its definition in sound.c); POP DS; CALL
+ *  0x1000:85b5 (snddrv_dispatch_a, already-PORTED). */
+void midi_sound_init(void)
+{
+    set_timer_slot_reg(0);                                /* 89ae/89b1 */
+    snddrv_dispatch_a();                                    /* 89b5 */
+}
+
+/* ── midi_play_sequence (1000:8977) — device-gated entry; falls through (asm real
+ *  TAIL JMP, not CALL) to midi_load_sequence reusing the SAME 3 stack args ─────────
+ *  Guards on `sound_active_device_mask` (DGROUP 0x5586): if it holds the 0x8000
+ *  "no device selected" sentinel, return 0 untouched; otherwise reset timer slot 0
+ *  (the same set_timer_slot_reg(0) as midi_sound_init), kick snddrv_dispatch_a, then
+ *  tail-call midi_load_sequence.  asm 8977 verbatim: PUSH DS; MOV AX,0x203b; MOV
+ *  DS,AX; MOV AX,[0x5586]; CMP AX,0x8000; MOV AX,0x0; JZ 8995 (-> POP DS; AND AX,AX;
+ *  RET, AX==0 either way since 8983 already zeroed it); MOV AX,0x0; CALL 0x1000:7e1f;
+ *  POP DS; CALL 0x1000:85b5; JMP 0x1000:87cd. */
+int midi_play_sequence(void *song, void *aux_ptr, u16 flag)
+{
+    if (sound_active_device_mask == 0x8000) {              /* 897d/8980/8986 */
+        return 0;                                            /* 8996/8998 */
+    }
+    set_timer_slot_reg(0);                                   /* 8988/898b */
+    snddrv_dispatch_a();                                      /* 898f */
+    return midi_load_sequence(song, aux_ptr, flag);            /* 8992 (tail JMP) */
+}
+
+/* ── midi_install_tempo_timer (1000:86e9) — compute the PIT reload value from the
+ *  MThd division + the 24-bit "set tempo" value, install it into timer slot 0 ──────
+ *  0 args.  asm 86e9 verbatim: MOV AX,CS:[0x85a3] (midi_division); MOV CX,0xf42;
+ *  MUL CX (DX:AX = division*3906); MOV CX,[0x85a5] (midi_tempo_lo, the FULL word);
+ *  MOV BX,[0x85a7] (a WORD read starting at midi_tempo_hi's own byte address — only
+ *  its LOW byte, BL, is ever used again below; the word's high byte, at the
+ *  unmodelled CODE address 0x85a8, is loaded but never referenced again); MOV
+ *  CL,CH (CL := the HIGH byte of tempo_lo); MOV CH,BL (CH := midi_tempo_hi); DIV CX
+ *  (DX:AX / {CH=tempo_hi, CL=tempo_lo>>8} -> AX=quotient, remainder in DX discarded
+ *  — never read again); MOV CX,AX (save the quotient aside); then
+ *  set_timer_slot_raw(channel=BX=0, value=AX=quotient, cb_off=CX=0x864c,
+ *  cb_seg=DX=0x1000) (the DS=0x203b bracket around this CALL is the same
+ *  DGROUP-segment fixup convention noted above, not independently meaningful).
+ *
+ *  RECONSTRUCTION FIDELITY / CARVE-OUT (per the task brief's Step 3 + the Phase-6 L5
+ *  tone-sequencer precedent, docs/reconstruction-fidelity.md): this function's OWN
+ *  body — the reload-value arithmetic + the set_timer_slot_raw table-install — is
+ *  reconstructed 1:1 above and DOES run for real on every replay that reaches it
+ *  transitively (via midi_start_playback, a PORTED[] entry in tools/midi_ctest.c).
+ *  What is NOT host-replayable is the DEEPER, per-PIT-tick PLAYBACK LOOP this
+ *  installs: set_timer_slot_raw only writes the DGROUP timer-slot table
+ *  (snd_timer_slot_table — confirmed port-I/O-free; the Task C2 oracle opened an L4
+ *  port-capture window for THIS fn's own address anyway (its L4_FNS set) and
+ *  captured ZERO OUT/IN events across all 3 of its trace records, confirming the
+ *  brief's own "0 port I/O" finding empirically). The REAL sequencer advance driven
+ *  by the PIT ISR over wall-clock time lives in the L5 callback machinery
+ *  (pit_timer_isr_multiplexer 7c02 + tone_seq_callback_9631/96c4/95b5, sound.c) —
+ *  reached only through the far-pointer timer-slot install this fn performs, never
+ *  through a call-graph edge, and driven by hardware IRQ0 ticks a deterministic
+ *  host replay cannot reproduce.  Per the brief: registered UNPORTED-for-validation
+ *  (no tools/midi_ctest.c PORTED[] entry) — its own reload-value computation has
+ *  NOTHING observable in the MIDI_SNAP format to assert against (snd_timer_slot_table
+ *  isn't a captured field), so even a trivial "0 OUT events" port-comparator entry
+ *  would assert nothing beyond what this note already documents; NOT fabricating a
+ *  PIT port event this fn doesn't emit.  (Its 3 divisor-safe entry states — verified
+ *  non-zero for all 3 captured records, 0x0c35/0x0c35/0x07a1 — are a consequence of
+ *  the REAL cascade always setting tempo before reaching this fn on every captured
+ *  path, not a host-side guard.) */
+void midi_install_tempo_timer(void)
+{
+    u32 product;
+    u16 divisor;
+    u16 quotient;
+
+    product = (u32)midi_division * 0xf42u;                   /* 86ed..86f4 */
+
+    divisor = (u16)(((u16)midi_tempo_hi << 8)                 /* 86f6..8704 */
+                    | ((midi_tempo_lo >> 8) & 0xffu));
+
+    quotient = (u16)(product / divisor);                       /* 8704/8706 */
+
+    set_timer_slot_raw(0, (int)quotient, 0x864c, 0x1000);       /* 8708..8719 */
 }
