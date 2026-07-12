@@ -88,6 +88,22 @@ typedef int32_t  s32;
 #define __huge
 #define __cdecl16near
 
+/* ── MK_FP host model (mirrors tools/anim_chan_ctest.c / tools/int8_ctest.c /
+ *  tools/gfx_palette_ctest.c) ─────────────────────────────────────────────────────
+ *  Task D2's midi_emit_voice_msg_w1 rebuilds a far pointer with MK_FP(seg, off) to
+ *  walk the song-data blob (DS:SI = midi_song_data_seg:midi_song_data_off) and
+ *  emit_midi_voice_message dereferences a caller-supplied far chan-struct pointer the
+ *  same way.  Back MK_FP with a 1 MB linear "far memory" arena so those pointers land
+ *  in real host storage the harness can pre-seed (see seed_far_mem_fixtures below —
+ *  needed because the MIDI_SNAP trace format captures only the NAMED sequencer-state
+ *  globals + a 32B si_window, not arbitrary far-segment memory, so the oracle's own
+ *  controlled "song data"/"chan struct" test fixtures — tools/midi_oracle.py's
+ *  VOICE_SCRATCH / DG_SCRATCH_EMITVOICE_BASE setup — must be replicated here for the
+ *  port-write differential to observe the real branch/register values). */
+#define FAR_MEM_SIZE 0x100000UL
+static unsigned char far_mem[FAR_MEM_SIZE];
+#define MK_FP(seg, off) ((void *)(far_mem + (((u32)(u16)(seg) << 4) + (u16)(off))))
+
 /* ── HOST PORT-I/O SHIMS (shared by BOTH included TUs — defined once) ─────────────
  *  Only src/sound.c's already-real L4 drivers (opl_write_reg, pc_speaker_silence,
  *  mpu401_write_data_polled, ...) issue out()/in() today; src/midi.c has no bodies
@@ -280,22 +296,18 @@ static const record_t *g_cur_rec = NULL;
  *  the comparator diffs the post-call state against the EXIT snap.
  *
  *  NOT YET SEEDABLE INTO A REAL MODULE GLOBAL (documented gap, not invented): Task C2
- *  discovered two of the four sub-tables the 192B/16B blocks cover have no backing
- *  src/midi.c global yet —
+ *  discovered two of the four sub-tables the 192B/16B blocks cover had no backing
+ *  src/midi.c global —
  *    (a) track_tables[128..191] — the per-track "default channel" continuation table
  *        (CODE 0x824c..0x828c), found via disassembly of midi_process_event's marker-
- *        event handler, postdating Task C1's enumeration;
+ *        event handler, postdating Task C1's enumeration; STILL a harness-side shadow
+ *        (none of Task D2's 6 fns touch it — genuinely out of THIS task's scope too).
  *    (b) chan_param_table[0..15] — seq_set_channel_param's per-channel byte table
- *        (CODE 0x8473..0x8483), never enumerated as a global at all.
- *  This task's file list is tools/midi_ctest.c + tools/validate_midi.sh only (see the
- *  brief's staging constraint) — it does not add globals to src/midi.h/midi.c. Both
- *  sub-tables are kept as HARNESS-SIDE shadow buffers below (seeded from the ENTRY
- *  snap so the struct shape is fully exercised), clearly flagged so a Phase-D/E task
- *  that defines the real globals can point these at them (or delete the shadow) —
- *  not a silent gap. */
+ *        (CODE 0x8473..0x8483) — Task D2 adds this as a REAL src/midi.c global
+ *        (chan_param_table[MIDI_CHAN_PARAM_LEN]); seeded from/compared against the
+ *        real global below now, the shadow buffer is gone. */
 static u8 g_si_window_buf[SI_WINDOW_LEN];
 static u8 g_track_default_chan_shadow[64];     /* track_tables[128..191] — see note above */
-static u8 g_chan_param_table_shadow[CHAN_PARAM_LEN];   /* see note above */
 
 static void seed_globals(const snap_t *s)
 {
@@ -333,8 +345,8 @@ static void seed_globals(const snap_t *s)
     memcpy(midi_track_time_table, s->track_tables + 64, 64);
     memcpy(g_track_default_chan_shadow, s->track_tables + 128, 64);
 
-    /* chan_param_table -> shadow only (no real global yet, see the note above). */
-    memcpy(g_chan_param_table_shadow, s->chan_param_table, CHAN_PARAM_LEN);
+    /* chan_param_table -> the REAL src/midi.c global (Task D2; was harness-shadow-only). */
+    memcpy(chan_param_table, s->chan_param_table, CHAN_PARAM_LEN);
 
     /* snd_seq_default_chan ("the channel"): models CS:[BX+0x80], i.e. track 0's byte
      * in the (not-yet-a-real-global) default-channel table, as a baseline default —
@@ -352,9 +364,12 @@ static void seed_globals(const snap_t *s)
  *  check_tbl gates the midi_track_ptr_table/midi_track_time_table (128 B) compare —
  *  reserved for the future table-filling fns (midi_parse_file / midi_init_track_table)
  *  whose CONTRACT is the table install, mirroring sound_ctest.c's check_tbl convention.
- *  The track_tables[128..191] tail and chan_param_table are NOT compared here (no real
- *  module global backs them yet — see seed_globals's note); a Phase-D/E task that adds
- *  those globals to src/midi.c must extend this comparator to cover them too. */
+ *  chan_param_table (Task D2 — now a real src/midi.c global) is checked UNCONDITIONALLY
+ *  below (like the individual CHK() fields): its only writer among every PORTED is_l4=0
+ *  fn is seq_set_channel_param itself, so comparing it on every semantic record is safe
+ *  (any other fn's record has entry==exit for it in the real capture too).  The
+ *  track_tables[128..191] tail is STILL NOT compared here (no real module global backs
+ *  it — see seed_globals's note; none of Task D2's 6 fns touch it either). */
 static const char *cmp_semantic(const snap_t *ex, long *got, long *want, int check_tbl)
 {
     #define CHK(field, live) do { if ((long)(live) != (long)(ex->field)) { \
@@ -370,6 +385,10 @@ static const char *cmp_semantic(const snap_t *ex, long *got, long *want, int che
     CHK(midi_tempo_hi_v,        midi_tempo_hi);
     CHK(midi_track_count_v,     midi_track_count);
     #undef CHK
+    if (memcmp(chan_param_table, ex->chan_param_table, CHAN_PARAM_LEN) != 0) {
+        *got = 0; *want = 1;
+        return "chan_param_table";
+    }
     if (!check_tbl) return NULL;
     if (memcmp(midi_track_ptr_table, ex->track_tables + 0, 64) != 0) {
         *got = 0; *want = 1;   /* table mismatch — see divergence via the fn name printed */
@@ -449,17 +468,12 @@ u8  prev_game_mode;         /* player.c 0x8552 */
 /* ── HOST stubs for the game_stubs.c carve-outs both TUs' compiled bodies
  *  reference — verbatim from tools/sound_ctest.c ────────────────────────────────
  *  seq_set_channel_param / midi_emit_voice_msg_w1 / midi_emit_voice_msg_w3 /
- *  opl_event_note_on are ALSO prototyped in src/midi.h (same call-tree map) but
- *  midi.c does not define them (Task C1 report) — these are the only bodies
- *  satisfying either TU's reference, no clash.  midi_emit_voice_msg_w1 is a NEW
- *  carve-out Task D1 discovers (opl_set_note_params calls it).
- *  maybe_opl2_detect_chip / opl2_reset_all_regs are NO LONGER stubbed here —
- *  RECONSTRUCTED in src/sound.c (Task D1; no host stub, they come from the
- *  included TU, and are now PORTED[] entries below). */
-void seq_set_channel_param(void)  {}
-void midi_emit_voice_msg_w1(void) {}
-void midi_emit_voice_msg_w3(void) {}
-void opl_event_note_on(void)      {}
+ *  opl_event_note_on are NO LONGER stubbed here — RECONSTRUCTED in src/midi.c
+ *  (Task D2; their game_stubs.c stubs are removed too, so a host no-op here would
+ *  be a duplicate symbol against midi.c's included real bodies). maybe_opl2_detect_
+ *  chip / opl2_reset_all_regs are NO LONGER stubbed here either — RECONSTRUCTED in
+ *  src/sound.c (Task D1; no host stub, they come from the included TU, and are
+ *  PORTED[] entries below). */
 void FUN_1000_6183(void)         {}
 void pit_set_counter0(void)       {}
 void p1_try_trigger_pending_action(void) {}   /* 1000:654e — player.c (host no-op) */
@@ -484,6 +498,85 @@ static void call_opl_set_note_params(void)
      * src/sound.c) — any concrete values exercise the same, real, reproducible
      * differential. */
     opl_set_note_params(0, 0, 0);
+}
+
+/* ── Task D2 far_mem fixtures — REPLICAS of tools/midi_oracle.py's OWN controlled
+ *  test memory, not invented data (see midi_oracle.py lines 387-397 for the source of
+ *  every byte below). Needed because the MIDI_SNAP trace format captures only the
+ *  named sequencer-state globals + a 32B si_window, not arbitrary far-segment memory —
+ *  so midi_emit_voice_msg_w1's own far-pointer walk through midi_song_data_seg:off
+ *  (always 0x9000 = VOICE_SCRATCH_SEG for the voice_dispatch_seeded scenario, per the
+ *  entry snap seeded generically below) needs its target bytes replicated here for the
+ *  port-write differential to reach the right branch/register values.  The ONE
+ *  standalone emit_midi_voice_message record (reached directly, not via w1) used
+ *  call_near's own default DS=DS_SOUND -- a fixed, deterministic value
+ *  (tools/midi_oracle.py: `dg = (0x103b + PSP_SEG + 0x10) & 0xFFFF` with PSP_SEG=0x100
+ *  -> 0x114b) — replicated at its own DG_SCRATCH_EMITVOICE_BASE (0x80) offset. */
+#define ORACLE_VOICE_SCRATCH_SEG 0x9000     /* tools/midi_oracle.py VOICE_SCRATCH_SEG */
+#define ORACLE_DS_SOUND          0x114b     /* tools/midi_oracle.py DS_SOUND (call_near's default DS) */
+
+static void seed_far_mem_fixtures(void)
+{
+    u32 voice_base = (u32)ORACLE_VOICE_SCRATCH_SEG << 4;
+    u32 dg_base    = (u32)ORACLE_DS_SOUND << 4;
+    int chan;
+    int i;
+
+    far_mem[voice_base + 0x0c] = 0x40; far_mem[voice_base + 0x0d] = 0x00;  /* instrument-table base offset */
+    far_mem[voice_base + 0x10] = 0x80; far_mem[voice_base + 0x11] = 0x00;  /* 2nd-stage table base offset  */
+    for (chan = 0; chan < 4; chan++) {
+        u32 o = voice_base + 0x40 + (u32)chan * 12;
+        far_mem[o] = 1; far_mem[o + 1] = 0;                                /* per-chan index = 1 */
+    }
+
+    for (i = 0; i < 0x20; i++) {
+        far_mem[dg_base + 0x80 + i] = (u8)i;   /* emitvoice_struct[k] = k, k=0..0x1F */
+    }
+}
+
+/* ── Task D2 zero-arg registry wrappers: the MIDI-to-OPL2 voice-message bridge ────────
+ *  opl_event_note_on / seq_set_channel_param reuse the EXISTING snd_seq_event_al /
+ *  snd_seq_cursor seeding (seed_globals already recovers AL + the SI-window for every
+ *  record generically) — no extra recovery needed. midi_emit_voice_msg_w1/w2's BX/AH
+ *  (or AL) and emit_midi_voice_message's AL/DS:(BX+DI) have no generic seed path (the
+ *  fixed MIDI_SNAP shape does not name them per-function), so their wrappers recover
+ *  the needed register(s) directly from g_cur_rec->ent — the same convention the
+ *  Task D1 doc comment above anticipates ("AL/BX/SI per the ABI notes"). */
+static void call_opl_event_note_on(void)          { opl_event_note_on(); }
+static void call_seq_set_channel_param(void)      { seq_set_channel_param(); }
+static void call_midi_emit_voice_msg_w3(void)     { midi_emit_voice_msg_w3(); }
+
+static void call_midi_emit_voice_msg_w2(void)
+{
+    /* w2's own asm reads AL (-> BX for w1) directly (seed_globals already recovered
+     * it into snd_seq_event_al); AH (midi_voice_note_byte, forwarded UNCHANGED into
+     * w1) is NOT touched by w2's own body — a standalone test must seed it explicitly
+     * from the entry AX's high byte (mirrors what w3's real internal "MOV AH,AL" step
+     * would have set up, which a standalone w2 call bypasses). */
+    midi_voice_note_byte = (u8)(g_cur_rec->ent.ax >> 8);
+    midi_emit_voice_msg_w2();
+}
+
+static void call_midi_emit_voice_msg_w1(void)
+{
+    /* w1's own BX/AH register-entry inputs — recovered from the record's entry regs
+     * (mirrors sound_ctest.c's g_cur_rec-based arg recovery for register-entry fns). */
+    midi_voice_chan      = g_cur_rec->ent.bx;
+    midi_voice_note_byte = (u8)(g_cur_rec->ent.ax >> 8);
+    midi_emit_voice_msg_w1();
+}
+
+static void call_emit_midi_voice_message(void)
+{
+    /* emit_midi_voice_message's true inputs (AL, DS, BX, DI) are ALL directly in the
+     * record's entry register file — recovered generically here regardless of whether
+     * THIS record came from a nested w1 call (ds=VOICE_SCRATCH_SEG) or the oracle's one
+     * standalone direct call (ds=DS_SOUND) — see seed_far_mem_fixtures for why both
+     * segments' target bytes are pre-seeded once at program start. */
+    midi_emit_al  = (u8)(g_cur_rec->ent.ax & 0xFF);
+    midi_emit_ptr = (u8 __far *)MK_FP(g_cur_rec->ent.ds,
+                                      (u16)(g_cur_rec->ent.bx + g_cur_rec->ent.di));
+    emit_midi_voice_message();
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -531,6 +624,16 @@ static void call_opl_set_note_params(void)
  *                 install; 0 otherwise (see cmp_semantic's doc comment above).
  *  Example (once midi_read_varlen is ported):
  *    { 0x8891, "midi_read_varlen", 0, call_midi_read_varlen, 0 },
+ *
+ *  Task D2 adds the MIDI-to-OPL2 voice-message bridge (src/midi.c, its first 6 real
+ *  bodies): opl_event_note_on / midi_emit_voice_msg_w1/w2/w3 / emit_midi_voice_message
+ *  ALL eventually reach opl_write_reg -> is_l4=1 (port-write differential). Their
+ *  entry snap generically carries every register they need (AL/BX/AH/DI/DS — see the
+ *  call_midi_emit_voice_msg_* / call_emit_midi_voice_message wrapper comments above),
+ *  so no special-casing beyond the g_cur_rec recovery is needed. seq_set_channel_param
+ *  writes chan_param_table (a real global as of this task) and issues NO port I/O ->
+ *  is_l4=0 (semantic-state comparator, which now also diffs chan_param_table — see
+ *  cmp_semantic's doc comment).
  *  ───────────────────────────────────────────────────────────────────────────── */
 typedef struct { u16 off; const char *name; int is_l4; void (*fn)(void);
                  int check_tbl; } ported_t;
@@ -541,6 +644,13 @@ static const ported_t PORTED[] = {
     { 0x8eeb, "opl2_reset_all_regs",    1, call_opl2_reset_all_regs,    0 },
     { 0x8fb6, "maybe_opl2_detect_chip", 1, call_maybe_opl2_detect_chip, 0 },
     { 0x9241, "opl_set_note_params",    0, call_opl_set_note_params,    0 },
+    /* Task D2 — the MIDI-to-OPL2 voice-message bridge (src/midi.c). */
+    { 0x8ea3, "opl_event_note_on",         1, call_opl_event_note_on,         0 },
+    { 0x922c, "seq_set_channel_param",     0, call_seq_set_channel_param,     0 },
+    { 0x8e93, "midi_emit_voice_msg_w3",    1, call_midi_emit_voice_msg_w3,    0 },
+    { 0x8b6b, "midi_emit_voice_msg_w2",    1, call_midi_emit_voice_msg_w2,    0 },
+    { 0x8b81, "midi_emit_voice_msg_w1",    1, call_midi_emit_voice_msg_w1,    0 },
+    { 0x8bc8, "emit_midi_voice_message",   1, call_emit_midi_voice_message,   0 },
 };
 #define PORTED_N (sizeof(PORTED) / sizeof(PORTED[0]))
 
@@ -611,6 +721,10 @@ int main(int argc, char **argv)
     stats_t st = { 0, 0, 0, 0 };
     long n_records = 0, n_io_total = 0;
     int hard_fail = 0;
+
+    seed_far_mem_fixtures();   /* Task D2 — replica of the oracle's own controlled
+                                  song-data/chan-struct test memory (see the doc
+                                  comment at seed_far_mem_fixtures' definition). */
 
     {   /* perturbation knob: MIDI_PERTURB=N corrupts the Nth emitted OUT (dormant
          * until an L4 PORTED entry exists to perturb — see the PORTED[] doc comment). */
@@ -686,6 +800,20 @@ int main(int argc, char **argv)
 
         printf("\n== scenario %u: %s (%lu records) ==\n",
                sid, scname, (unsigned long)nrec);
+
+        /* Task D2: the oracle resets ALL memory to a shared baseline before EACH
+         * scenario (tools/midi_oracle.py's restore_base(), called once per scenario
+         * in its scenario_fns loop) — so opl_reg_shadow_80cc (sound.c; opl_write_reg's
+         * write-back shadow, read by opl_play_note) starts every scenario at the SAME
+         * baseline (zero — verified against the unpacked image's CODE:0x80cc bytes).
+         * This harness processes every scenario's records in ONE continuous run with
+         * no equivalent reset, so a later scenario's opl_write_reg calls (e.g.
+         * scenario 6's opl2_reset_all_regs, 233 writes) would otherwise leak into
+         * scenario 7's shadow reads — a host-harness artifact, not a reconstruction
+         * bug (surfaced by this task's emit_midi_voice_message, the first PORTED fn to
+         * actually READ the shadow rather than just write it). Mirror the oracle's
+         * per-scenario reset here. */
+        memset(opl_reg_shadow_80cc, 0, sizeof(opl_reg_shadow_80cc));
 
         per_ok = run_per_function(recs, (long)nrec, scname, &sst);
         printf("  per-fn: PASS=%ld  FAIL=%ld  UNPORTED=%ld  PORT_CHECKED=%ld\n",

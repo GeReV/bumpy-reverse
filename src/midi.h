@@ -6,20 +6,25 @@
 /* ────────────────────────────────────────────────────────────────────────────
  *  midi.h — MIDI/SMF sequencer + MIDI-to-OPL voice dispatch (Phase-D/E reconstruction).
  *
- *  SKELETON (Task C1): this header declares the MIDI module's GLOBALS only (the
+ *  SKELETON (Task C1): this header declares the MIDI module's GLOBALS (the
  *  load/parse staging scalars, the tempo/division header fields, and the per-track
  *  pointer/time tables midi_parse_file / midi_init_track_table populate) plus the
  *  FULL prototype list for the midi_* / seq_* / opl_event_* / midi_emit_voice_msg_* call
- *  tree.  No function BODIES land here this task — they port across Phase D (load/
- *  parse/track-table pipeline) and Phase E (event-stream cursor + MIDI-to-OPL voice
- *  dispatch), mirroring sound.h's own T2 "globals-only skeleton, PORTED-labeled
- *  prototypes as bodies land" convention.
+ *  tree.  Phase D (load/parse/track-table pipeline) and Phase E (event-stream cursor)
+ *  remain unported (mirroring sound.h's own T2 "globals-only skeleton, PORTED-labeled
+ *  prototypes as bodies land" convention) — but Task D2 lands the FIRST 6 function
+ *  BODIES in midi.c: the MIDI-to-OPL2 voice-message funnel opl_event_note_on (8ea3),
+ *  midi_emit_voice_msg_w1/w2/w3 (8b81/8b6b/8e93), emit_midi_voice_message (8bc8), and
+ *  seq_set_channel_param (922c) — the 4 leaves a prior task carved out in game_stubs.c
+ *  (seq_set_channel_param / midi_emit_voice_msg_w1 / midi_emit_voice_msg_w3 /
+ *  opl_event_note_on) PLUS the 2 that were never stubbed anywhere (midi_emit_voice_msg_w2 /
+ *  emit_midi_voice_message, unreferenced by any already-reconstructed caller until now).
  *
- *  Because midi.c contributes NO function bodies this task, midi.obj links cleanly
- *  alongside the game_stubs.c MIDI carve-out stubs (seq_set_channel_param /
- *  midi_emit_voice_msg_w3 / opl_event_note_on) with ZERO duplicate symbols — the
+ *  Because midi.c previously contributed NO function bodies, midi.obj linked cleanly
+ *  alongside the game_stubs.c MIDI carve-out stubs with ZERO duplicate symbols — the
  *  same globals-only-skeleton pattern Phase-5 T2 (anim.obj) / Phase-3 T2 (items.obj)
- *  / Phase-6 T2 (sound.obj) used.
+ *  / Phase-6 T2 (sound.obj) used.  Task D2 removes those 4 game_stubs.c stubs (now
+ *  duplicate symbols against midi.obj's real bodies) — see midi.c's ownership block.
  *
  *  Engine call graph (Ghidra seg 1000; addresses cited per-symbol below):
  *    Phase D  load/parse   midi_load_sequence (87cd) stages the song/aux far ptrs +
@@ -40,16 +45,16 @@
  *                           seq_normalize_far_ptr (8a23) rolls SI's excess offset
  *                           into DS (pure register normalization, no global state).
  *    Phase E  voice dispatch snddrv_dispatch_d's mode0/mode1 backends (sound.c) reach
- *                           midi_emit_voice_msg_w1 (8b81) -> _w2 (8b6b) -> _w3 (8e93)
+ *                           midi_emit_voice_msg_w3 (8e93) -> _w2 (8b6b) -> _w1 (8b81)
  *                           -> emit_midi_voice_message (8bc8), the shared OPL patch/
- *                           note-register writer; seq_set_channel_param (922c) and
+ *                           note-register writer (CALL-CHAIN DIRECTION, confirmed via
+ *                           raw disasm: w3 CALLs w2, w2 CALLs w1, w1 CALLs
+ *                           emit_midi_voice_message — the opposite of a superficial
+ *                           name-order reading); seq_set_channel_param (922c) and
  *                           opl_event_note_on (8ea3) are the sibling program-change /
- *                           note-on leaves.  midi_emit_voice_msg_w3 / seq_set_channel_
- *                           param / opl_event_note_on are CURRENTLY carve-out no-op
- *                           stubs in game_stubs.c (a prior task's documented boundary);
- *                           prototyped here for the call-tree map, NOT claimed by
- *                           midi.c this task (their stubs stay in game_stubs.c until a
- *                           Phase-E task ports real bodies and removes them there).
+ *                           note-on leaves.  ALL SIX are RECONSTRUCTED in midi.c
+ *                           (Task D2) — see the per-fn RECONSTRUCTION FIDELITY notes at
+ *                           their definitions there.
  *
  *  Provenance: Ghidra BumpyDecomp decompile + raw disassembly (MCP), address-verified
  *  via get_xrefs_to on every cited word (single-writer/single-reader evidence for the
@@ -107,6 +112,26 @@ extern u8  midi_tempo_hi;        /* CODE 0x85a7 — tempo (usec/quarter), high b
 extern u16 midi_track_ptr_table[MIDI_MAX_TRACKS][2];   /* CODE 0x81cc..0x820c — per-track {off,seg} into its MTrk chunk */
 extern u16 midi_track_time_table[MIDI_MAX_TRACKS][2];  /* CODE 0x820c..0x824c — per-track {time_lo,time_hi} (32-bit next-event clock) */
 
+/* ── seq_set_channel_param's per-channel byte table (Task D2) ─────────────────────
+ *  16 bytes, one per MIDI channel (0..15); asm 1000:922c: CS:[0x8473 + (AL&0xf)] = *SI.
+ *  Sits immediately before midi_data_seg (CODE 0x8483) — confirmed via disassembly +
+ *  get_xrefs_to (single writer: seq_set_channel_param; previously only a
+ *  tools/midi_ctest.c harness-side shadow buffer, per the Task C2/C3 notes — now a
+ *  real module global). */
+#define MIDI_CHAN_PARAM_LEN 16
+extern u8 chan_param_table[MIDI_CHAN_PARAM_LEN];       /* CODE 0x8473..0x8483 */
+
+/* ── register-entry ambient standins for the midi_emit_voice_msg_w1/w2/w3 ->
+ *  emit_midi_voice_message chain (Task D2) — the SAME "file-scope global stands in
+ *  for a caller-supplied register" convention snd_seq_event_al/snd_seq_cursor/
+ *  snd_seq_default_chan (sound.h) and snd_busy_delay's own register-args precedent
+ *  (sound.c) already use; owned here (not sound.h) since these registers are specific
+ *  to this call chain and no existing sound.h global models them. ── */
+extern u16 midi_voice_chan;        /* engine BX at midi_emit_voice_msg_w1 entry — channel/index (w1 scales *12) */
+extern u8  midi_voice_note_byte;   /* engine AH at midi_emit_voice_msg_w1 entry — forwarded UNCHANGED through w2/w3, becomes AL for emit_midi_voice_message */
+extern u8  midi_emit_al;           /* engine AL at emit_midi_voice_message entry — channel/operator-slot selector byte */
+extern u8 __far *midi_emit_ptr;    /* engine DS:(BX+DI) at emit_midi_voice_message entry — the 30-byte per-channel OPL patch/note descriptor; BX is always 0 at this call boundary (every reconstructed caller XORs BX,BX or seeds BX=0), so the far offset is folded into this one pointer */
+
 /* ── EXTERN — owned elsewhere (grep + get_xrefs_to verified; NOT redefined here) ──
  *
  *  midi_track_count (sound.c ~line 1533, `s16 midi_track_count;`) is the SAME
@@ -130,12 +155,15 @@ extern s16 midi_track_count;     /* sound.c-owned — CODE 0x85a1 (the SMF seque
  * re-declaring here (avoids a redundant/conflicting declaration, same convention
  * sound.c itself uses for player.c's cross-module globals via player.h). */
 
-/* ── MIDI/SMF-sequencer function prototypes (Phase D/E — NOT YET PORTED) ──────────
- *  All bodies are still either a game_stubs.c carve-out no-op (the 3 register-entry
- *  OPL-note leaves, noted per-symbol below) or simply UNDEFINED pending Phase-D/E
- *  reconstruction — nothing in the currently-reconstructed call graph reaches the
- *  rest yet, so game_stubs.c carries no stub for them.  Declared now so the full,
- *  address-cited call-tree map lives in one place ahead of the Phase-D/E body work. */
+/* ── MIDI/SMF-sequencer function prototypes ───────────────────────────────────────
+ *  The Phase D (load/parse/track-table) + Phase D/E (event-stream cursor) fns below
+ *  are still simply UNDEFINED pending future reconstruction — nothing in the
+ *  currently-reconstructed call graph reaches them yet, so game_stubs.c carries no
+ *  stub for them.  Declared now so the full, address-cited call-tree map lives in one
+ *  place ahead of that body work.  The Phase-E MIDI-to-OPL voice/channel-dispatch
+ *  block further down (opl_event_note_on / midi_emit_voice_msg_w1/w2/w3 /
+ *  emit_midi_voice_message / seq_set_channel_param) is RECONSTRUCTED in midi.c
+ *  (Task D2) — see the per-fn RECONSTRUCTION FIDELITY notes there. */
 
 /* Phase D — load/parse/track-table pipeline. */
 int  midi_load_sequence(void *song_data, void *aux_ptr, u16 flag);  /* 1000:87cd */
@@ -153,12 +181,14 @@ u32  midi_read_varlen(void);        /* 1000:8891 — decode a 7-bits/byte variab
 void midi_process_event(void);     /* 1000:873c — dispatch meta/tempo/EOT/channel events, advance DS:SI */
 
 /* Phase E — MIDI-to-OPL voice/channel dispatch (register-entry throughout; reached
- * from the ALREADY-PORTED snddrv_dispatch_b/c/d mode0/mode1 backends in sound.c). */
-void midi_emit_voice_msg_w1(void);   /* 1000:8b81 */
-void midi_emit_voice_msg_w2(void);   /* 1000:8b6b */
-void midi_emit_voice_msg_w3(void);   /* 1000:8e93 — CARVE-OUT no-op stub currently in game_stubs.c */
-void emit_midi_voice_message(void);  /* 1000:8bc8 — shared OPL patch/note-register writer w1->w2->w3 funnel into */
-void seq_set_channel_param(void);    /* 1000:922c — CARVE-OUT no-op stub currently in game_stubs.c */
-void opl_event_note_on(void);        /* 1000:8ea3 — CARVE-OUT no-op stub currently in game_stubs.c */
+ * from the ALREADY-PORTED snddrv_dispatch_b/c/d mode0/mode1 backends in sound.c).
+ * RECONSTRUCTED in midi.c (Task D2); call chain w3 -> w2 -> w1 -> emit_midi_voice_message
+ * (confirmed via raw disasm — see midi.c's per-fn notes). */
+void midi_emit_voice_msg_w1(void);   /* 1000:8b81 — PORTED (D2) */
+void midi_emit_voice_msg_w2(void);   /* 1000:8b6b — PORTED (D2) */
+void midi_emit_voice_msg_w3(void);   /* 1000:8e93 — PORTED (D2); game_stubs.c stub REMOVED */
+void emit_midi_voice_message(void);  /* 1000:8bc8 — PORTED (D2); shared OPL patch/note-register writer w1 funnels into */
+void seq_set_channel_param(void);    /* 1000:922c — PORTED (D2); game_stubs.c stub REMOVED */
+void opl_event_note_on(void);        /* 1000:8ea3 — PORTED (D2); game_stubs.c stub REMOVED */
 
 #endif /* MIDI_H */

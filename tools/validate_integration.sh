@@ -51,7 +51,7 @@ LNK="$TMP/BUMPY_integration.lnk"
 
 # ── The BUMPY.EXE object set (mirrors src/Makefile BUMPY_OBJS) ───────────────
 OBJS=(main.obj game.obj game_stubs.obj
-      level.obj input.obj player.obj player2.obj items.obj anim.obj spawn.obj sound.obj screens.obj
+      level.obj input.obj player.obj player2.obj items.obj anim.obj spawn.obj sound.obj midi.obj screens.obj
       vec.obj op12.obj video.obj
       sprite.obj sprite_anim.obj sprite_chain.obj sprite_blit.obj
       bg_render.obj entity.obj gfx_overlay.obj
@@ -79,8 +79,7 @@ CARVEOUT_ALLOWLIST=(
   # P2 indirect-call backend carve
   p2_dispatch_move_state_handler
   # out-of-scope sound L4/L6 device drivers + helpers
-  FUN_1000_6183 seq_set_channel_param midi_emit_voice_msg_w1 midi_emit_voice_msg_w3
-  opl_event_note_on pit_set_counter0
+  FUN_1000_6183 pit_set_counter0
   # out-of-scope player handler-table targets
   play_walk_anim_default p1_set_pixel_from_cell step_walk_anim FUN_1000_4802
   move_walk_right_anim_step enter_mode_0b_jump_start move_anim_step_to_mode0c

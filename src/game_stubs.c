@@ -98,21 +98,16 @@
  *  8a75 + snddrv_init_substep, 1000:8b2a) and the timer teardown (timer_teardown_restore,
  *  1000:7fef) are ALSO now RECONSTRUCTED in sound.c (Task A3; stubs removed here).
  *  STILL stubbed (out-of-scope): the entity sweep FUN_6183 (reached from
- *  play_contact_sound for contact codes 0xe..0x11); the 4 out-of-scope MIDI-note leaves
- *  the 9 backends above (+ opl_set_note_params, Task D1) reach (seq_set_channel_param /
- *  midi_emit_voice_msg_w1 / midi_emit_voice_msg_w3 / opl_event_note_on — a carve-out
- *  boundary a prior task discovered, extended by Task D1 with midi_emit_voice_msg_w1;
- *  all 4 already carry canonical Ghidra names, none reconstructed here — separate,
- *  not-yet-started MIDI-engine work); and pit_set_counter0 (PIT hardware init, called
- *  from timer_teardown_restore's isr_installed_flag-guarded body — also called by the
- *  unrelated, unreconstructed uninstall_interrupt_handler/pit_set_counter0_wrap, a
- *  separate ISR-install subsystem).  maybe_opl2_detect_chip (8fb6) + opl2_reset_all_regs
- *  (8eeb) — carved out by Task A3 — are NOW RECONSTRUCTED in sound.c (Task D1; their
- *  stubs removed here). */
-void seq_set_channel_param(void)  {}  /* 1000:922c — OPL/PC-spk program-change (carve) */
-void midi_emit_voice_msg_w1(void) {}  /* 1000:8b81 — OPL program-change entry (carve), reached from opl_set_note_params (D1) */
-void midi_emit_voice_msg_w3(void) {}  /* 1000:8e93 — OPL program-change fwd chain (carve) */
-void opl_event_note_on(void)      {}  /* 1000:8ea3 — OPL note-on -> opl_play_note (carve) */
+ *  play_contact_sound for contact codes 0xe..0x11); and pit_set_counter0 (PIT hardware
+ *  init, called from timer_teardown_restore's isr_installed_flag-guarded body — also
+ *  called by the unrelated, unreconstructed uninstall_interrupt_handler/
+ *  pit_set_counter0_wrap, a separate ISR-install subsystem).  maybe_opl2_detect_chip
+ *  (8fb6) + opl2_reset_all_regs (8eeb) — carved out by Task A3 — are NOW RECONSTRUCTED
+ *  in sound.c (Task D1; their stubs removed here).  The 4 MIDI-note leaves
+ *  (seq_set_channel_param / midi_emit_voice_msg_w1 / midi_emit_voice_msg_w3 /
+ *  opl_event_note_on) — carved out by a prior task, extended by Task D1 with
+ *  midi_emit_voice_msg_w1 — are NOW RECONSTRUCTED in midi.c (Task D2; their stubs
+ *  removed here — midi.obj supplies the real bodies). */
 void FUN_1000_6183(void)         {}   /* 1000:6183 sweep_active_entities — out-of-scope entity sweep (carve) */
 void pit_set_counter0(void)       {}  /* 1000:7f9a — PIT hardware init (carve) */
 /* apply_contact_action (1000:6a89) — RECONSTRUCTED in player.c (Phase-9 T1); the
