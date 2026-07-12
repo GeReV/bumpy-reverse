@@ -121,7 +121,7 @@ u16 snd_select_scratch_83ef;      /* CODE   0x83ef — select-from-mask reset sc
  *  replay harness).  None contributes to the validated semantic state (the device-
  *  guarded dispatch + the 10-word tone param frame + the installed far cb ptr):
  *    speaker_gate_reset     (1000:9440) — PC-speaker gate reset (L4 port write).  → T5.
- *    FUN_1000_8a07          (1000:8a07) — the OPL/MPU raw-sample emit (L4).       → T5.
+ *    snd_emit_raw_sample    (1000:8a07) — the OPL/MPU raw-sample emit (L4).       → T5.
  *  record_min_status_code (1000:945b) is NO LONGER stubbed — PORTED below (Task A3).
  *
  *  ── RECONSTRUCTION FIDELITY: the record_min_status_code flags-carry convention ──
@@ -147,7 +147,7 @@ u16 snd_select_scratch_83ef;      /* CODE   0x83ef — select-from-mask reset sc
  * ════════════════════════════════════════════════════════════════════════════ */
 
 /* still-stubbed callees (see header block above).  speaker_gate_reset (1000:9440) +
- *  FUN_1000_8a07 (1000:8a07) are NO LONGER stubs — they are L4 drivers PORTED 1:1
+ *  snd_emit_raw_sample (1000:8a07) are NO LONGER stubs — they are L4 drivers PORTED 1:1
  *  below (Phase-6 T5), declared in sound.h. */
 
 /* ── record_min_status_code (1000:945b) — PORTED (Task A3): status/result-code latch ──
@@ -163,7 +163,7 @@ u16 snd_select_scratch_83ef;      /* CODE   0x83ef — select-from-mask reset sc
  *  record_status_and_strobe_speaker/the L5 ISR tone sequencers do `MOV AX,imm; CALL
  *  0x945b` at 1000:9474/947c and 1000:9479/947c and the tone_seq_callback_* retire
  *  paths).  A literal register-entry reconstruction would need a global stand-in (the
- *  snd_mpu_byte_89e2 / FUN_1000_89e2 convention) PLUS reconciling all 6 already-
+ *  snd_mpu_byte_89e2 / mpu401_write_data_polled convention) PLUS reconciling all 6 already-
  *  reconstructed/validated call sites.  Since every call site already stages the exact
  *  intended value immediately before the call with nothing in between, the value this
  *  fn receives is bit-identical whether modelled as AX or as a C parameter — so the
@@ -194,7 +194,7 @@ static u8 snd_sched_carry_in = 0;
 
 /* The OPL raw-sample param table the effect_id==(device 4) path indexes (CODE 0x27ae,
  *  2 bytes per effect).  Reconstructed only as far as the dispatch needs it; the actual
- *  table data + the FUN_1000_8a07 emit land with the L4/L5 sample port (T5).  Kept as a
+ *  table data + the snd_emit_raw_sample emit land with the L4/L5 sample port (T5).  Kept as a
  *  zero table so the dispatch indexes a defined object on the host; the device-4 path is
  *  not exercised by the validated semantic-state records (which assert the param frame). */
 static const u8 snd_opl_sample_table[0x200];   /* CODE 0x27ae */
@@ -212,7 +212,7 @@ void play_sound(u8 sound_id)
 /* ── play_sound_effect (1000:6e30) — the 21-case effect→tone-param switch ─────────
  *  Dispatch on effect id to per-effect tone parameters and submit them to the tone
  *  engine (schedule_timer_callback_a / _b).  In OPL mode (sound_device_state == 4)
- *  emit a raw two-byte sample from table 0x27ae via FUN_1000_8a07 (stub → T5).
+ *  emit a raw two-byte sample from table 0x27ae via snd_emit_raw_sample (PORTED T5).
  *  Switch ported VERBATIM from the decomp (cases NOT collapsed); the goto LAB_70d6
  *  tail (cases 1/9/0xc/0x10/0x15 share `uVar3=1; tone_arg2=0x1e`) is preserved 1:1. */
 void play_sound_effect(u8 effect_id)
@@ -225,8 +225,8 @@ void play_sound_effect(u8 effect_id)
     u16 uVar4;
 
     if (sound_device_state == 4) {
-        FUN_1000_8a07(snd_opl_sample_table[(u16)effect_id * 2 + 0],
-                      snd_opl_sample_table[(u16)effect_id * 2 + 1]);
+        snd_emit_raw_sample(snd_opl_sample_table[(u16)effect_id * 2 + 0],
+                            snd_opl_sample_table[(u16)effect_id * 2 + 1]);
         return;
     }
     switch (effect_id) {
@@ -398,7 +398,7 @@ switchD_1000_6e7e_default:
  *  last_status_code, not part of any validated frame/port sequence), so we hand it the
  *  available value (param_1) in lieu of reconstructing the host-absent FLAGS register —
  *  observationally identical.
- *  Deeper callee FUN_1000_7df9 = set_timer_slot_raw (PORTED T4); speaker_gate_reset PORTED T5. */
+ *  Deeper callee set_timer_slot_raw (1000:7df9, PORTED T4); speaker_gate_reset PORTED T5. */
 u16 schedule_timer_callback_a(u16 param_1, u16 param_2, u16 param_3, u16 param_4,
                               u16 param_5, u16 param_6, u16 param_7, u16 param_8)
 {
@@ -421,7 +421,7 @@ u16 schedule_timer_callback_a(u16 param_1, u16 param_2, u16 param_3, u16 param_4
         snd_param_frame[9] = 0xf;       /* DAT_1000_979a (byte 0x0f) */
         snd_timer_cb_off = 0x9631;      /* timer_callback_off (CODE 0x97a1) */
         snd_timer_cb_seg = 0x1000;      /* timer_callback_seg (CODE 0x979f) */
-        /* The decomp renders this tail as a void FUN_1000_7df9(); the disassembly
+        /* The decomp renders this tail as a void set_timer_slot_raw() call; the disassembly
          *  (1000:94ec MOV AX,[BP+0xe]=param_6; MOV BX,0x2=channel; CALL 0x7df9, with
          *  CX=0x9631=cb_off / DX=0x1000=cb_seg already loaded) shows it is the timer-slot
          *  writer set_timer_slot_raw(channel=2, value=param_6, cb_off=0x9631, cb_seg=0x1000)
@@ -513,9 +513,10 @@ u16 schedule_timer_callback_c(u16 param_1, u16 param_2)
  *  -> select_sound_device_from_mask scans the detected-device bitmask and latches the
  *  selected device into snddrv_mode (0x85b3) + sound_active_device_mask (0x5586).  The
  *  snddrv_dispatch_a/b/c/d fns fan out by snddrv_mode to the L4 backends (STUBBED → T5/T6).
- *  The L4 init/IO callees pc_speaker_silence/FUN_8ad0/8e2f/89e2 + the dispatch_b/c/d
- *  backends are PORTED (T5, below); mpu401_reset_to_uart + snddrv_init_substep
- *  (FUN_1000_8b2a) are PORTED here (Task A3, just below).
+ *  The L4 init/IO callees pc_speaker_silence/mpu401_settle_delay/opl2_all_notes_off/
+ *  mpu401_write_data_polled + the dispatch_b/c/d backends are PORTED (T5, below);
+ *  mpu401_reset_to_uart + snddrv_init_substep (1000:8b2a) are PORTED here (Task A3,
+ *  just below).
  *
  *  L3 TIMER-TABLE MGMT.  Two engine tables:
  *    - 0x5516 callback table (arm_timer_callback / disable_timer_callback): per-channel
@@ -526,9 +527,9 @@ u16 schedule_timer_callback_c(u16 param_1, u16 param_2)
  * ════════════════════════════════════════════════════════════════════════════ */
 
 /* still-stubbed callees the T4 bodies reach (see header block).
- *  pc_speaker_silence / FUN_1000_8ad0 / FUN_1000_8e2f / FUN_1000_89e2 are NOW PORTED 1:1
- *  below (Phase-6 T5 L4 hardware backends), declared in sound.h.  mpu401_reset_to_uart
- *  + snddrv_init_substep (FUN_1000_8b2a) are PORTED here (Task A3). */
+ *  pc_speaker_silence / mpu401_settle_delay / opl2_all_notes_off / mpu401_write_data_polled
+ *  are NOW PORTED 1:1 below (Phase-6 T5 L4 hardware backends), declared in sound.h.
+ *  mpu401_reset_to_uart + snddrv_init_substep (1000:8b2a) are PORTED here (Task A3). */
 
 /* ── mpu401_reset_to_uart (1000:8a75) — PORTED (Task A3): MPU-401 chip reset → UART ──
  *  Gated on mpu401_present (DGROUP 0x557c): if nonzero, poll port 0x331 for DSR
@@ -551,7 +552,7 @@ u16 schedule_timer_callback_c(u16 param_1, u16 param_2)
  *  reconstructed code sets it nonzero), so its unconditionally-called site (snddrv_init,
  *  below) exercises only the early-return no-op path, which is why the already-
  *  validated device_init scenario is unaffected by wiring in this real body. */
-extern s16 mpu401_present;   /* DGROUP 0x557c — defined below with FUN_1000_89e2 (T5) */
+extern s16 mpu401_present;   /* DGROUP 0x557c — defined below with mpu401_write_data_polled (T5) */
 
 int mpu401_reset_to_uart(void)
 {
@@ -765,14 +766,14 @@ void timer_teardown_restore(void)
  *  standin already in this file): file-scope globals stand in for the registers a
  *  reconstructed CALLER would otherwise supply as arguments, because the true caller
  *  (midi_process_event) is unreconstructed and dispatch_b/c/d's own EXISTING,
- *  already-committed call sites (`FUN_1000_9xxx();`, no args) are unchanged by this
+ *  already-committed call sites (`snddrv_dispatch_b_mode0();`-style, no args) are unchanged by this
  *  task (per the brief). `snd_seq_cursor` models DS:SI (read-and-advanced in place by
  *  LODSB, exactly as the asm does); `snd_seq_event_al` models AL; `snd_seq_default_chan`
  *  models the resolved CS:[BX+0x80] byte (BX itself, an ambient per-track table
  *  pointer, is never modelled as a real pointer — nothing in this codebase defines
  *  what it points at, matching the "genuinely out of scope" MIDI-engine boundary).
  *
- *  ── NOT ORACLE-EXERCISED (documented, same precedent as opl_play_note/FUN_8e2f) ────
+ *  ── NOT ORACLE-EXERCISED (documented, same precedent as opl_play_note/opl2_all_notes_off) ────
  *  None of the 9 is hooked in tools/sound_oracle.py (no FN_NAMES/L4_FNS entries) and
  *  none has a tools/sound_ctest.c PORTED[] entry. Reason: the oracle's call_near()
  *  harness seeds DGROUP/CODE memory + explicit stack args, not CPU registers, and the
@@ -806,56 +807,56 @@ u8  snd_seq_default_chan;     /* engine CS:[BX+0x80] — per-track default chann
 static u8 snd_seq_scratch_stream[4096];
 u8 *snd_seq_cursor = snd_seq_scratch_stream;   /* engine DS:SI — the live MIDI-track cursor */
 
-/* ── FUN_1000_91cf (1000:91cf) — snddrv_dispatch_b_mode0: MIDI 0xF7 skip (device mode 0) ──
+/* ── snddrv_dispatch_b_mode0 (1000:91cf) — MIDI 0xF7 skip (device mode 0) ──
  *  0xF7 (SysEx continuation) handler for driver mode 0 (PC-speaker/silent): read a
  *  length byte from the MIDI stream and skip that many bytes; the event is not
  *  otherwise acted on. asm 1000:91cf verbatim: LODSB (len=*SI,SI++); XOR AH,AH;
  *  ADD SI,AX. Register-entry (DS:SI) — see the MIDI-dispatch-backends note above. */
-void FUN_1000_91cf(void)
+void snddrv_dispatch_b_mode0(void)
 {
     u8 len = *snd_seq_cursor;
     snd_seq_cursor++;
     snd_seq_cursor += len;
 }
 
-/* ── FUN_1000_8e48 (1000:8e48) — snddrv_dispatch_b_mode1: MIDI 0xF7 skip (device mode 1) ──
+/* ── snddrv_dispatch_b_mode1 (1000:8e48) — MIDI 0xF7 skip (device mode 1) ──
  *  Identical body to _mode0 (91cf) — the 0xF7 skip is device-independent for modes 0/1.
  *  asm 1000:8e48 verbatim (byte-identical to 91cf). Kept as its OWN function (not
  *  merged/shared) per the "no collapsing near-duplicate mode backends" rule. */
-void FUN_1000_8e48(void)
+void snddrv_dispatch_b_mode1(void)
 {
     u8 len = *snd_seq_cursor;
     snd_seq_cursor++;
     snd_seq_cursor += len;
 }
 
-/* ── FUN_1000_91d7 (1000:91d7) — snddrv_dispatch_c_mode0: MIDI 0xF0 skip (device mode 0) ──
+/* ── snddrv_dispatch_c_mode0 (1000:91d7) — MIDI 0xF0 skip (device mode 0) ──
  *  0xF0 (SysEx) handler for driver mode 0: same length-prefixed skip as dispatch_b's
  *  mode0/1 (91cf/8e48) — asm 1000:91d7 verbatim (byte-identical body, different event
  *  class / call site). Kept as its own function per the no-collapsing rule. */
-void FUN_1000_91d7(void)
+void snddrv_dispatch_c_mode0(void)
 {
     u8 len = *snd_seq_cursor;
     snd_seq_cursor++;
     snd_seq_cursor += len;
 }
 
-/* ── FUN_1000_8e50 (1000:8e50) — snddrv_dispatch_c_mode1: MIDI 0xF0 skip (device mode 1) ──
+/* ── snddrv_dispatch_c_mode1 (1000:8e50) — MIDI 0xF0 skip (device mode 1) ──
  *  Same length-prefixed skip, dispatch_c's mode-1 variant. asm 1000:8e50 verbatim. */
-void FUN_1000_8e50(void)
+void snddrv_dispatch_c_mode1(void)
 {
     u8 len = *snd_seq_cursor;
     snd_seq_cursor++;
     snd_seq_cursor += len;
 }
 
-/* ── FUN_1000_8af6 (1000:8af6) — snddrv_dispatch_b_mode4: MIDI 0xF7 busy-wait (mode 4) ──
+/* ── snddrv_dispatch_b_mode4 (1000:8af6) — MIDI 0xF7 busy-wait (mode 4) ──
  *  OPL/mode-4 handling of the 0xF7 event: reads TWO stream bytes (len, then a second
  *  byte that is read but never used) and busy-waits snd_busy_delay(len-1). asm 1000:8af6
  *  verbatim: LODSB (CL=len); LODSB (discard); DEC CL; CALL 0x872e. The real CX's high
  *  byte (CH) is whatever the (unreconstructed) MIDI player's own CX held at the time —
  *  not modelled (never exercised; see the note above) — treated as 0. */
-void FUN_1000_8af6(void)
+void snddrv_dispatch_b_mode4(void)
 {
     u8 len;
 
@@ -866,25 +867,25 @@ void FUN_1000_8af6(void)
     snd_busy_delay((u16)(u8)(len - 1));
 }
 
-/* ── FUN_1000_8b04 (1000:8b04) — snddrv_dispatch_c_mode4: MIDI 0xF0 busy-wait (mode 4) ──
+/* ── snddrv_dispatch_c_mode4 (1000:8b04) — MIDI 0xF0 busy-wait (mode 4) ──
  *  OPL/mode-4 handling of the 0xF0 event: reads ONE stream byte (a direct byte read +
  *  manual SI++, NOT LODSB) and busy-waits snd_busy_delay(len) — no decrement, unlike
  *  the _b_mode4 sibling. asm 1000:8b04 verbatim: MOV CL,[SI]; INC SI; CALL 0x872e. */
-void FUN_1000_8b04(void)
+void snddrv_dispatch_c_mode4(void)
 {
     u8 len = *snd_seq_cursor;
     snd_seq_cursor++;
     snd_busy_delay((u16)len);
 }
 
-/* ── FUN_1000_8b0d (1000:8b0d) — snddrv_dispatch_d_mode4: MIDI channel-msg busy-wait (mode 4) ──
+/* ── snddrv_dispatch_d_mode4 (1000:8b0d) — MIDI channel-msg busy-wait (mode 4) ──
  *  OPL/mode-4 handling of a channel voice message (dispatch_d's event class, status
  *  nibble >= 0x80): default the channel nibble from the per-track byte (CS:[BX+0x80])
  *  when the low nibble is 0, busy_delay(2), or busy_delay(1) if the event's upper
  *  nibble is 0xC0 (program change). No MIDI-stream (SI) read at all — only AL/BX.
  *  asm 1000:8b0d verbatim: TEST AL,0xf; JNZ +; OR AL,[BX+0x80]; MOV CX,2; MOV AH,AL;
  *  AND AH,0xf0; CMP AH,0xc0; JNZ +; DEC CX; CALL 0x872e. */
-void FUN_1000_8b0d(void)
+void snddrv_dispatch_d_mode4(void)
 {
     u8  al = snd_seq_event_al;
     u16 cx = 2;
@@ -898,7 +899,7 @@ void FUN_1000_8b0d(void)
     snd_busy_delay(cx);
 }
 
-/* ── FUN_1000_91df (1000:91df) — snddrv_dispatch_d_mode0: MIDI channel-msg (PC-spk mode 0) ──
+/* ── snddrv_dispatch_d_mode0 (1000:91df) — MIDI channel-msg (PC-spk mode 0) ──
  *  Channel voice message handler for driver mode 0 (PC-speaker/silent device). 0xC0
  *  (program change, tested on the ORIGINAL undefaulted AL) tail-calls the out-of-scope
  *  seq_set_channel_param (1000:922c). Otherwise default the channel nibble from
@@ -912,7 +913,7 @@ void FUN_1000_8b0d(void)
  *  too (writes an unlabeled CODE-segment byte at 0x83cc+15, not any named table); not
  *  bounds-checked here (that would invent a safety net the binary doesn't have) — moot
  *  in practice since this leaf is never invoked (not oracle-exercised; see above). */
-void FUN_1000_91df(void)
+void snddrv_dispatch_d_mode0(void)
 {
     u8 al = snd_seq_event_al;
     u8 chan;
@@ -942,7 +943,7 @@ void FUN_1000_91df(void)
     }
 }
 
-/* ── FUN_1000_8e58 (1000:8e58) — snddrv_dispatch_d_mode1: MIDI channel-msg (OPL mode 1) ──
+/* ── snddrv_dispatch_d_mode1 (1000:8e58) — MIDI channel-msg (OPL mode 1) ──
  *  Channel voice message handler for driver mode 1 (OPL/AdLib): default the channel
  *  nibble from CS:[BX+0x80] when 0. If channel > 8 (only 9 OPL voices, 0..8) OR the
  *  status nibble is none of 0xC0/0x90/0x80, skip the event's data bytes without acting
@@ -954,7 +955,7 @@ void FUN_1000_91df(void)
  *  0x80cc shadow byte for register (0xb0+channel), clear its key-on bit (AND 0xdf), and
  *  call the ALREADY-PORTED opl_write_reg directly, then discard 2 stream bytes
  *  (note+velocity). asm 1000:8e58 verbatim. */
-void FUN_1000_8e58(void)
+void snddrv_dispatch_d_mode1(void)
 {
     u8 al = snd_seq_event_al;
     u8 chan;
@@ -1305,9 +1306,9 @@ void snddrv_dispatch_a(void)
     if (snddrv_mode == 0) {
         pc_speaker_silence();
     } else if (snddrv_mode == 4) {
-        FUN_1000_8ad0();
+        mpu401_settle_delay();
     } else if (snddrv_mode == 1) {
-        FUN_1000_8e2f();
+        opl2_all_notes_off();
     }
 }
 
@@ -1318,11 +1319,11 @@ void snddrv_dispatch_a(void)
 u16 snddrv_dispatch_b(void)
 {
     if (snddrv_mode == 0) {
-        FUN_1000_91cf();
+        snddrv_dispatch_b_mode0();
     } else if (snddrv_mode == 4) {
-        FUN_1000_8af6();
+        snddrv_dispatch_b_mode4();
     } else if (snddrv_mode == 1) {
-        FUN_1000_8e48();
+        snddrv_dispatch_b_mode1();
     }
     return 0;   /* decomp returns the ambient in_AX; backends STUBBED → not validated */
 }
@@ -1331,11 +1332,11 @@ u16 snddrv_dispatch_b(void)
 void snddrv_dispatch_c(void)
 {
     if (snddrv_mode == 0) {
-        FUN_1000_91d7();
+        snddrv_dispatch_c_mode0();
     } else if (snddrv_mode == 4) {
-        FUN_1000_8b04();
+        snddrv_dispatch_c_mode4();
     } else if (snddrv_mode == 1) {
-        FUN_1000_8e50();
+        snddrv_dispatch_c_mode1();
     }
 }
 
@@ -1343,27 +1344,28 @@ void snddrv_dispatch_c(void)
 void snddrv_dispatch_d(void)
 {
     if (snddrv_mode == 0) {
-        FUN_1000_91df();
+        snddrv_dispatch_d_mode0();
     } else if (snddrv_mode == 4) {
-        FUN_1000_8b0d();
+        snddrv_dispatch_d_mode4();
     } else if (snddrv_mode == 1) {
-        FUN_1000_8e58();
+        snddrv_dispatch_d_mode1();
     }
 }
 
 /* ── snd_busy_delay (1000:872e) ──────────────────────────────────────────────────
- *  Busy-wait: call the timing primitive FUN_1000_89e2 CX+1 times.  This is a naked/asm
- *  routine — entry AL feeds the first FUN_89e2 (MOV AH,AL), then a LODSB/LOOP over CX
- *  reads bytes from DS:SI and calls FUN_89e2 for each.  The decomp models it as the
- *  CX+1-iteration delay loop (the LODSB source bytes are consumed by the STUBBED timing
- *  primitive and do not affect the validated state).  Modelled with an explicit count
- *  parameter (the engine's CX); the LODSB byte stream is not reconstructed (→ T6 with the
- *  L4 timing port).  RECONSTRUCTION FIDELITY: register-args asm routine; see report. */
+ *  Busy-wait: call the timing primitive mpu401_write_data_polled CX+1 times.  This is a
+ *  naked/asm routine — entry AL feeds the first mpu401_write_data_polled (MOV AH,AL), then
+ *  a LODSB/LOOP over CX reads bytes from DS:SI and calls mpu401_write_data_polled for each.
+ *  The decomp models it as the CX+1-iteration delay loop (the LODSB source bytes are
+ *  consumed by the STUBBED timing primitive and do not affect the validated state).
+ *  Modelled with an explicit count parameter (the engine's CX); the LODSB byte stream is
+ *  not reconstructed (→ T6 with the L4 timing port).  RECONSTRUCTION FIDELITY:
+ *  register-args asm routine; see report. */
 void snd_busy_delay(u16 count)
 {
-    FUN_1000_89e2();                       /* AH=AL; CALL 0x89e2 (first iteration) */
+    mpu401_write_data_polled();            /* AH=AL; CALL 0x89e2 (first iteration) */
     do {
-        FUN_1000_89e2();                   /* LODSB; MOV AH,AL; CALL 0x89e2 */
+        mpu401_write_data_polled();        /* LODSB; MOV AH,AL; CALL 0x89e2 */
         count = count - 1;
     } while (count != 0);
 }
@@ -1492,9 +1494,9 @@ void timer_restore(void)
  *  static image leaves them zero — they are BSS).  Owned here (no other TU defines
  *  these addresses); zero-initialised.  Because the engine populates the freq tables at
  *  runtime and the SND_SNAP does NOT capture them, opl_play_note's exact note OUTs are
- *  not host-reproducible from the trace — opl_play_note (905d) + FUN_8e2f (8e2f, which
- *  drives it) are therefore a DOCUMENTED port-write-gate EXCLUSION (ported 1:1 for the
- *  link + faithfulness, registered UNPORTED).  See docs/reconstruction-fidelity.md. */
+ *  not host-reproducible from the trace — opl_play_note (905d) + opl2_all_notes_off
+ *  (8e2f, which drives it) are therefore a DOCUMENTED port-write-gate EXCLUSION (ported
+ *  1:1 for the link + faithfulness, registered UNPORTED).  See docs/reconstruction-fidelity.md. */
 u8 opl_reg_shadow_80cc[0x100];     /* CODE   0x80cc — OPL register write-back shadow */
 u8 opl_fnum_lo_5593[0x100];        /* DGROUP 0x5593 — per-note F-number low byte (runtime) */
 u8 opl_fnum_hi_559c[0x100];        /* DGROUP 0x559c — per-note F-number/block word (runtime) */
@@ -1502,15 +1504,16 @@ u8 opl_chan_data_55b4[0x100];      /* DGROUP 0x55b4 — per-channel feedback/con
 u8 opl_chan_idx_5614[0x100];       /* DGROUP 0x5614 — per-channel block index (runtime) */
 
 /* ── MPU-401 register-byte recovery (host port-write gate) ───────────────────────────
- *  FUN_89e2 writes the byte in register AH; FUN_8a07 writes args sample_lo/sample_hi;
- *  opl_write_reg takes reg=AH/val=AL.  The engine passes these in registers/args the
+ *  mpu401_write_data_polled writes the byte in register AH; snd_emit_raw_sample writes
+ *  args sample_lo/sample_hi; opl_write_reg takes reg=AH/val=AL.  The engine passes these
+ *  in registers/args the
  *  SND_SNAP does not serialize, so on the host the replay harness recovers them from the
  *  record's OUT events and publishes them via these file-scope inputs before the call (the
  *  driver still must emit them at the right PORTS in the right ORDER for the gate to pass —
  *  a wrong port/order/extra/missing write diverges).  On the real wcc build these are
  *  unused (the byte arrives in AH from the caller); the host wrappers set them.  Defaults
  *  reproduce the engine's first-seen sequence. */
-u8 snd_mpu_byte_89e2 = 0x99;       /* the byte FUN_89e2 writes to 0x330 (engine: AH) */
+u8 snd_mpu_byte_89e2 = 0x99;       /* the byte mpu401_write_data_polled writes to 0x330 (engine: AH) */
 
 /* ── L5 ISR sequencer PRNG/state bytes (CODE 0x979b..0x979e) ─────────────────────────
  *  The 96c4/95b5 noise sequencers keep their LFSR/PRNG state in the CS-segment bytes
@@ -1523,20 +1526,21 @@ u8 snd_mpu_byte_89e2 = 0x99;       /* the byte FUN_89e2 writes to 0x330 (engine:
  *  here; not captured in the SND_SNAP (the ISR is never host-run — see the L5 block). */
 u8 snd_isr_state_979a[5];          /* CODE 0x979a..0x979e — ISR tick counter + PRNG state */
 
-/* MPU-401 poll residual / presence (DGROUP DAT_1000_85a1 / DAT_203b_557c).  FUN_89e2
-   writes both on a DSR poll TIMEOUT.  Not read in the reconstruction (the L5 MPU init
-   that gates on mpu401_present is carved out), modelled for write-side fidelity. */
+/* MPU-401 poll residual / presence (DGROUP DAT_1000_85a1 / DAT_203b_557c).
+   mpu401_write_data_polled writes both on a DSR poll TIMEOUT.  Not read in the
+   reconstruction (the L5 MPU init that gates on mpu401_present is carved out), modelled
+   for write-side fidelity. */
 s16 midi_track_count;
 s16 mpu401_present;
 
-/* ── FUN_89e2 (1000:89e2) — MPU-401 byte-out primitive ──────────────────────────────
+/* ── mpu401_write_data_polled (1000:89e2) — MPU-401 byte-out primitive ────────────────
  *  Poll status port 0x331 until DSR (bit 0x40) is CLEAR (CX from 0 -> up to 0x10000
  *  iters), then write the data byte (engine AH) to data port 0x330.  On a poll TIMEOUT
  *  (bit still set) it records the residual count into midi_track_count/mpu401_present and
  *  writes nothing.  In the capture 0x331 reads 0x00 (DSR clear) immediately, so it always
  *  writes the byte.  asm 1000:89e2: XOR CX,CX; IN AL,0x331; TEST 0x40; LOOPNZ; JNZ fail;
  *  DEC DX(->0x330); MOV AL,AH; OUT DX,AL.  The host byte arrives via snd_mpu_byte_89e2. */
-void FUN_1000_89e2(void)
+void mpu401_write_data_polled(void)
 {
     u16 cx;
     u8  status;
@@ -1557,29 +1561,31 @@ void FUN_1000_89e2(void)
     outp(0x330, snd_mpu_byte_89e2);      /* MOV AL,AH; OUT 0x330,AL */
 }
 
-/* ── FUN_1000_8a07 (1000:8a07) — MPU-401 raw 2-byte sample emit ──────────────────────
+/* ── snd_emit_raw_sample (1000:8a07) — MPU-401 raw 2-byte sample emit ────────────────
  *  Writes the MIDI command 0x99 then the two sample bytes (sample_lo, sample_hi) to the
- *  MPU data port, each via FUN_89e2 (poll-then-write).  asm: MOV AH,0x99; CALL 89e2;
- *  MOV AH,[BP+4]; CALL 89e2; MOV AH,[BP+6]; CALL 89e2.  So the OUT sequence is
+ *  MPU data port, each via mpu401_write_data_polled (poll-then-write).  asm: MOV AH,0x99;
+ *  CALL 89e2; MOV AH,[BP+4]; CALL 89e2; MOV AH,[BP+6]; CALL 89e2.  So the OUT sequence is
  *  0x330=0x99, 0x330=sample_lo, 0x330=sample_hi (each gated by a 0x331 poll).  The AH
- *  byte for FUN_89e2 is staged through snd_mpu_byte_89e2 (the engine's AH register). */
-void FUN_1000_8a07(u8 sample_lo, u8 sample_hi)
+ *  byte for mpu401_write_data_polled is staged through snd_mpu_byte_89e2 (the engine's
+ *  AH register). */
+void snd_emit_raw_sample(u8 sample_lo, u8 sample_hi)
 {
     snd_mpu_byte_89e2 = 0x99;            /* MOV AH,0x99 */
-    FUN_1000_89e2();
+    mpu401_write_data_polled();
     snd_mpu_byte_89e2 = sample_lo;       /* MOV AH,[BP+4] */
-    FUN_1000_89e2();
+    mpu401_write_data_polled();
     snd_mpu_byte_89e2 = sample_hi;       /* MOV AH,[BP+6] */
-    FUN_1000_89e2();
+    mpu401_write_data_polled();
 }
 
-/* ── FUN_1000_8ad0 (1000:8ad0) — MPU-401 settle delay ───────────────────────────────
+/* ── mpu401_settle_delay (1000:8ad0) — MPU-401 settle delay ──────────────────────────
  *  Nested loop: outer BL = 9 down to 1 (BH stays 0x90), inner CX = 0x7f down to 1.  Each
- *  inner iteration writes 3 MPU bytes via FUN_89e2: AH = 0x90+BL (=BH+BL), then AH = CL,
- *  then AH = 0.  asm 1000:8ad0: MOV BX,0x9009; (outer) MOV CX,0x7f; (inner) MOV AH,BH;
- *  ADD AH,BL; CALL 89e2; MOV AH,CL; CALL 89e2; XOR AH,AH; CALL 89e2; LOOP; DEC BL; JNZ.
- *  Fully deterministic (no external input) → port-write-gate validated. */
-void FUN_1000_8ad0(void)
+ *  inner iteration writes 3 MPU bytes via mpu401_write_data_polled: AH = 0x90+BL
+ *  (=BH+BL), then AH = CL, then AH = 0.  asm 1000:8ad0: MOV BX,0x9009; (outer) MOV
+ *  CX,0x7f; (inner) MOV AH,BH; ADD AH,BL; CALL 89e2; MOV AH,CL; CALL 89e2; XOR AH,AH;
+ *  CALL 89e2; LOOP; DEC BL; JNZ.  Fully deterministic (no external input) → port-write-
+ *  gate validated. */
+void mpu401_settle_delay(void)
 {
     u8  bl;
     u8  cl;
@@ -1591,11 +1597,11 @@ void FUN_1000_8ad0(void)
         cl = 0x7f;
         do {
             snd_mpu_byte_89e2 = (u8)(0x90 + bl);   /* AH = BH(0x90) + BL */
-            FUN_1000_89e2();
+            mpu401_write_data_polled();
             snd_mpu_byte_89e2 = cl;                /* AH = CL */
-            FUN_1000_89e2();
+            mpu401_write_data_polled();
             snd_mpu_byte_89e2 = 0;                 /* XOR AH,AH */
-            FUN_1000_89e2();
+            mpu401_write_data_polled();
             cl = (u8)(cl - 1);                     /* LOOP */
         } while (cl != 0);
         bl = (u8)(bl - 1);                         /* DEC BL */
@@ -1678,12 +1684,12 @@ void opl_play_note(u8 param_1, u8 param_2, u16 param_3, u16 param_4)
     opl_write_reg((u8)(0xb0 + (u8)param_4), ah);          /* (4) reg=0xB0+chan, key-on */
 }
 
-/* ── FUN_1000_8e2f (1000:8e2f) — OPL2 all-notes-off ─────────────────────────────────
+/* ── opl2_all_notes_off (1000:8e2f) — OPL2 all-notes-off ─────────────────────────────
  *  Loop voice = 1..9 calling opl_play_note(0,0,0,voice).  asm 1000:8e2f: MOV BX,1; (loop)
  *  PUSH BX; XOR AX,AX; PUSH AX x3; CALL 905d; ...; INC BX; CMP BX,9; JLE.  Reaches
  *  opl_play_note (a documented port-write-gate exclusion — runtime freq tables), so 8e2f
  *  inherits the exclusion (registered UNPORTED); ported 1:1 for faithfulness + the link. */
-void FUN_1000_8e2f(void)
+void opl2_all_notes_off(void)
 {
     int voice_index;
 

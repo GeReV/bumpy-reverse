@@ -444,13 +444,14 @@ u8  prev_game_mode;         /* player.c 0x8552 */
  *  harness does NOT link game_stubs.c (it #includes only src/sound.c), so it supplies
  *  its own no-op host stubs — the same convention items_ctest uses for play_sound etc.
  *  None affects the validated semantic state (device-guarded dispatch + tone frame).
- *  record_min_status_code / mpu401_reset_to_uart / snddrv_init_substep (FUN_8b2a) /
- *  timer_teardown_restore (FUN_7fef) are NO LONGER stubbed here — RECONSTRUCTED in
+ *  record_min_status_code / mpu401_reset_to_uart / snddrv_init_substep (1000:8b2a) /
+ *  timer_teardown_restore (1000:7fef) are NO LONGER stubbed here — RECONSTRUCTED in
  *  src/sound.c (Task A3; no host stub, they come from the included TU). */
 
 /* T4/T5 still-stubbed L5 + out-of-scope callees src/sound.c references (host no-ops).
  *  The L4 PC-speaker / MPU / OPL drivers (pc_speaker_silence / speaker_gate_* /
- *  FUN_8a07 / FUN_8ad0 / FUN_8e2f / FUN_89e2 / opl_write_reg / opl_play_note) are NOW
+ *  snd_emit_raw_sample / mpu401_settle_delay / opl2_all_notes_off /
+ *  mpu401_write_data_polled / opl_write_reg / opl_play_note) are NOW
  *  PORTED in src/sound.c (T5) — no host stub here (they come from the included TU).  The
  *  9 snddrv_dispatch_b/c/d MIDI mode{0,1,4} backends are ALSO now PORTED in src/sound.c
  *  (this task) — likewise no host stub for THEM.  They are register-entry / NOT
@@ -724,9 +725,11 @@ static void call_timer_restore(void)         { timer_restore(); }
  *  clears the out() capture (prime_ports), calls the real ported driver, then cmp_ports
  *  diffs the host OUT capture vs the record's OUT events.  Two flavours:
  *    (i)  DETERMINISTIC drivers (no external input): pc_speaker_silence, speaker_gate_*,
- *         record_status_and_strobe, FUN_8ad0.  Just call — the OUTs are fixed (modulo the
- *         IN replay, which the driver branches on).  sound_mode is seeded from the SNAP.
- *    (ii) REGISTER/ARG-INPUT drivers (FUN_89e2, FUN_8a07, opl_write_reg): the engine
+ *         record_status_and_strobe, mpu401_settle_delay.  Just call — the OUTs are fixed
+ *         (modulo the IN replay, which the driver branches on).  sound_mode is seeded
+ *         from the SNAP.
+ *    (ii) REGISTER/ARG-INPUT drivers (mpu401_write_data_polled, snd_emit_raw_sample,
+ *         opl_write_reg): the engine
  *         passes the written byte(s) in registers/args the SND_SNAP does NOT serialize.
  *         We recover them from the record's OUT values and stage them before the call.
  *         This is NOT a self-consistency loop: cmp_ports still asserts the driver emits
@@ -749,17 +752,17 @@ static void call_pc_speaker_silence(void)            { pc_speaker_silence(); }
 static void call_speaker_gate_reset(void)            { speaker_gate_reset(); }
 static void call_speaker_gate_strobe(void)           { speaker_gate_strobe(); }
 static void call_record_status_strobe(void)          { record_status_and_strobe_speaker(); }
-static void call_FUN_8ad0(void)                      { FUN_1000_8ad0(); }
-static void call_FUN_89e2(void)
+static void call_mpu401_settle_delay(void)           { mpu401_settle_delay(); }
+static void call_mpu401_write_data_polled(void)
 {
     /* engine AH = the single recorded OUT(0x330) value; stage it then run the driver. */
     snd_mpu_byte_89e2 = (u8)rec_out_val(g_cur_rec, 0);
-    FUN_1000_89e2();
+    mpu401_write_data_polled();
 }
-static void call_FUN_8a07(void)
+static void call_snd_emit_raw_sample(void)
 {
     /* OUT seq = 0x330=0x99, 0x330=sample_lo, 0x330=sample_hi; recover lo/hi from out[1]/[2]. */
-    FUN_1000_8a07((u8)rec_out_val(g_cur_rec, 1), (u8)rec_out_val(g_cur_rec, 2));
+    snd_emit_raw_sample((u8)rec_out_val(g_cur_rec, 1), (u8)rec_out_val(g_cur_rec, 2));
 }
 static void call_opl_write_reg(void)
 {
@@ -820,17 +823,17 @@ static const ported_t PORTED[] = {
     { 0x7fde, "timer_restore",                0, call_timer_restore,          0, 0 },
     /* L4 hardware (port-write-sequence, T5) — PORTED in src/sound.c, gated by comparator B.
      *  fn != NULL => the driver runs and its OUT capture is diffed vs the record's OUTs.
-     *  opl_play_note (905d) + FUN_8e2f (8e2f) read RUNTIME freq tables not in the SND_SNAP,
+     *  opl_play_note (905d) + opl2_all_notes_off (8e2f) read RUNTIME freq tables not in the SND_SNAP,
      *  so their note OUTs are not host-reproducible from the trace — DOCUMENTED port-gate
      *  EXCLUSION (fn=NULL -> reported UNPORTED; ported 1:1 in sound.c for the link). */
     { 0x9115, "pc_speaker_silence",               1, call_pc_speaker_silence, 0, 0 },
     { 0x9440, "speaker_gate_reset",               1, call_speaker_gate_reset, 0, 0 },
     { 0x9451, "speaker_gate_strobe",              1, call_speaker_gate_strobe, 0, 0 },
     { 0x946e, "record_status_and_strobe_speaker", 1, call_record_status_strobe, 0, 0 },
-    { 0x8a07, "FUN_8a07_mpu_sample",              1, call_FUN_8a07,            0, 0 },
-    { 0x8ad0, "FUN_8ad0_mpu_settle",              1, call_FUN_8ad0,            0, 0 },
-    { 0x8e2f, "FUN_8e2f_opl_allnotesoff",         1, NULL,                     0, 0 },
-    { 0x89e2, "FUN_89e2_mpu_io",                  1, call_FUN_89e2,            0, 0 },
+    { 0x8a07, "snd_emit_raw_sample",              1, call_snd_emit_raw_sample,      0, 0 },
+    { 0x8ad0, "mpu401_settle_delay",              1, call_mpu401_settle_delay,      0, 0 },
+    { 0x8e2f, "opl2_all_notes_off",                1, NULL,                        0, 0 },
+    { 0x89e2, "mpu401_write_data_polled",          1, call_mpu401_write_data_polled, 0, 0 },
     { 0x9007, "opl_write_reg",                    1, call_opl_write_reg,       0, 0 },
     { 0x905d, "opl_play_note",                    1, NULL,                     0, 0 },
 };
@@ -945,7 +948,7 @@ int main(int argc, char **argv)
            "L2 device state + L3 tone-submit + L3 timer-table + L4 hardware drivers).  The "
            "L4 PC-speaker/MPU/OPL drivers run under the PORT-WRITE-SEQUENCE gate (comparator "
            "B).  Remaining UNPORTED = the L5 ISR callback (T6) + the documented OPL freq-table "
-           "exclusion (opl_play_note 905d / FUN_8e2f 8e2f).  Expected FAIL=0.\n");
+           "exclusion (opl_play_note 905d / opl2_all_notes_off 8e2f).  Expected FAIL=0.\n");
 
     for (s = 0; s < nsc; s++) {
         u8 sid, name_len, seed_dev;
@@ -1011,7 +1014,7 @@ int main(int argc, char **argv)
         return 1;
     }
     printf("PASS: FAIL=0.  %ld records UNPORTED (remaining = L5 ISR callback (T6) + the "
-           "documented OPL freq-table exclusion opl_play_note/FUN_8e2f); %ld PORTED records "
+           "documented OPL freq-table exclusion opl_play_note/opl2_all_notes_off); %ld PORTED records "
            "matched (%ld via the port-write-sequence gate).\n",
            st.unported, st.pass, st.port_checked);
     free(b);

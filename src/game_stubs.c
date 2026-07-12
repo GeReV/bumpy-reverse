@@ -83,8 +83,8 @@
 /* ── Phase-6 T3/T4 still-stubbed sound callees (faithful-signature; for the link only) ──
  *  record_min_status_code (1000:945b) is NO LONGER stubbed — RECONSTRUCTED in sound.c
  *  (Task A3; stub removed to avoid a dup symbol).  speaker_gate_reset (1000:9440) +
- *  FUN_1000_8a07 (1000:8a07) are ALSO no longer stubbed — L4 hardware drivers
- *  RECONSTRUCTED in sound.c (Phase-6 T5).  FUN_1000_7df9 (set_timer_slot_raw) was
+ *  snd_emit_raw_sample (1000:8a07) are ALSO no longer stubbed — L4 hardware drivers
+ *  RECONSTRUCTED in sound.c (Phase-6 T5).  set_timer_slot_raw (1000:7df9) was
  *  un-stubbed in T4. */
 
 /* ── Phase-6 T4/T5 still-stubbed callees the sound bodies reach ──────────────────────
@@ -95,8 +95,8 @@
  *  sound.c too (their stubs removed here) — register-entry MIDI-track leaves, ported for
  *  faithfulness + the link but NOT oracle-exercised (see the RECONSTRUCTION FIDELITY
  *  note at their definitions in sound.c).  The MPU/init carve (mpu401_reset_to_uart
- *  8a75 + snddrv_init_substep/FUN_8b2a) and the timer teardown (timer_teardown_restore/
- *  FUN_7fef) are ALSO now RECONSTRUCTED in sound.c (Task A3; stubs removed here).
+ *  8a75 + snddrv_init_substep, 1000:8b2a) and the timer teardown (timer_teardown_restore,
+ *  1000:7fef) are ALSO now RECONSTRUCTED in sound.c (Task A3; stubs removed here).
  *  STILL stubbed (out-of-scope): the entity sweep FUN_6183 (reached from
  *  play_contact_sound for contact codes 0xe..0x11); the 3 out-of-scope MIDI-note leaves
  *  the 9 backends above reach (seq_set_channel_param / midi_emit_voice_msg_w3 /

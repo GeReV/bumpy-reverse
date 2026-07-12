@@ -166,16 +166,16 @@ extern u16 snd_isr_restore_seg;          /* engine DX */
  *  These issue the engine's real OUT/IN to 0x61 / 0x330-0x331 / 0x388-0x389.  Validated
  *  by the port-write-sequence differential (tools/sound_ctest.c comparator B) where the
  *  OUT sequence is deterministic or recoverable from the record; opl_play_note (905d) +
- *  its driver FUN_8e2f (8e2f) read RUNTIME freq tables not in the SND_SNAP -> documented
- *  port-gate exclusion (ported 1:1, registered UNPORTED). */
+ *  its driver opl2_all_notes_off (8e2f) read RUNTIME freq tables not in the SND_SNAP ->
+ *  documented port-gate exclusion (ported 1:1, registered UNPORTED). */
 void pc_speaker_silence(void);                    /* 1000:9115 — PORTED (T5) */
 void speaker_gate_reset(void);                    /* 1000:9440 — PORTED (T5) */
 void speaker_gate_strobe(void);                   /* 1000:9451 — PORTED (T5) */
 void record_status_and_strobe_speaker(void);      /* 1000:946e — PORTED (T5) */
-void FUN_1000_89e2(void);                         /* 1000:89e2 — PORTED (T5) MPU byte-out */
-void FUN_1000_8a07(u8 sample_lo, u8 sample_hi);   /* 1000:8a07 — PORTED (T5) MPU sample  */
-void FUN_1000_8ad0(void);                         /* 1000:8ad0 — PORTED (T5) MPU settle  */
-void FUN_1000_8e2f(void);                         /* 1000:8e2f — PORTED (T5) OPL all-off (excl) */
+void mpu401_write_data_polled(void);               /* 1000:89e2 — PORTED (T5) MPU byte-out */
+void snd_emit_raw_sample(u8 sample_lo, u8 sample_hi); /* 1000:8a07 — PORTED (T5) MPU sample  */
+void mpu401_settle_delay(void);                    /* 1000:8ad0 — PORTED (T5) MPU settle  */
+void opl2_all_notes_off(void);                     /* 1000:8e2f — PORTED (T5) OPL all-off (excl) */
 void opl_write_reg(u8 reg, u8 val);               /* 1000:9007 — PORTED (T5) OPL reg write */
 void opl_play_note(u8 param_1, u8 param_2, u16 param_3, u16 param_4); /* 1000:905d (excl) */
 
@@ -185,7 +185,7 @@ extern u8 opl_fnum_lo_5593[0x100];      /* DGROUP 0x5593 — per-note F-number l
 extern u8 opl_fnum_hi_559c[0x100];      /* DGROUP 0x559c — per-note F-number word (runtime) */
 extern u8 opl_chan_data_55b4[0x100];    /* DGROUP 0x55b4 — per-channel data (runtime)       */
 extern u8 opl_chan_idx_5614[0x100];     /* DGROUP 0x5614 — per-channel block index (runtime) */
-extern u8 snd_mpu_byte_89e2;            /* the byte FUN_89e2 writes (engine AH; host-staged) */
+extern u8 snd_mpu_byte_89e2;            /* the byte mpu401_write_data_polled writes (engine AH; host-staged) */
 
 /* ── PORTED (Phase-6 T6 — L5 ISR tone-sequencer; reconstructed 1:1, NOT runtime-gated) ──
  *  The PIT (IRQ0 / int-8) timer ISR multiplexer + the far tone-sequencer callbacks it
@@ -207,16 +207,17 @@ void tone_seq_callback_95b5(void);      /* 1000:95b5 — noise/PRNG tone sequenc
  *  register-entry and NOT reconstructed — separate, not-yet-started MIDI-engine work).
  *  Register-entry (see the RECONSTRUCTION FIDELITY note at their definitions in
  *  sound.c): NOT oracle-exercised / NOT runtime-gated, the same documented-exclusion
- *  precedent as opl_play_note (905d) / FUN_8e2f (8e2f) and the L5 ISR sequencer above. */
-void FUN_1000_91cf(void);   /* 1000:91cf — dispatch_b_mode0: MIDI 0xF7 skip           */
-void FUN_1000_8e48(void);   /* 1000:8e48 — dispatch_b_mode1: MIDI 0xF7 skip           */
-void FUN_1000_91d7(void);   /* 1000:91d7 — dispatch_c_mode0: MIDI 0xF0 skip           */
-void FUN_1000_8e50(void);   /* 1000:8e50 — dispatch_c_mode1: MIDI 0xF0 skip           */
-void FUN_1000_8af6(void);   /* 1000:8af6 — dispatch_b_mode4: MIDI 0xF7 busy-wait      */
-void FUN_1000_8b04(void);   /* 1000:8b04 — dispatch_c_mode4: MIDI 0xF0 busy-wait      */
-void FUN_1000_8b0d(void);   /* 1000:8b0d — dispatch_d_mode4: channel-msg busy-wait    */
-void FUN_1000_91df(void);   /* 1000:91df — dispatch_d_mode0: channel-msg (PC-speaker) */
-void FUN_1000_8e58(void);   /* 1000:8e58 — dispatch_d_mode1: channel-msg (OPL)        */
+ *  precedent as opl_play_note (905d) / opl2_all_notes_off (8e2f) and the L5 ISR sequencer
+ *  above. */
+void snddrv_dispatch_b_mode0(void);   /* 1000:91cf — MIDI 0xF7 skip           */
+void snddrv_dispatch_b_mode1(void);   /* 1000:8e48 — MIDI 0xF7 skip           */
+void snddrv_dispatch_c_mode0(void);   /* 1000:91d7 — MIDI 0xF0 skip           */
+void snddrv_dispatch_c_mode1(void);   /* 1000:8e50 — MIDI 0xF0 skip           */
+void snddrv_dispatch_b_mode4(void);   /* 1000:8af6 — MIDI 0xF7 busy-wait      */
+void snddrv_dispatch_c_mode4(void);   /* 1000:8b04 — MIDI 0xF0 busy-wait      */
+void snddrv_dispatch_d_mode4(void);   /* 1000:8b0d — channel-msg busy-wait    */
+void snddrv_dispatch_d_mode0(void);   /* 1000:91df — channel-msg (PC-speaker) */
+void snddrv_dispatch_d_mode1(void);   /* 1000:8e58 — channel-msg (OPL)        */
 
 /* Register-entry standins for the 9 backends above (the ambient AL/DS:SI/CS:[BX+0x80]
  *  midi_process_event would supply — see the RECONSTRUCTION FIDELITY note in sound.c). */
