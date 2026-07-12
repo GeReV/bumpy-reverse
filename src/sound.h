@@ -140,23 +140,59 @@ int  arm_timer_callback(int channel, int reload, u16 cb_off, u16 cb_seg); /* 100
 int  disable_timer_callback(int channel);         /* 1000:7f65 — PORTED (T4) */
 int  get_timer_slot_field(int slot_index);        /* 1000:7e3d — PORTED (T4) */
 void timer_restore(void);                         /* 1000:7fde — PORTED (T4) */
+int  set_timer_slot_reg(int channel);             /* 1000:7e1f — PORTED (Task A3; renamed
+                                                        from the local `isr_disable_timer_slot`
+                                                        + exposed non-static this task so
+                                                        src/midi.c's midi_sound_init/
+                                                        midi_play_sequence can reuse the SAME
+                                                        reconstructed body — see the
+                                                        RECONSTRUCTION FIDELITY note at its
+                                                        definition in sound.c) */
+
+/* ── PORTED (Task A3 — MPU reset / init substep / timer teardown / status latch) ──────
+ *  Finishes the last 4 stubbed leaves of the sound-effect pipeline.  See the per-fn
+ *  RECONSTRUCTION FIDELITY notes at each definition in sound.c. */
+void record_min_status_code(u16 status);          /* 1000:945b — PORTED (A3) */
+int  mpu401_reset_to_uart(void);                  /* 1000:8a75 — PORTED (A3) */
+u16  snddrv_init_substep(void);                   /* 1000:8b2a — PORTED (A3) */
+void timer_teardown_restore(void);                /* 1000:7fef — PORTED (A3) */
+
+/* Task A3 state (owned in sound.c). */
+extern u16 last_status_code;            /* CODE   0x946c — record_min_status_code latch */
+extern u16 midi_seq_step_active;        /* DGROUP 0x557e — snddrv_init_substep flag      */
+extern u8  isr_installed_flag;          /* DGROUP 0x54d4 — timer_teardown_restore guard  */
+extern u16 saved_timer_vector_off;      /* DGROUP 0x54d8 — saved INT 0Fh vector offset   */
+extern u16 saved_timer_vector_seg;      /* DGROUP 0x54da — saved INT 0Fh vector segment  */
+extern u16 timer_restore_reload_value;  /* DGROUP 0x54dc — table[index] staged for pit_set_counter0 */
+extern u16 timer_restore_table[8];      /* DGROUP 0x54de.. — per-index restore table (out-of-scope extent) */
+/* register-entry standins timer_teardown_restore reads (see its FIDELITY note). */
+extern u16 snd_isr_restore_index;        /* engine AX */
+extern u16 snd_isr_restore_off;          /* engine CX */
+extern u16 snd_isr_restore_seg;          /* engine DX */
 
 /* ── PORTED (Phase-6 T5 — L4 hardware backends; the port-write drivers) ──────────────
  *  These issue the engine's real OUT/IN to 0x61 / 0x330-0x331 / 0x388-0x389.  Validated
  *  by the port-write-sequence differential (tools/sound_ctest.c comparator B) where the
  *  OUT sequence is deterministic or recoverable from the record; opl_play_note (905d) +
- *  its driver FUN_8e2f (8e2f) read RUNTIME freq tables not in the SND_SNAP -> documented
- *  port-gate exclusion (ported 1:1, registered UNPORTED). */
+ *  its driver opl2_all_notes_off (8e2f) read RUNTIME freq tables not in the SND_SNAP ->
+ *  documented port-gate exclusion (ported 1:1, registered UNPORTED). */
 void pc_speaker_silence(void);                    /* 1000:9115 — PORTED (T5) */
 void speaker_gate_reset(void);                    /* 1000:9440 — PORTED (T5) */
 void speaker_gate_strobe(void);                   /* 1000:9451 — PORTED (T5) */
 void record_status_and_strobe_speaker(void);      /* 1000:946e — PORTED (T5) */
-void FUN_1000_89e2(void);                         /* 1000:89e2 — PORTED (T5) MPU byte-out */
-void FUN_1000_8a07(u8 sample_lo, u8 sample_hi);   /* 1000:8a07 — PORTED (T5) MPU sample  */
-void FUN_1000_8ad0(void);                         /* 1000:8ad0 — PORTED (T5) MPU settle  */
-void FUN_1000_8e2f(void);                         /* 1000:8e2f — PORTED (T5) OPL all-off (excl) */
+void mpu401_write_data_polled(void);               /* 1000:89e2 — PORTED (T5) MPU byte-out */
+void snd_emit_raw_sample(u8 sample_lo, u8 sample_hi); /* 1000:8a07 — PORTED (T5) MPU sample  */
+void mpu401_settle_delay(void);                    /* 1000:8ad0 — PORTED (T5) MPU settle  */
+void opl2_all_notes_off(void);                     /* 1000:8e2f — PORTED (T5) OPL all-off (excl) */
 void opl_write_reg(u8 reg, u8 val);               /* 1000:9007 — PORTED (T5) OPL reg write */
 void opl_play_note(u8 param_1, u8 param_2, u16 param_3, u16 param_4); /* 1000:905d (excl) */
+
+/* ── PORTED (Task D1 — OPL2 register-level driver leaves) ────────────────────────────
+ *  See the per-fn RECONSTRUCTION FIDELITY notes at each definition in sound.c. */
+u8   opl_read_status(void);                        /* 1000:9056 — PORTED (D1) OPL2 status IN */
+void opl2_reset_all_regs(void);                    /* 1000:8eeb — PORTED (D1) OPL2 reg init  */
+void maybe_opl2_detect_chip(void);                 /* 1000:8fb6 — PORTED (D1) OPL2 chip-detect (ZF-only; see snd_opl_detect_zf's caller, snddrv_init_substep) */
+void opl_set_note_params(u16 chan, u8 note_param1, u8 note_param2); /* 1000:9241 — PORTED (D1) */
 
 /* L4 hardware-backend state (owned in sound.c). */
 extern u8 opl_reg_shadow_80cc[0x100];   /* CODE   0x80cc — OPL register write-back shadow */
@@ -164,7 +200,9 @@ extern u8 opl_fnum_lo_5593[0x100];      /* DGROUP 0x5593 — per-note F-number l
 extern u8 opl_fnum_hi_559c[0x100];      /* DGROUP 0x559c — per-note F-number word (runtime) */
 extern u8 opl_chan_data_55b4[0x100];    /* DGROUP 0x55b4 — per-channel data (runtime)       */
 extern u8 opl_chan_idx_5614[0x100];     /* DGROUP 0x5614 — per-channel block index (runtime) */
-extern u8 snd_mpu_byte_89e2;            /* the byte FUN_89e2 writes (engine AH; host-staged) */
+extern u8 snd_mpu_byte_89e2;            /* the byte mpu401_write_data_polled writes (engine AH; host-staged) */
+extern u8 opl_note_param1;              /* CODE   0x9272 — opl_set_note_params' staged note byte 1 */
+extern u8 opl_note_param2;              /* CODE   0x9273 — opl_set_note_params' staged note byte 2 */
 
 /* ── PORTED (Phase-6 T6 — L5 ISR tone-sequencer; reconstructed 1:1, NOT runtime-gated) ──
  *  The PIT (IRQ0 / int-8) timer ISR multiplexer + the far tone-sequencer callbacks it
@@ -180,5 +218,28 @@ void pit_timer_isr_multiplexer(void);   /* 1000:7c02 — IRQ0/int-8 PIT tick mux
 void tone_seq_callback_9631(void);      /* 1000:9631 — sweep tone sequencer (sched_a cb)  */
 void tone_seq_callback_96c4(void);      /* 1000:96c4 — noise/PRNG tone sequencer (sched_b)*/
 void tone_seq_callback_95b5(void);      /* 1000:95b5 — noise/PRNG tone sequencer (sched_c)*/
+
+/* ── PORTED — the 9 snddrv_dispatch_b/c/d MIDI mode{0,1,4} backends ──────────────────
+ *  Reconstructed 1:1 from the raw disassembly (their caller, midi_process_event, is
+ *  register-entry and NOT reconstructed — separate, not-yet-started MIDI-engine work).
+ *  Register-entry (see the RECONSTRUCTION FIDELITY note at their definitions in
+ *  sound.c): NOT oracle-exercised / NOT runtime-gated, the same documented-exclusion
+ *  precedent as opl_play_note (905d) / opl2_all_notes_off (8e2f) and the L5 ISR sequencer
+ *  above. */
+void snddrv_dispatch_b_mode0(void);   /* 1000:91cf — MIDI 0xF7 skip           */
+void snddrv_dispatch_b_mode1(void);   /* 1000:8e48 — MIDI 0xF7 skip           */
+void snddrv_dispatch_c_mode0(void);   /* 1000:91d7 — MIDI 0xF0 skip           */
+void snddrv_dispatch_c_mode1(void);   /* 1000:8e50 — MIDI 0xF0 skip           */
+void snddrv_dispatch_b_mode4(void);   /* 1000:8af6 — MIDI 0xF7 busy-wait      */
+void snddrv_dispatch_c_mode4(void);   /* 1000:8b04 — MIDI 0xF0 busy-wait      */
+void snddrv_dispatch_d_mode4(void);   /* 1000:8b0d — channel-msg busy-wait    */
+void snddrv_dispatch_d_mode0(void);   /* 1000:91df — channel-msg (PC-speaker) */
+void snddrv_dispatch_d_mode1(void);   /* 1000:8e58 — channel-msg (OPL)        */
+
+/* Register-entry standins for the 9 backends above (the ambient AL/DS:SI/CS:[BX+0x80]
+ *  midi_process_event would supply — see the RECONSTRUCTION FIDELITY note in sound.c). */
+extern u8  snd_seq_event_al;       /* engine AL    — the MIDI event status/data byte  */
+extern u8 *snd_seq_cursor;         /* engine DS:SI — the live MIDI-track read cursor  */
+extern u8  snd_seq_default_chan;   /* engine CS:[BX+0x80] — per-track default channel */
 
 #endif /* SOUND_H */

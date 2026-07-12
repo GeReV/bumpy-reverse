@@ -406,3 +406,203 @@ colour.
 What IS solid and self-contained: asset RLE decompression (all files), full-screen
 `.VEC` rendering (`TITRE`), title + menu rendered by the emulator, the renderer's
 opcode/dispatch map, the extraction toolkit, and the engine architecture above.
+
+## Audio subsystem
+
+Faithful documentation of the engine's audio, mirroring the structure of
+[rendering-pipeline.md](rendering-pipeline.md). Addresses are `segment:offset` in the
+unpacked image (or `DGROUP:off`). This documents the **original** as reconstructed in
+`src/sound.c` (Phase-6) and `src/midi.c` (Tasks C1–E2); deviations are recorded in
+[reconstruction-fidelity.md](reconstruction-fidelity.md).
+
+### 1. Two engines sharing one hardware/timer substrate
+
+BUMPY.EXE has **two separate audio engines**, both living in Ghidra segment `1000`:
+
+| Engine | Module | Drives | Data source |
+|---|---|---|---|
+| **Effect-tone engine** | `src/sound.c` | short SFX (jump, land, collect, contact, exit, menu blips) | procedural tone sweeps — no asset file |
+| **MIDI music engine** | `src/midi.c` | the background music | `BUMPY.MID` (SMF) + `BUMPY.BNK` (OPL2 instruments) |
+
+They are not two independent stacks: `run_game_session` calls `sound_select_device`
+(`6de3`) **once** per session, which runs `snddrv_init` (`88e5`) +
+`select_sound_device_from_mask` (`891e`) to probe/pick a device and set the shared
+`snddrv_mode` (PC-speaker `0`/OPL2 `1`/MPU-401 `4`) + `sound_active_device_mask` — the
+one piece of engine state that gates **both** engines' hardware output afterward.
+
+Both engines then reach the **same** L4 hardware primitives (§2) and install their
+timer needs through the **same** L3 far-callback table (`set_timer_slot_raw`/
+`arm_timer_callback`, DGROUP `0x5516`), serviced by the **same** PIT/int-8 ISR
+substrate. One family of functions is a clean illustration of how entangled the two
+engines are: `snddrv_dispatch_a/b/c/d` (`85b5/85db/8600/8626`) all live in `sound.c`,
+share the "L2 device dispatch" naming, and all fan out on the SAME `snddrv_mode` — but
+per the real, reconstructed call graph, **none of the four is reached from the
+effect-tone engine's own SFX path** (`play_sound`/`play_sound_effect` never call any of
+them). All four are exclusively called by the **MIDI engine**: `snddrv_dispatch_a`
+silences the previous device (`pc_speaker_silence`/`opl2_all_notes_off`/
+`mpu401_settle_delay`) from `midi_sound_init`/`midi_play_sequence` before starting
+playback, and `snddrv_dispatch_b/c/d` are `midi_process_event`'s own per-event
+dispatch (§3). This is the concrete finding that corrected an earlier mislabeling of
+the latter three as a generic "Sound L4/L6 driver backend" — see
+[faithfulness-gap-audit.md](faithfulness-gap-audit.md) §3.
+
+### 2. The effect-tone engine (`src/sound.c`) — SFX
+
+A five-layer pipeline, transcribed 1:1 except the L5 ISR (behavior-faithful,
+documentation-only — see §5):
+
+| Layer | Functions | Role |
+|---|---|---|
+| **L1 dispatch** | `play_sound` (`6e11`), `play_sound_effect` (`6e30`, a 21-case effect→tone-parameter switch), and 6 event wrappers — `play_action_sound` (`63be`), `play_contact_sound` (`640c`), `play_exit_sound` (`6305`), `play_pickup_sound` (`645d`), `play_event_sound_64c1` (`64c1`), `play_state_sound_79b9` (`647e`) | Each event wrapper indexes one of 6 per-device 0x30-byte LUTs (DGROUP `0x260e/0x263e/0x26ce/0x26fe/0x276e/0x278e` — OPL/std variants of the action/state/contact tables) by the current game event/state, gets a sound id, and calls `play_sound`, which drives `play_sound_effect`'s big switch. |
+| **L2 device state** | `sound_select_device` (`6de3`), `snddrv_init` (`88e5`), `select_sound_device_from_mask` (`891e`), `snd_busy_delay` (`872e`) | The once-per-session device init/select state machine `run_game_session` calls: `sound_init_state` (0→1→2), `sound_active_device_mask`, and `snddrv_mode` (the PC-speaker/OPL2/MPU-401 selector §1 describes). `snddrv_dispatch_a-d` (`85b5/85db/8600/8626`) are documented alongside these in the original's L2 group and fan out on the same `snddrv_mode`, but are reached **only from the MIDI engine** (§1/§3), not from this engine's own SFX path. |
+| **L3 tone-submit + timer-table mgmt** | `schedule_timer_callback_a/b/c` (`9488/9502/956d`), `set_timer_slot(_raw)` (`7de8/7df9`), `arm_timer_callback` (`7f2b`), `disable_timer_callback` (`7f65`), `get_timer_slot_field` (`7e3d`), `timer_restore` (`7fde`) | Fills the 10-word tone parameter frame `snd_param_frame[0..9]` (CODE `0x9788..0x979a`) from the effect's arguments and installs a far PIT-timer callback into one of the two DGROUP timer tables (`0x5516` cb table / `0x549c` slot table). The L5 sequencer's own read/write pattern over this frame (below) is a period/increment/countdown sweep. |
+| **L4 hardware drivers** | `pc_speaker_silence` (`9115`), `speaker_gate_reset/strobe` (`9440/9451`), `opl_write_reg` (`9007`), `opl_play_note` (`905d`), MPU-401 byte/sample/settle (`89e2`/`8a07`/`8ad0`), `opl2_all_notes_off` (`8e2f`), `opl2_reset_all_regs` (`8eeb`), `maybe_opl2_detect_chip` (`8fb6`) | The real port I/O: PC-speaker gate/PIT-ch2 (port `0x61`), MPU-401 UART (`0x330`/`0x331`), OPL2/AdLib register file (`0x388` status / `0x389` index+data). Validated by a **port-write-sequence** differential (capture the engine's real `OUT` sequence, replay the recorded `IN`s, diff the reconstructed driver's `OUT`s byte-for-byte). |
+| **L5 ISR tone-sequencer** | `pit_timer_isr_multiplexer` (`7c02`), `tone_seq_callback_9631/96c4/95b5` | The PIT/int-8 IRQ0 handler: once per tick it walks the `0x5516` callback table and, on each slot's reload period, far-calls the installed tone-sequencer callback, which advances the L3 param frame and reprograms PIT channel 2 / strobes the speaker gate — this is what actually sweeps a tone's frequency over time. |
+
+### 3. The MIDI music engine (`src/midi.c`) — music
+
+The MIDI engine is a straightforward **SMF (Standard MIDI File) sequencer** that plays
+`BUMPY.MID` by driving the L2/L4 hardware layers `src/sound.c` already implements
+(§1/§2) — it does not have its own separate hardware driver.
+
+**Load / parse (`midi_load_sequence` → `midi_parse_file` → `midi_init_track_table`):**
+
+1. `midi_load_sequence` (`87cd`) stages the loaded `BUMPY.MID` image + the loaded
+   `BUMPY.BNK` instrument bank as far pointers (`midi_song_data_off/_seg`,
+   `midi_aux_ptr_off/_seg`) and calls `midi_parse_file`.
+2. `midi_parse_file` (`8809`) validates the `MThd` header (format/track-count/division
+   — see [formats/MID.md](formats/MID.md); rejects a header with 0 or more than 16
+   tracks) and walks each `MTrk` chunk, filling `midi_track_ptr_table[16][2]` (CODE
+   `0x81cc`) with each track's `{off,seg}` start (`BUMPY.MID` itself uses 7 of the 16
+   slots).
+3. `midi_init_track_table` (`87a2`) seeds each track's first event time via
+   `midi_read_varlen` (`8891`, decodes an SMF variable-length quantity) and — when a
+   track's very first delta is 0 — a real conditional call into `midi_process_event`
+   (below) to process that first due event immediately.
+4. `midi_start_playback` (`8722`) / `midi_sound_init` (`89a8`) do the device-select
+   handshake (§1's `snddrv_mode`); `midi_install_tempo_timer` (`86e9`) computes the PIT
+   reload value from the MThd division and the `FF 51` tempo meta-event
+   (`midi_division * 0xf42 / tempo`) and installs it — see §4.
+
+**Per-track event dispatch (`midi_process_event`, `873c`):** the sequencer's
+centerpiece. For each track whose next event is due, it decodes one status byte off
+that track's cursor and dispatches:
+
+- **Meta events** (`0xFF <type> <len> …`) handled locally: `0x51` (Set Tempo) updates
+  the tempo split; `0x2F` (End of Track) decrements the live track count and returns;
+  `0x20` (MIDI Channel Prefix) stores a per-track default channel; others skip their
+  `len` data bytes. (Track/text-name metas, time signature, etc. — see
+  [formats/MID.md](formats/MID.md) for the on-disk shape.)
+- **Channel-voice / system bytes** are forwarded, by status-byte range, to the
+  **already-reconstructed `sound.c` L2 backends**: `<0xF0` (channel-voice, `0x80-0xEF`)
+  → `snddrv_dispatch_d`; `==0xF0` (SysEx) → `snddrv_dispatch_c`; `==0xF7` (SysEx
+  continuation/EOX) → `snddrv_dispatch_b`. Each of those fans out on `snddrv_mode`
+  (§1) to one of 3 mode-specific handlers — 9 handlers total
+  (`snddrv_dispatch_{b,c,d}_mode{0,1,4}`), all in `src/sound.c`.
+- The shared tail decodes the next event's delta time (`midi_read_varlen`) and, if it
+  is 0, loops immediately to process another already-due event without returning —
+  otherwise it returns the delta to the caller's scheduling loop.
+
+**MIDI-to-OPL2 voice bridge (mode-1 = OPL2, the music-audible path):** for a
+channel-voice event, `snddrv_dispatch_d_mode1` (`8e58`) first defaults an unset channel
+nibble from the track's stored default channel, then skips the event's data bytes
+without acting if the channel is > 8 (the OPL2 chip has only **9 simultaneous FM
+voices**, 0..8) or the status is none of the three it handles. Otherwise it routes by
+MIDI status:
+
+- **`0xC0` Program Change** → `midi_emit_voice_msg_w3` (`8e93`) → `_w2` (`8b6b`) → `_w1`
+  (`8b81`) → `emit_midi_voice_message` (`8bc8`). `_w1` walks the loaded `BUMPY.MID`
+  song-data blob's per-channel program-slot table to get that channel's instrument
+  **index**, scales it by 30 (the `.BNK` record size — see
+  [formats/BNK.md](formats/BNK.md)) to locate the instrument's 30-byte OPL2 patch
+  descriptor already staged alongside the song data, and `emit_midi_voice_message`
+  writes that descriptor's operator/feedback bytes into the OPL2 register file
+  (`opl_write_reg`, reg `0x20/0x40/0x60/0x80/0xC0`-family, ± the per-channel "slot"
+  offset from `opl_fnum_lo_5593`) — i.e. this is where a `BUMPY.BNK` `rol0NN`
+  instrument becomes real OPL2 register writes for a channel.
+- **`0x90` Note On** → `opl_event_note_on` (`8ea3`) reads note+velocity off the track
+  cursor and tail-calls the already-ported `opl_play_note` (`905d`, §2's L4), which
+  computes the OPL2 F-number/block from the note and key-on/off's the voice.
+- **`0x80` Note Off** → clears that channel's key-on bit directly in the OPL2
+  register-write-back shadow (reg `0xB0+channel`) via `opl_write_reg`, then discards
+  the event's note/velocity bytes.
+- **`0xC0` on mode-0 (PC-speaker path)** instead calls `seq_set_channel_param` (`922c`)
+  — a lighter per-channel byte store (`chan_param_table[16]`, CODE `0x8473`), since the
+  PC-speaker device has no OPL2 instrument registers to program.
+
+**Tempo model:** `midi_install_tempo_timer` computes the reload value and calls
+`set_timer_slot_raw` (the same L3 primitive §2 describes) — this part runs for real on
+every replay. What is **not** host-replayable is the per-tick playback loop that
+reload value drives: the actual "advance the sequence and call `midi_process_event`
+again" tick lives in the L5 ISR machinery (`pit_timer_isr_multiplexer` /
+`tone_seq_callback_*`, §2), reached only through the installed far pointer and driven
+by hardware IRQ0 ticks — a documented carve-out (§5), the same class as the
+effect-tone engine's own L5 sequencer.
+
+### 4. Data path: `BUMPY.MID` → OPL2 voices via `BUMPY.BNK`
+
+```
+BUMPY.MID (SMF fmt1, 7 tracks, division 192)
+   │  midi_load_sequence → midi_parse_file (MThd/MTrk validate, fill midi_track_ptr_table)
+   │  midi_init_track_table (seed first event time per track)
+   ▼
+midi_process_event  (per due event, per track)
+   │  meta (tempo/EOT/…) ─────────────────────────────► handled in midi_process_event
+   │  channel-voice / SysEx ──► snddrv_dispatch_{b,c,d} ─► mode{0,1,4} handler (sound.c)
+   ▼                                                         │ (mode 1 = OPL2)
+mode-1 Program Change (0xC0)                                 │ mode-1 Note On (0x90)
+   │  midi_emit_voice_msg_w3→w2→w1                           │  opl_event_note_on
+   │  (index BUMPY.BNK instrument via the loaded song data)  │  → opl_play_note
+   ▼                                                         ▼
+emit_midi_voice_message                              OPL2 register file (port 0x388/0x389)
+   │  writes the 30-byte rol0NN OPL2 patch (BUMPY.BNK, see formats/BNK.md)
+   ▼
+opl_write_reg  →  audible OPL2 FM voice
+```
+
+`BUMPY.BNK` is a standard AdLib instrument bank (129 named `rol0NN` patches); `BUMPY.MID`
+is a plain 7-track SMF with no Loriciel container — see
+[formats/BNK.md](formats/BNK.md) and [formats/MID.md](formats/MID.md) for the on-disk
+layouts this pipeline consumes.
+
+### 5. Register-entry conventions and carve-outs
+
+Most of the MIDI engine's leaf functions — and several sound-effect L4 drivers — are
+**register-entry** in the original: the compiler passed no stack arguments, only
+ambient CPU registers (`AL`, `DS:SI`, `BX`, …) a hand-written asm caller left staged.
+The reconstruction models each such register as a **file-scope global standing in for
+it** (`snd_seq_event_al`/`snd_seq_cursor`/`snd_seq_default_chan` for the 9 MIDI mode
+handlers; `midi_voice_chan`/`midi_voice_note_byte`/`midi_emit_al`/`midi_emit_ptr` for
+the voice-bridge chain) — never inventing a stack-arg signature the binary doesn't
+have. Two carve-outs are worth calling out explicitly:
+
+- **The tempo-ISR playback loop** (`midi_install_tempo_timer`'s downstream L5 sequencer
+  advance, §3) — reconstructed 1:1 as documentation but not runtime-gated, for the same
+  reason as the effect engine's own L5 tone sequencer: it's reached only via an
+  installed far pointer with no Ghidra function boundary, driven by a hardware timer
+  interrupt a deterministic host replay cannot reproduce.
+- **The 9 MIDI mode-`{0,1,4}` dispatch handlers** and the sound-effect leaves whose
+  inputs are pure ambient registers (e.g. `timer_teardown_restore`'s AX/CX/DX standins
+  `snd_isr_restore_index/off/seg`) are reconstructed and linked, but — having no
+  captured register-state trace to replay — are validated by inspection against the
+  raw disassembly rather than by a runtime differential.
+
+Full reasoning, per-function citations, and the discovery history (including the
+correction that these 9 handlers are MIDI-engine leaves, not PC-speaker/MPU driver
+code) are in [reconstruction-fidelity.md](reconstruction-fidelity.md)'s Phase-6
+sound-subsystem audit.
+
+### 6. Validation
+
+- **`tools/validate_sound.sh`** — per-function differential against a Unicorn capture
+  of the real engine (`SNDTRC01`, 4439 records / 23581 port-I/O events): semantic-state
+  comparator for L1–L3, port-write-sequence comparator for L4. `PASS=4414 FAIL=0
+  UNPORTED=25` (the 25 = the OPL note-program runtime-table exclusion + gameplay-tail
+  records the sound harness can't link cross-module — both documented, not gaps).
+- **`tools/validate_midi.sh`** — the same style of differential against a MIDI-oracle
+  capture driven by the real `Bumpy.mid` (`MIDTRC01`, 337 records / 18936 port-I/O
+  events). `PASS=334 FAIL=0 UNPORTED=3` (the 3 = `midi_install_tempo_timer`'s
+  documented tempo-ISR carve-out above).
+- **`tools/validate_integration.sh`** — confirms `BUMPY.EXE` links with `sound.obj` +
+  `midi.obj` and no duplicate symbols, and that `game_stubs.c`'s remaining carve-outs
+  are all on the explicit allowlist (no audio function is silently still a stub).

@@ -32,7 +32,7 @@ feasible, bring back toward 1:1. Each module's `.h` carries the detailed in-code
 | `entity.c` | Mixed | Layer-C/A/B placement + `draw_p1/p2_sprite` are transcriptions of the `spawn_and_draw_level_entities` (`1000:2a78`) loops and the draw fns. `entity_blit_object` is a shared helper the engine doesn't have (the engine inlines/repeats the prepare→blit per call). `entity_draw_layer_a/_b` now mirror the engine's full 3-step draw sequence: **erase (`restore_bg_view`) → blit (`blit_sprite`) → save-under (`render_player_view`)** — both erase and save-under are STRUCTURALLY PRESENT, called via `nop_view`, and are effective NOPs (code-embedded views in the engine; see `gfx_overlay.c` entry). Composite unchanged: 54152/64000 (world-8 live page). See [rendering-pipeline.md](rendering-pipeline.md). |
 | `main.c` | **Reimplementation deviation (CRT/startup)** | The original's `main` and ~60 CRT-garble startup functions (TC++ CRT0, `__cstart`, etc.) are NOT reproduced — they are not decompilable and are not meaningful. This reconstruction uses the Open Watcom CRT with a standard `main`. As of Phase-1 Task 7 `main` is WIRED TO THE REAL SESSION: it calls `init_game_session_state()` then `run_game_session()` (both reconstructed in `game.c`); the Task-3 stubs are gone. |
 | `game.c` | Transcription (spine) | The four session/loop functions ported 1:1 from the decomp (cross-checked live via Ghidra MCP): `run_game_session` (1000:0258), `init_game_session_state` (1000:0282), `reset_game_state` (1000:0bf9), `game_loop` (1000:0c18). Control flow, comparisons and call order reproduced verbatim. Owns the cross-module session/round/tick control globals (`round_continue_flag` 0x9d30, `session_continue_flag` 0x856d, `frame_abort_flag` 0x928d), the `tilemap` far pointer (0xa0d8 — no single module home), and the menu/score/level-index scratch. **Deviations** (all noted in-code): (a) the per-function Turbo-C `stack_check_limit`/`FUN_ab83` stack-check prologue is CRT scaffolding, omitted (OW CRT does its own); (b) `init_game_session_state`'s VGA mode set is surfaced via `video_set_mode_0d()` so the boot harness has an observable mode 0x0D (engine sets it inside the FUN_9821 CRTC block); (c) the ~46 trailing UNNAMED `DAT_203b_xxxx` resets in `init_game_session_state` are collapsed into the documented `reset_opaque_session_globals()` stub rather than invented as named externs. As of Phase-9 T3/T4 `game.c` also owns the reconstructed `init_view_anim_descriptors` / `game_post_present` / `game_post_input` per-tick spine fns, and `game_loop` drives the real P1 path (the carve-out boundary is gated by `validate_integration.sh`); see the Phase-9 sections. |
-| `game_stubs.c` | **Genuine carve-outs (Phase-9 T4)** | NOT a reconstruction. Faithful-SIGNATURE no-op/benign-default stubs for the engine functions the reconstructed call graph references but that are deliberately NOT reconstructed — every remaining symbol is a documented CARVE-OUT, in the same spirit as the self-modifying graphics-overlay blitters and the L5 timer ISR. As of Phase-9 T4 the file holds **58 carve-out function symbols + `mode_script_tbl`**, all in one of these classes: HARDWARE-INIT (the `init_game_session_state` CRTC/audio/resource/IRQ block), CRTC PAGE-FLIP (`present_frame`), int8-TIMING (`run_n_frames`/`rotate_timing_flags_and_wait`/`wait_keypress`), ENGINE STANDALONE LOADER (`load_current_level_data` — slice loads via `level.c start_level`), NEVER-DECOMPILED (`reset_round_counters` = `init_round_state` 0x31de; Ghidra-labelled but decompilation fails), RENDER-CORE LEAVES (`init_sprite_structs`, `init_fullscreen_view_desc`, `setup_fullscreen_view`, `apply_level_palette`, `show_text_screen`, `show_pause_screen`, `fun_75a2_poll_action`), OUT-OF-SCOPE SOUND L4/L6 drivers + player handler-table targets + the P2 indirect-call backend, and the `dos_abort` CRT thunk. Through Phases 2–8 most of the original deferral list was un-stubbed into real module bodies (player/player2/anim/screens/sound/spawn/level); what remains is carve-out-only. **NAMING:** symbols still spelled `FUN_1000_<off>` (e.g. `FUN_1000_6183` = `sweep_active_entities`) have canonical Ghidra labels but are kept `FUN_`-spelled to mark "unported carve-out, link-only" and to avoid churning the validated call sites that reference them; the canonical name is cited in-code. The carve-out boundary (which `game_loop` callees are genuine hardware/CRT/int8-timing leaves vs reconstructed game logic) is ENFORCED by `tools/validate_integration.sh`: it links `BUMPY.EXE` (no dup symbols), asserts every `game_loop` per-tick callee resolves to its real module `.obj` (not `game_stubs.obj`), and asserts `game_stubs.obj`'s symbol set ⊆ the explicit carve-out allowlist; a built-in `--self-test` proves the gate fails when a spine callee regresses to a stub. |
+| `game_stubs.c` | **Genuine carve-outs (Phase-9 T4; further reduced by the audio-subsystem branch, Phases A-E)** | NOT a reconstruction. Faithful-SIGNATURE no-op/benign-default stubs for the engine functions the reconstructed call graph references but that are deliberately NOT reconstructed — every remaining symbol is a documented CARVE-OUT, in the same spirit as the self-modifying graphics-overlay blitters and the L5 timer ISR. As of Phase-9 T4 the file held **58 carve-out function symbols + `mode_script_tbl`**; the audio-subsystem branch then reconstructed the sound L4/L6 hardware drivers + the 9 MIDI dispatch backends into `sound.c`/`midi.c` (see the Phase-6 sound-subsystem audit + the new MIDI-module audit below) and removed their stubs, so the file now holds **35 carve-out function symbols + `mode_script_tbl`** (`tools/validate_integration.sh`-confirmed), all in one of these classes: HARDWARE-INIT (the `init_game_session_state` CRTC/audio/resource/IRQ block), CRTC PAGE-FLIP (`present_frame`), int8-TIMING (`run_n_frames`/`rotate_timing_flags_and_wait`/`wait_keypress`), ENGINE STANDALONE LOADER (`load_current_level_data` — slice loads via `level.c start_level`), NEVER-DECOMPILED (`reset_round_counters` = `init_round_state` 0x31de; Ghidra-labelled but decompilation fails), RENDER-CORE LEAVES (`init_sprite_structs`, `init_fullscreen_view_desc`, `setup_fullscreen_view`, `apply_level_palette`, `show_text_screen`, `show_pause_screen`, `fun_75a2_poll_action`), OUT-OF-SCOPE LEAVES (the entity sweep `sweep_active_entities`/`FUN_1000_6183`, reached from `play_contact_sound`; the PIT hardware counter-init leaf `pit_set_counter0`, called from `sound.c`'s `timer_teardown_restore` and the unrelated, unreconstructed ISR-install subsystem; player handler-table targets; and the P2 indirect-call backend), and the `dos_abort` CRT thunk. Through Phases 2–8 and the audio-subsystem branch, the original deferral list was un-stubbed into real module bodies (player/player2/anim/screens/sound/midi/spawn/level); what remains is carve-out-only, and of that remainder only `sweep_active_entities`/`FUN_1000_6183` and `pit_set_counter0` are audio-adjacent (reached from the sound pipeline) — both are genuine out-of-scope carve-outs, not unfinished audio work: the entity sweep is a different subsystem (player contact-action handling) and `pit_set_counter0` is the PIT hardware-counter-reprogram primitive belonging to a separate, unreconstructed ISR-install subsystem, not the audio engine itself. **NAMING:** symbols still spelled `FUN_1000_<off>` (e.g. `FUN_1000_6183` = `sweep_active_entities`) have canonical Ghidra labels but are kept `FUN_`-spelled to mark "unported carve-out, link-only" and to avoid churning the validated call sites that reference them; the canonical name is cited in-code. The carve-out boundary (which `game_loop` callees are genuine hardware/CRT/int8-timing leaves vs reconstructed game logic) is ENFORCED by `tools/validate_integration.sh`: it links `BUMPY.EXE` (no dup symbols), asserts every `game_loop` per-tick callee resolves to its real module `.obj` (not `game_stubs.obj`), and asserts `game_stubs.obj`'s symbol set ⊆ the explicit carve-out allowlist; a built-in `--self-test` proves the gate fails when a spine callee regresses to a stub. |
 | `level.c` | Transcription (compile/link) | `start_level` (1000:2d14) level-1 path wired to the validated Phase-0 render API; see prior audit. Owns `current_level` (0x79b2), `copyprotect_flag`, `p1_start_x/y`, `current_entity_index`. **No ownership edits were needed in Task 7** — its globals were already cleanly owned. |
 | `input.c` | Transcription | Pure keyboard-input layer ported 1:1 (install_keyboard_isr 798a, get_key_state 7ab4, flush_keyboard_buffer 7b01, input_state_clear 65d2, poll_input 1dde, read_input_action 75a2). Owns `input_state` (0x8244), `g_key_state_table` (0x4d42), `g_joystick_handler_table` (0x4cf2), `g_keyboard_isr_installed` (0x4dc4). Its `extern int dos_abort(void)` (faithful abort-path control flow) is resolved by a `game_stubs.c` stub for the linked build. **No ownership edits were needed in Task 7.** |
 | `player.c` | Transcription | P1 move-execution spine + 19 game-mode handlers + tile-collision leaves, ported 1:1 (Tasks 6a/6b/6c); dispatch/contact/action tables dumped byte-exact from the unpacked image. Owns all P1 move-state scalars (`p1_pixel_x/y`, `game_mode`, `move_locked`, `p1_cell`, `rng_frame`, …) and the dumped tables. Its forward-declared out-of-scope handlers + `mode_script_tbl` are resolved by `game_stubs.c` for the linked build (NOT reached on the level-1 boot path). **No ownership edits were needed in Task 7.** (Phase 2 reconstructs the 2 landing leaves + the jump/fall/bounce move-step substates here — see the Phase-2 audit below.) |
@@ -279,6 +279,10 @@ L5 is reconstructed 1:1 as **documentation** (NOT runtime-gated — see below).
 | **L3 timer-table mgmt** (T4): `set_timer_slot(_raw)` (7de8/7df9), `arm_timer_callback` (7f2b), `disable_timer_callback` (7f65), `get_timer_slot_field` (7e3d), `timer_restore` (7fde) | Transcription | Two tables: the 0x5516 cb table (`arm`/`disable`, 8-byte slot `{current@0, reload@2, cb_off@4, cb_seg@6}`) and the 0x549c slot table (`set`/`get`, `{value@0, 0@2, cb_seg@4, cb_off@6}` at `(channel+2)*8`). Slot-store register semantics recovered from the asm. Semantic-state + TABLE-diff validated. |
 | **L4 hardware backends** (T5): `pc_speaker_silence` (9115), `speaker_gate_reset/strobe` (9440/9451), `record_status_and_strobe_speaker` (946e), `opl_write_reg` (9007), `opl_play_note` (905d), `FUN_89e2` (89e2, MPU byte-out), `FUN_8a07` (8a07, MPU sample), `FUN_8ad0` (8ad0, MPU settle), `FUN_8e2f` (8e2f, OPL all-off) | Transcription | The engine's real port-I/O drivers (PC-speaker/PIT 0x61, MPU-401 0x330/0x331, OPL2 0x388/0x389). Validated by the **port-write-sequence** differential: capture the engine's `OUT(port,val,size)` under Unicorn, replay the recorded IN sequence into the host `in()` shim, run the reconstructed driver, diff its OUT capture vs the engine's — a perturbation-proven real gate (corrupting any emitted OUT FAILs). |
 | **L5 ISR tone-sequencer** (T6): `pit_timer_isr_multiplexer` (7c02), `tone_seq_callback_9631` (9631), `tone_seq_callback_96c4` (96c4), `tone_seq_callback_95b5` (95b5) | **Behavior-faithful (NOT runtime-gated)** | The PIT (IRQ0/int-8) multiplexer walks the 0x5516 cb table each tick (`current += reload`; on the 500-tick period far-call the slot's installed callback) and the three tone-sequencer callbacks advance the L3 param frame + reprogram PIT ch2 (0x42/0x43) / strobe the speaker gate (0x61) to sweep the tone. Reached ONLY via the installed far pointer — NO Ghidra function boundary, NOT hooked by the oracle, so the trace has ZERO records and there is no host differential. Transcribed verbatim from the raw disasm as documentation; the **self-modifying graphics-overlay blitter precedent** (`sprite_blit`/`bg_render`): faithful to what the binary does, validated by inspection vs the asm, not by a runtime gate. |
+| **MIDI dispatch backends** (T7 closeout): `snddrv_dispatch_b_mode0/1/4` (91cf/8e48/8af6), `snddrv_dispatch_c_mode0/1/4` (91d7/8e50/8b04), `snddrv_dispatch_d_mode0/1/4` (91df/8b0d/8e58) | **Behavior-faithful (NOT oracle-exercised)** | The last 9 stub gaps `snddrv_dispatch_b/c/d` (already-ported) fan out to. Verified via the RAW disassembly (the Ghidra decompiler's simplified view hides the real body for 6 of the 9 — e.g. `snddrv_dispatch_b_mode0` decompiles to a bare `return in_AX` even though the asm does `LODSB;ADD SI,AX`, because the decompiler doesn't track SI as an output): all 9 read/advance the caller's ambient DS:SI (a live MIDI-track byte cursor), AL (the MIDI event status byte), and/or CS:[BX+0x80] (a per-track default-channel byte) as raw REGISTERS, not stack args. Confirmed via Ghidra xrefs: their ONLY real caller is `midi_process_event` (8751/8756/875b), itself register-entry (`unaff_SI`) and — AT THE TIME OF THIS TASK — genuinely unreconstructed, separate, not-yet-started MIDI-engine work (this task closes the sound-**effect** pipeline's last gaps "before the MIDI engine work begins," per the task brief). **UPDATE (Task E2):** `midi_process_event` and the full MIDI/SMF engine are now reconstructed 1:1 in `src/midi.c` — see this table's later MIDI rows (MPU reset / OPL2 driver leaves / MIDI-to-OPL2 voice bridge) + the Phase-6 status section's Task E2 closeout below. Reconstructed 1:1 from the raw asm; register-entry inputs modelled as file-scope globals (`snd_seq_event_al`/`snd_seq_cursor`/`snd_seq_default_chan`, the `snd_mpu_byte_89e2` convention) since the true caller supplying them is out of scope and the EXISTING `snddrv_dispatch_b/c/d` call sites (unchanged by this task) pass no args. `snd_seq_cursor` defaults to a zero-filled scratch buffer (not real captured MIDI data — none exists) purely so the incidental invocation from the already-validated `snddrv_dispatch_b/c/d` mode0 replay (which DOES happen — `t4_l2_dispatch` seeds mode 0) is memory-safe; never inspected/asserted by any comparator. 3 further NEW carve-out leaves discovered and stubbed (`seq_set_channel_param` 922c, `midi_emit_voice_msg_w3` 8e93, `opl_event_note_on` 8ea3 — already canonically named, none reconstructed, same class as `FUN_1000_6183`/`FUN_1000_7fef`). |
+| **MPU reset / init substep / timer teardown / status latch** (Task A3): `mpu401_reset_to_uart` (8a75), `snddrv_init_substep` (8b2a), `timer_teardown_restore` (7fef), `record_min_status_code` (945b) | **Transcription** (`mpu401_reset_to_uart`/`record_min_status_code`, oracle-inert) / **Behavior-faithful, provably dead** (`snddrv_init_substep`'s ZF branch is immaterial; `timer_teardown_restore`'s guarded body never executes) | Finishes the last 4 stubbed sound-pipeline leaves. `mpu401_reset_to_uart`: MPU-401 chip reset → UART mode, gated on `mpu401_present` (defaults 0 — early-return no-op in every scenario; not one of the oracle's 10 L4 port-I/O entry points, so no port-write record exists). `record_min_status_code`: latches AX into `last_status_code` (0x946c) — see deviation (i). `snddrv_init_substep` (renamed from `FUN_1000_8b2a`, Ghidra's own canonical name): sets `midi_seq_step_active`, calls the carved-out `maybe_opl2_detect_chip` (8fb6) then branches on its ZF-only verdict to clear the flag or call the equally carved-out `opl2_reset_all_regs` (8eeb) — see deviation (i). `timer_teardown_restore` (renamed from `FUN_1000_7fef`): register-entry (AX=table index, CX/DX=vector-8 restore far ptr — confirmed no `[BP+n]` stack access in the disasm), guarded by `isr_installed_flag` (0x54d4, defaults 0 and never set nonzero by any reconstructed code — the guarded body, including 3 DOS INT 21h vector get/sets via `int86x`/`union REGS`/`struct SREGS` and the carved-out `pit_set_counter0` (7f9a), is **provably unreached** by every scenario in the trace). All 4 wired into their ALREADY-VALIDATED call sites (`snddrv_init` calls the first two; `timer_restore` calls the third; 6 already-committed L3 fns call the fourth) with **zero effect** on any of those records — confirmed by re-running `validate_sound`: identical PASS=4414/FAIL=0/UNPORTED=25/PORT_CHECKED=3752 before and after. |
+| **OPL2 register-level driver leaves + first MIDI-oracle validation** (Task D1): `opl_read_status` (9056), `opl2_reset_all_regs` (8eeb), `maybe_opl2_detect_chip` (8fb6), `opl_set_note_params` (9241) | **Transcription** (`opl_read_status`/`opl2_reset_all_regs`) / **Behavior-faithful, ZF-only** (`maybe_opl2_detect_chip`) / **Transcription, port differential not applicable** (`opl_set_note_params`) | The 2 leaves Task A3 carved out (`maybe_opl2_detect_chip`, `opl2_reset_all_regs`) are now reconstructed for real, plus `opl_read_status` (the `IN AL,0x388` status-byte primitive both of them — and `opl_write_reg` — call) and `opl_set_note_params` (a MIDI-voice note-trigger front end that tail-calls two still-out-of-scope MIDI leaves). `opl2_reset_all_regs`: 233 `opl_write_reg` calls (18 explicit 0xff writes + a reg 0x01..0x3f zero-sweep + a reg 0x60..0xf5 zero-sweep + 2 final fixed writes) → 466 OUT events, byte-for-byte confirmed against the MIDI-oracle's capture (`local/build/render/midi_trace.bin`). `maybe_opl2_detect_chip`: the classic AdLib timer-based presence probe (reg 0x04=0x60/0x80, latch status, reg 0x02=0xff + reg 0x04=0x21, burn a 199-iteration status-read delay, latch status again, reg 0x04=0x60/0x80 again; "detected" iff `(status_after&0xe0)==0xc0 && (status_before&0xe0)==0`) — 6 writes/12 OUT + 201 `opl_read_status` calls, byte-for-byte confirmed. This is the **first task to validate reconstructed code against the MIDI-oracle trace** (`tools/midi_ctest.c`'s `PORTED[]`, previously empty since Task C3) — see deviation (k) for the `opl_set_note_params` comparator-choice + the `snd_opl_detect_zf` reconciliation, and the Phase-6 status section's Task D1 closeout for gate numbers. |
+| **MIDI-to-OPL2 voice-message bridge** (Task D2, `src/midi.c`): `opl_event_note_on` (8ea3), `seq_set_channel_param` (922c), `midi_emit_voice_msg_w1/w2/w3` (8b81/8b6b/8e93), `emit_midi_voice_message` (8bc8) | **Transcription** (`opl_event_note_on`/`seq_set_channel_param`/`w1`/`w2`/`w3`) / **Transcription, port-write-sequence validated** (`emit_midi_voice_message`) | The MIDI-to-OPL2 voice/channel-message funnel: `w3` -> `w2` -> `w1` -> `emit_midi_voice_message` (call-chain confirmed via raw disasm, opposite of a superficial name-order reading), plus the sibling program-change (`seq_set_channel_param`) and note-on (`opl_event_note_on` -> `opl_play_note`, already-ported) leaves. Register-entry throughout; 4 reuse the existing `snd_seq_event_al`/`snd_seq_cursor` (sound.h); `midi_voice_chan`/`midi_voice_note_byte`/`midi_emit_al`/`midi_emit_ptr` (new, midi.c-owned) model `w1`'s BX/AH and `emit_midi_voice_message`'s AL/DS:(BX+DI). `emit_midi_voice_message` is a 12-or-4-register OPL2 patch/note writer (branches on the patch descriptor's flag byte); its port-write differential — and `opl_event_note_on`'s (via `opl_play_note`) — surfaced that `opl_fnum_lo_5593`/`opl_fnum_hi_559c`/`opl_chan_data_55b4`/`opl_chan_idx_5614` are baked DGROUP data, not zero-BSS (see deviation (l)) and that `tools/midi_ctest.c` needed a per-scenario `opl_reg_shadow_80cc` reset (deviation (m)). All 6 moved UNPORTED -> PASS/PORT_CHECKED against the MIDI-oracle trace — see the Phase-6 status section's Task D2 closeout for gate numbers. |
 
 **Phase-6 deviations (all accurate; stated plainly; in-code RECONSTRUCTION FIDELITY notes present):**
 
@@ -320,6 +324,109 @@ L5 is reconstructed 1:1 as **documentation** (NOT runtime-gated — see below).
   param would perturb the 21-case switch's verbatim call sites). The `record_min_status_code`
   arg is given the available value (`param_1`) in lieu of reconstructing the host-absent
   packed-FLAGS register — observationally identical (the callee is a no-op stub).
+- **(h) MIDI dispatch backends: register-entry, not oracle-exercised (closeout task).**
+  The 9 `snddrv_dispatch_b/c/d` mode{0,1,4} backends (91cf/8af6/8e48/91d7/8b04/8e50/91df/
+  8b0d/8e58) are register-entry MIDI-track leaves whose ONLY real caller,
+  `midi_process_event`, is itself register-entry and — AT THE TIME OF THIS TASK (A1+A2) —
+  genuinely unreconstructed, separate, not-yet-started MIDI-engine work (see the
+  fidelity-table row above for the full reasoning; **now reconstructed, Task E2** — see
+  that row's update note). The combined task brief that closed these out (plan tasks A1+A2) called for
+  extending `tools/sound_oracle.py` to hook and exercise them, but its own COMBINED
+  DELIVERABLE also held the trace's total `UNPORTED` count fixed at the pre-task baseline
+  (25). Hooking/exercising them (or the 4 further out-of-scope leaves `snddrv_init_substep`
+  / `mpu401_reset_to_uart` / `timer_teardown_restore` / `record_min_status_code` the
+  original A1 steps also named) would have added new UNPORTED records for functions this
+  task does not reconstruct — already-existing scenarios (`device_init`,
+  `t4_l3_timer_table`) unconditionally reach 3 of those 4 today — which would raise
+  UNPORTED past the fixed baseline. Rather than force a scenario that either produces a
+  false-positive validation (the SND_SNAP captures none of SI/AL/BX) or breaks the
+  numeric gate, `tools/sound_oracle.py` / `tools/sound_ctest.c`'s `PORTED[]` were left
+  UNCHANGED (no new hooks, no new scenarios) — the brief's own escape hatch ("if the
+  backends genuinely cannot be exercised by the oracle... report as a documented
+  not-exercised UNPORTED... and proceed"), applied to all 9. The gate is unaffected
+  (`UNPORTED` stays exactly 25); the 9 are linked and reconstructed 1:1 but never invoked
+  by any `PORTED[]` wrapper.
+- **(i) Task A3 — the 4 leaves deviation (h) named are now reconstructed.** `record_min_
+  status_code` (945b) is a true register-entry fn (AX only — every one of its 6 call
+  sites does `MOV AX,val; CALL 0x945b` with no intervening instruction, confirmed via
+  disasm, no stack push). Reconstructed with a conventional `u16 status` PARAMETER
+  rather than a register-stand-in global: since every call site already stages the exact
+  value immediately before the call, the value received is bit-identical either way, and
+  the parameter form needs zero changes to the 6 already-reconstructed/validated callers
+  (`schedule_timer_callback_a/b/c`, `record_status_and_strobe_speaker`,
+  `tone_seq_callback_9631/96c4/95b5`). `snddrv_init_substep`'s carved-out callee
+  `maybe_opl2_detect_chip` (8fb6) conveys its OPL-chip-detected verdict via the ZERO FLAG
+  ONLY — its asm pops the saved AX/CX/DX (restoring the CALLER's original AX) AFTER the
+  `AND AH,AH` that sets ZF, so no register survives to carry the result to a
+  void-returning C stub. Modelled via a file-scope `snd_opl_detect_zf` (default
+  "not detected"), documented as immaterial: both branch targets are themselves
+  void carve-out stubs (`opl2_reset_all_regs`, 8eeb) with zero effect on any
+  SND_SNAP-tracked global. `timer_teardown_restore`'s guarded body (3 DOS INT 21h vector
+  get/set calls + the carved-out `pit_set_counter0`, 7f9a) is gated on `isr_installed_flag`
+  (0x54d4), which defaults 0 and is never set nonzero by ANY function this codebase
+  reconstructs (in-scope or out) — so that body is **provably dead** on every current
+  scenario/gate path; ported 1:1 from the raw disasm (register-entry AX/CX/DX inputs
+  modelled as file-scope globals, the `snd_mpu_byte_89e2` convention) for faithfulness +
+  the BUMPY.EXE link, using the project's established `int86x`/`union REGS`/`struct
+  SREGS` DOS-interrupt convention (config_screens.c/input.c/gfx_palette.c/video.c). 3
+  further out-of-scope carve-out leaves discovered and stubbed: `maybe_opl2_detect_chip`
+  (8fb6), `opl2_reset_all_regs` (8eeb — genuine OPL-driver register-init work, separate
+  from this task's MPU/init/timer/status-latch scope) and `pit_set_counter0` (7f9a —
+  also called by the unrelated, unreconstructed `uninstall_interrupt_handler`/
+  `pit_set_counter0_wrap`, a separate ISR-install subsystem). None of the 4 fns has a
+  trace record of its own (none is in `tools/sound_oracle.py`'s `FN_NAMES`/`L4_FNS`), so
+  — matching the deviation (h) precedent — no new `PORTED[]` entries were added for
+  them; `validate_sound` is unaffected (`PASS=4414 FAIL=0 UNPORTED=25
+  PORT_CHECKED=3752`, identical to the pre-task baseline) and `validate_int8` (the
+  end-to-end replay gate) still passes its full 150-frame replay unchanged.
+- **(j) Defensive index mask in `timer_teardown_restore`'s table read (Task A3 review
+  fix).** The reload-table read (`timer_restore_reload_value = timer_restore_table[
+  snd_isr_restore_index & (len-1)]`) adds a masking clamp the asm does NOT have (`MOV
+  BX,0x54de; ADD AX,AX; ADD BX,AX; MOV AX,[BX]` — unconditional, no mask). `sound.c`'s
+  `timer_restore_table[8]`'s real extent past what the disasm establishes is
+  un-groundable, so the mask is KEPT as a defensive clamp against a real C-array OOB
+  rather than as a reproduction of engine behavior — an intentional, documented
+  deviation, not an invented mechanism. Per deviation (i), `isr_installed_flag` gates
+  this entire body and defaults 0 / is never set nonzero by any reconstructed code, so
+  the masked read is provably dead on every current scenario — immaterial to any gate.
+- **(k) Task D1 — `opl_set_note_params`'s port-write differential is not applicable;
+  `snd_opl_detect_zf` reconciled for real.** `opl_set_note_params` (9241) itself issues
+  **zero** `opl_write_reg` calls — it only stores 2 bytes (`opl_note_param1`/`
+  opl_note_param2`, CODE 0x9272/0x9273) and tail-calls two out-of-scope carve-out
+  leaves, `midi_emit_voice_msg_w1` (8b81, a NEW carve-out this task discovers) and
+  `opl_event_note_on` (8ea3, already carved out).  The MIDI-oracle's sole trace record
+  for `opl_set_note_params` DOES contain 32 OUT events, but empirically (verified by
+  parsing `local/build/render/midi_trace.bin` directly) every one of them originates
+  from those two REAL, non-stub carve-out leaves (`midi_emit_voice_msg_w1`: 24 OUT /
+  12 writes; `opl_event_note_on`: 8 OUT / 4 writes — confirmed by summing their own,
+  separately-captured trace records: 24+8=32, exact).  Reproducing that port sequence
+  on the host would require reconstructing those two carve-outs for real, which is out
+  of this task's scope — a genuine capture-scope fact, not a port gap in
+  `opl_set_note_params` itself.  Rather than mark `is_l4=1` and either FAIL (host stubs
+  emit 0 of the expected 32 OUT) or invent matching writes (fabricating behavior the
+  reconstructed C doesn't have), `tools/midi_ctest.c` registers this fn under the
+  **semantic-state** comparator (`is_l4=0`): the real asm touches none of the tracked
+  MIDI sequencer-state globals either, so this is a real, reproducible, non-vacuous
+  assertion (no state corruption) rather than a weakened port gate. This mirrors the
+  project's own `opl_play_note`/`opl2_all_notes_off` "documented port-gate exclusion"
+  precedent (deviation (b)), except here the port differential is fully sidestepped by
+  a *different but still meaningful* comparator rather than dropped to UNPORTED — the
+  brief's explicit ask that this fn move off UNPORTED is met without faking a port
+  trace. Separately, `maybe_opl2_detect_chip`'s real body now SETS the file-scope
+  `snd_opl_detect_zf` flag (previously only a modelled default per deviation (i)) from
+  the detection verdict it actually computes — `snddrv_init_substep`'s existing
+  ZF-branch is unchanged and its contract is honored for real rather than by a fixed
+  default. **Nesting risk analyzed + confirmed harmless**: `snddrv_init_substep` (already
+  validated, Task A3) calls `maybe_opl2_detect_chip` then (now, for real)
+  `opl2_reset_all_regs`, which the sound harness's `device_init` scenario exercises via
+  `snddrv_init`. `snddrv_init`'s own record is validated by the **semantic-state**
+  comparator (`is_l4=0` in `tools/sound_ctest.c`'s `PORTED[]`), which never invokes
+  `cmp_ports`, and neither `midi_seq_step_active` (touched by `snddrv_init_substep`) nor
+  `opl_reg_shadow_80cc` (touched by the now-real `opl2_reset_all_regs`) is a field the
+  SND_SNAP serializes — so the 466 newly-real OUT events opl2_reset_all_regs now emits
+  inside that call chain are invisible to any `sound_ctest.c` comparator. Confirmed
+  empirically: `validate_sound` reports the IDENTICAL PASS=4414/FAIL=0/UNPORTED=25/
+  PORT_CHECKED=3752 before and after this task.
 
 **Phase-6 validation method:** per-function differential with two comparators (the L1–L3
 **semantic-state** gate: seed entry SND_SNAP → call the reconstructed C fn → assert the
@@ -336,7 +443,8 @@ trace records). The L5 sequencer is reconstructed as documentation (no gate).
 
 ## Phase-6 status (sound subsystem)
 
-As of Phase-6 Task 6, the complete sound subsystem is **reconstructed**:
+As of Phase-6 Task 6, the effect-engine sound subsystem was reconstructed; a further
+closeout task (below) ported the last 9 stub gaps `snddrv_dispatch_b/c/d` called:
 
 - **Reconstructed 1:1** (live Ghidra decomp + raw disasm, verified via MCP): L1 dispatch
   (`play_sound` 6e11, `play_sound_effect` 6e30 + the 6 event wrappers), L2 device state
@@ -359,16 +467,350 @@ As of Phase-6 Task 6, the complete sound subsystem is **reconstructed**:
   links clean (216K, Open Watcom 16-bit DOS, `sound.obj` in the link set, no duplicate
   symbols).
 
-**Deferred from Phase 6:** none specific to sound — the complete subsystem
-(dispatch + device + tone-engine + hardware drivers + ISR sequencer) is reconstructed and
-validated (L1–L4) / documented (L5). The **int8-synced end-to-end gate** remains the standing
-project-wide deferral (the Unicorn capture granularity does not match the engine's
-physics-frame rate; a frame-accurate DOSBox-path capture is needed before the full game
-loop can be replay-validated tick-for-tick — unchanged from Phases 2/3/4/5). (At the time of
-Phase 6 this was the *single* project-wide deferral, alongside the then-open
-`p1_movement_dispatch` call-through; that call-through was **RESOLVED in Phase 9** — see the
-Phase-9 sections — leaving the int8 end-to-end gate and the separate CODES.EXE registration
-RE as the remaining deferrals.)
+**Closeout (MIDI dispatch backends, see the fidelity-table row + deviation (h) above):**
+the 9 `snddrv_dispatch_b/c/d` mode{0,1,4} backends (91cf/8af6/8e48/91d7/8b04/8e50/91df/
+8b0d/8e58) — the LAST stub gaps `snddrv_dispatch_b/c/d` referenced — are now reconstructed
+1:1 as register-entry MIDI-track leaves (behavior-faithful, NOT oracle-exercised; their
+real caller `midi_process_event` is unreconstructed, separate MIDI-engine work). Gate
+unchanged: `validate_sound` still FAIL=0 PORT_CHECKED=3752 UNPORTED=25 (the 9 add zero
+new records — no oracle/`PORTED[]` changes). 3 further out-of-scope carve-out leaves
+(`seq_set_channel_param` 922c, `midi_emit_voice_msg_w3` 8e93, `opl_event_note_on` 8ea3)
+discovered and stubbed alongside them.
+
+**Closeout (Task A3 — MPU reset / init substep / timer teardown / status latch, see the
+fidelity-table row + deviation (i) above):** the 4 remaining stubbed sound-pipeline leaves
+— `mpu401_reset_to_uart` (8a75), `snddrv_init_substep` (8b2a, renamed from
+`FUN_1000_8b2a`), `timer_teardown_restore` (7fef, renamed from `FUN_1000_7fef`), and
+`record_min_status_code` (945b) — are now reconstructed 1:1. `mpu401_reset_to_uart` +
+`record_min_status_code` are oracle-inert transcriptions; `snddrv_init_substep`'s ZF-only
+carved-out branch and `timer_teardown_restore`'s `isr_installed_flag`-guarded DOS-vector
+body are behavior-faithful but provably unreached by every current scenario. Gate
+unchanged: `validate_sound` still PASS=4414 FAIL=0 UNPORTED=25 PORT_CHECKED=3752 (all 4
+wired into already-validated call sites with zero effect); `validate_int8` (the
+end-to-end replay gate) still passes its full 150-frame replay unchanged. 3 further
+out-of-scope carve-out leaves (`maybe_opl2_detect_chip` 8fb6, `opl2_reset_all_regs`
+8eeb, `pit_set_counter0` 7f9a) discovered and stubbed alongside them (the first two are
+now reconstructed for real — see the Task D1 closeout below). The sound-**effect**
+pipeline now has zero remaining stub gaps of its own; only the genuinely separate MIDI
+engine + the unrelated ISR-install subsystem
+(`uninstall_interrupt_handler`/`pit_set_counter0_wrap`) remain out of scope.
+
+**Closeout (Task D1 — OPL2 register-level driver leaves + first MIDI-oracle validation,
+see the fidelity-table row + deviation (k) above):** the 2 leaves Task A3 carved out —
+`maybe_opl2_detect_chip` (8fb6) and `opl2_reset_all_regs` (8eeb) — are now reconstructed
+1:1, along with `opl_read_status` (9056, the `IN AL,0x388` primitive both call) and
+`opl_set_note_params` (9241, a MIDI-voice note-trigger front end). This is the first
+task to validate reconstructed code against the Task C2 MIDI-oracle trace
+(`local/build/render/midi_trace.bin` via `tools/midi_ctest.c`): `tools/midi_ctest.c`'s
+`PORTED[]` registry — empty since Task C3 — gains its first 4 entries, moving
+`opl_read_status`/`opl2_reset_all_regs`/`maybe_opl2_detect_chip` from UNPORTED to
+PORT_CHECKED/PASS (204 records total: 202+1+1) and `opl_set_note_params` to PASS via the
+semantic-state comparator (1 record — see deviation (k) for why the port-write
+comparator does not apply to it). Gate: `validate_midi` FAIL=0, 205 PASS (204
+PORT_CHECKED) / 132 UNPORTED (the remaining midi.c-side parser/sequencer/voice-dispatch
+records — genuinely unstarted MIDI-engine work) out of 337 total records. `validate_sound`
+unaffected: still PASS=4414 FAIL=0 UNPORTED=25 PORT_CHECKED=3752, identical to the
+pre-task baseline (see deviation (k)'s nesting-risk analysis). One further out-of-scope
+carve-out leaf discovered: `midi_emit_voice_msg_w1` (8b81, called from
+`opl_set_note_params`) — same class as the other MIDI-note carve-outs, added to the
+`validate_integration` allowlist alongside them.
+
+**Closeout (Task D2 — the MIDI-to-OPL2 voice-message bridge, `src/midi.c`'s first 6 real
+bodies):** `opl_event_note_on` (8ea3), `midi_emit_voice_msg_w1/w2/w3` (8b81/8b6b/8e93),
+`emit_midi_voice_message` (8bc8), and `seq_set_channel_param` (922c) are now
+RECONSTRUCTED 1:1 in `src/midi.c` (previously: the first 4 were `game_stubs.c` carve-out
+stubs, `w2`/`emit_midi_voice_message` were unreferenced by any reconstructed caller). Call
+chain confirmed via raw disasm: `w3` CALLs `w2` (1000:8e99), `w2` CALLs `w1` (1000:8b76),
+`w1` CALLs `emit_midi_voice_message` (1000:8bc0) — opposite of a superficial name-order
+reading. All six are register-entry; modelled via file-scope ambient globals — 4 reuse the
+existing `snd_seq_event_al`/`snd_seq_cursor` (sound.h); 4 new ones
+(`midi_voice_chan`/`midi_voice_note_byte`/`midi_emit_al`/`midi_emit_ptr`) are added for the
+`w1`->`emit_midi_voice_message` leg, which no existing global modelled. `w1`'s far-pointer
+walk through `midi_song_data_seg:midi_song_data_off` (`MK_FP`) is genuinely 1:1 with the
+asm; `tools/midi_ctest.c` backs `MK_FP` with a 1 MB host arena, pre-seeded with an EXACT
+replica of `tools/midi_oracle.py`'s own controlled "song data"/"chan struct" test fixtures
+(the MIDI_SNAP trace format cannot capture arbitrary far-segment memory, only the named
+globals + a 32B SI-window). `chan_param_table` (CODE 0x8473..0x8483,
+`seq_set_channel_param`'s per-channel byte table) is promoted from a `tools/midi_ctest.c`
+harness-side shadow (Task C3) to a real `src/midi.c` global.
+- **(l) Correction: `opl_fnum_lo_5593`/`opl_fnum_hi_559c`/`opl_chan_data_55b4`/
+  `opl_chan_idx_5614` are NOT zero-BSS runtime tables — they are baked DGROUP DATA.**
+  Task D1's classification ("an OPL-init routine fills at RUNTIME — the static image
+  leaves them zero") is wrong for at least the low portion of all 4: verified by reading
+  `local/originals/unpacked/BUMPY_unpacked.exe`'s own DGROUP bytes directly (the image
+  visibly shows the 4 tables OVERLAPPING each other's declared 0x100-byte extent, e.g.
+  `opl_fnum_hi_559c[0] == opl_fnum_lo_5593[9]`, since 0x559c is 9 bytes past 0x5593 — a
+  real memory-layout fact no amount of runtime population could produce). Surfaced by
+  this task's own `opl_event_note_on`/`emit_midi_voice_message` port-write differential,
+  which diverged from the MIDI-oracle trace with the old zero defaults. Fixed: all 4 are
+  now initialised with the exact image bytes (same "L1 event-wrapper LUTs — exact image
+  bytes" convention `action_sound_lut_opl_260e` already uses), in `src/sound.c` (owned
+  there, unchanged by this task otherwise). Bytes past ~index 0x88 look like adjacent,
+  unrelated DGROUP data rather than a continuation of the logical table — transcribed
+  anyway (exact image bytes, not invented; the array's 0x100 declared extent predates
+  this task and nothing reconstructed indexes that far).
+- **(m) Test-harness fix: per-scenario reset of `opl_reg_shadow_80cc`.** The MIDI-oracle
+  resets ALL memory to a shared baseline before EACH scenario
+  (`tools/midi_oracle.py`'s `restore_base()`); `tools/midi_ctest.c` processes every
+  scenario's records in one continuous run with no equivalent reset, so a later
+  scenario's `opl_write_reg` calls (e.g. scenario 6's `opl2_reset_all_regs`, 233 writes)
+  leaked into scenario 7's shadow reads — a host-harness artifact, not a reconstruction
+  bug (only surfaced now because `emit_midi_voice_message` is the first PORTED fn to
+  actually READ the shadow rather than just write it). Fixed by memset-ing
+  `opl_reg_shadow_80cc` to 0 at the top of each scenario's processing loop, mirroring the
+  oracle's own per-scenario reset (verified against the unpacked image: CODE:0x80cc's
+  baseline bytes are genuinely all zero, unlike the 4 DGROUP tables in (l)).
+
+Gate: `validate_midi` FAIL=0, 232 PASS (220 PORT_CHECKED) / 105 UNPORTED (the remaining
+midi.c-side parser/sequencer records — genuinely unstarted MIDI-engine work) out of 337
+total records — ALL SIX of this task's targets moved UNPORTED -> PASS/PORT_CHECKED.
+`validate_sound` unaffected: still PASS=4414 FAIL=0 UNPORTED=25 PORT_CHECKED=3752,
+identical to the pre-task baseline. `validate_integration`: PASS (238388 B, no dup
+symbols; the 4 former `game_stubs.c` MIDI-note carve-out stubs are removed from both
+`game_stubs.c` and the `CARVEOUT_ALLOWLIST`; `midi.obj` — always in `src/Makefile`'s
+object set — added to `tools/validate_integration.sh`'s own re-link `OBJS` array, a
+pre-existing gap this task also closes).
+
+**Closeout (Task E1 — the SMF parser: `midi_read_varlen`/`seq_normalize_far_ptr`/
+`midi_get_track_count`/`midi_init_track_table`/`midi_parse_file`):** 5 more `src/midi.c`
+bodies land, all reconstructed 1:1 against BOTH `decompile_function_by_address` AND raw
+`disassemble_function`.
+- **(n) Correction: `seq_normalize_far_ptr` is NOT a bare `RET`-only no-op.** An earlier
+  working note (`tools/midi_oracle.py`'s own header comment, carried into this task's
+  brief) claimed 1000:8a23 is "verified: RET". `disassemble_function` shows 11 real
+  instructions (`MOV AX,SI; AND SI,0xf; SHR AX,1`×4`; MOV BX,DS; ADD AX,BX; MOV DS,AX`),
+  i.e. a genuine DS:SI far-pointer renormalization (rolls SI's excess offset into DS) —
+  confirmed reachable from 2 real callers via `get_xrefs_to` (`midi_parse_file` 885e,
+  `midi_process_event` 879d). It IS, however, a provable value-preserving identity
+  (normalization by definition keeps the same linear address), and this codebase models
+  the MIDI event cursor as ONE merged pointer (`snd_seq_cursor`) rather than a split
+  seg/off pair the way `midi_song_data_off/_seg` are — so the reconstructed body is a
+  true no-op **against that model** (not because the original does nothing). Documented
+  at the fn's own definition; not fixed by splitting the shared cursor abstraction (would
+  ripple into every already-committed register-entry MIDI leaf for zero observable gain).
+- **(o) Correction: `midi_read_varlen`'s packed return is the FULL 32-bit decoded value,
+  not "value + byte count".** The task brief characterized the `CONCAT22(dx,ax)` return
+  as "decoded value in the low word, byte-count in the high word"; this does not match
+  the asm (DX is 0 for the 1-/2-byte branches, not 1/2; for the 3-byte branch DX is
+  exactly the VLQ's bits 16-20) — DX:AX is the plain 32-bit numeric value, matching
+  `midi_track_time_table`'s own pre-existing "32-bit next-event clock" doc comment.
+  Reconstructed as a literal instruction-by-instruction transliteration (not the
+  closed-form formula) so the exact 8/16-bit truncation and CF-chained `RCR` behavior
+  reproduces bit-for-bit; verified against 4 independent hand test-vectors (including the
+  brief's own `8a 70` -> 1392 example) plus the Task E1 gate's own `MIDI_PERTURB`-style
+  self-test (an injected 1-bit corruption in the 2-byte branch was caught: `got 0xae0
+  want 0x570`, doubling — proving the differential is a real assertion, not vacuous).
+- **(p) Discovery: the 4-byte VLQ branch does not extend the clean 1/2/3-byte pattern.**
+  Bytes `81 80 80 7F` (a textbook 4-byte VLQ for 0x20007F under the standard MSB-first
+  formula) decode via the real asm to DX:AX = `0x001F:0xC0C0`, not `0x0002:0x007F`.
+  Verified twice independently (literal per-instruction CF/RCR simulation vs. the
+  decompile's own CONCAT expressions — both agree with each other, both disagree with the
+  "obvious" 28-bit extension). Reproduced as-is (plausibly a latent, never-exercised bug
+  in the 1992 binary — 4-byte SMF deltas are astronomically rare in practice); not
+  "corrected" to match the naive formula, per "adhere to the binary, never invent".
+- **(q) `tools/midi_ctest.c` gains an `extra_check` hook** (per-`PORTED[]`-entry, optional,
+  run after `cmp_semantic` passes) because the existing semantic comparator only diffs
+  NAMED globals — it cannot see a leaf/getter's RETURN VALUE or DS:SI cursor advance,
+  which is the entire observable effect of `midi_read_varlen` / `midi_get_track_count`
+  (no tracked global changes either way). Without it, registering these 2 fns would have
+  been a VACUOUS pass regardless of correctness. Wired for `midi_read_varlen` (checks
+  AX/DX against the exit snap + the cursor's byte-advance) and `midi_get_track_count`
+  (checks AX); `seq_normalize_far_ptr` needs none (its no-op is already a real, if narrow,
+  global-equality assertion — see (n)). Existing `PORTED[]` rows are untouched (the new
+  struct field defaults to NULL via C aggregate-init zero-fill).
+- **(r) The Task E2 forward dependency (`midi_process_event`).** `midi_init_track_table`'s
+  real asm (1000:87ad..87b2) CALLs `midi_read_varlen`, then — when the decoded delta is
+  exactly 0 (the real `OR BX,DX`/`JNZ` ZF test) — ALSO CALLs `midi_process_event` (873c,
+  Task E2, genuinely unreconstructed) and stores WHATEVER it returns instead.
+  `midi_parse_file` calls `midi_init_track_table` on success, inheriting the same
+  dependency transitively. Per the task brief: both bodies are reconstructed 1:1 HERE
+  (including the real conditional call — no invented shortcut), but neither is registered
+  in `tools/midi_ctest.c`'s `PORTED[]` this task (stays UNPORTED, not a hard failure).
+  Corrected `midi_process_event`'s prototype from `void` to `u32` (its caller stores its
+  AX:DX return into `midi_track_time_table` exactly like `midi_read_varlen`'s own result)
+  and added a faithful-signature carve-out stub (`return 0`) to BOTH `game_stubs.c` (the
+  real DOS link — `midi.obj` is linked into `BUMPY.EXE`) and `tools/midi_ctest.c` (the
+  host link), so this task's real call site is linkable on both targets without
+  fabricating E2's behavior. `game_stubs.c`'s `CARVEOUT_ALLOWLIST` (`validate_integration.sh`)
+  gains `midi_process_event`.
+- **(s) `midi_parse_file`/`midi_init_track_table` use `FP_OFF`/`FP_SEG` to record a
+  track's `{off,seg}`** into `midi_track_ptr_table` (matching the asm's own
+  `MOV CS:[BX],SI; MOV AX,DS; MOV CS:[BX+2],AX`). On the real Watcom `-ml` build these are
+  the genuine live SI/DS registers (exact). `tools/midi_ctest.c` adds the same
+  `far_mem`-arena-relative `host_fp_seg`/`host_fp_off` shims the project already uses in
+  `gfx_palette_ctest.c`/`spawn_ctest.c`/`int8_ctest.c`; since `snd_seq_cursor` points at a
+  small dedicated `si_window` buffer (not `far_mem`) on host, the shim's values there are
+  a non-representative approximation — harmless because both functions stay UNPORTED
+  (never invoked by the differential runner) per (r). `midi_parse_file`'s own 16-bit
+  offset-overflow check (the asm's `ADD SI,AX; JC`) is reconstructed via the same
+  `FP_OFF`-based arithmetic (exact on the real build, approximate/unexercised on host).
+- **(t) `midi_get_track_count`'s CODE 0x85a1 name-clash — VERIFIED, not just repeated.**
+  Re-confirmed via `get_xrefs_to(1000:85a1)`: readers are this getter and
+  `midi_init_track_table`'s loop-count read; writers are `midi_parse_file` (8846) and
+  sound.c's pre-existing `mpu401_write_data_polled` residual store — genuinely the SAME
+  physical cell reused by two unrelated engine subsystems, exactly as midi.h's
+  pre-existing ownership note already documented. `midi.h`'s existing `extern` of
+  sound.c's `midi_track_count` is reused unchanged.
+
+Gate: `validate_midi` FAIL=0, 311 PASS (220 PORT_CHECKED) / 26 UNPORTED (`midi_process_event`
+[E2, 14 records] + `midi_parse_file`/`midi_init_track_table` [deferred to E2, 2 records
+each] + `midi_load_sequence`/`midi_start_playback`/`midi_sound_init`/
+`midi_install_tempo_timer` [genuinely not this task's 5 targets, 2+2+1+3 records]) out of
+337 total records — all 3 self-contained targets (`midi_read_varlen` 54,
+`seq_normalize_far_ptr` 24, `midi_get_track_count` 1 — 79 records) moved UNPORTED ->
+PASS. `validate_sound` unaffected: still PASS=4414 FAIL=0 UNPORTED=25 PORT_CHECKED=3752.
+`validate_integration`: PASS (239332 B, no dup symbols, all 39 spine callees resolve, 36
+allowlisted `game_stubs.obj` symbols including the new `midi_process_event` carve-out).
+
+**Closeout (Task E2 — sequencer driver + tempo timer: `midi_process_event` 873c,
+`midi_load_sequence` 87cd, `midi_start_playback` 8722, `midi_sound_init` 89a8,
+`midi_play_sequence` 8977, `midi_install_tempo_timer` 86e9):** the final 6 `src/midi.c`
+bodies land, completing the MIDI module. `midi_process_event` — the centerpiece — is the
+per-track event-stream cursor `midi_init_track_table` calls conditionally (Task E1); its
+reconstruction unblocks `midi_parse_file`'s and `midi_init_track_table`'s own differential
+(both real bodies since Task E1, left UNPORTED pending this fn) — both now PASS
+(`check_tbl=1`, their contract IS the ptr/time table install).
+- **(u) `midi_process_event`'s dispatch wiring, verified against the raw disasm (not the
+  decompiler's confused SSA merge).** `decompile_function_by_address` renders this fn's
+  loop-continuation test as a single reused `uVar5` boolean threaded through unrelated
+  branches (the running-status check, the 0xf0/0xf7 compares, the meta-type compares) —
+  a decompiler SSA artifact, not a real shared condition. The RAW disassembly
+  (1000:873c..87a1) shows the loop actually works as: LODSB the next status byte; if its
+  high bit is clear (no running-status support in this engine) eat one more byte and
+  fall through; 0x80..0xEF (channel-voice) stages `snd_seq_event_al` and calls
+  `snddrv_dispatch_d`; 0xF0 calls `snddrv_dispatch_c`; 0xF7 calls `snddrv_dispatch_b`
+  (all three already-PORTED sound.c backends); otherwise a META event: LODSW the
+  `{type,len}` pair RAW (no byte-swap, unlike the big-endian MThd/MTrk header fields
+  `midi_parse_file` reads via `midi_bswap16`) and branch on type — 0x51 (Set Tempo) stores
+  the 24-bit tempo split hi/lo; 0x2F (End of Track) consumes 2 more bytes, decrements
+  `midi_track_count`, and returns `0xFFFFFFFF` IMMEDIATELY (skipping the shared tail
+  entirely — no `midi_read_varlen` call, no `seq_normalize_far_ptr`); 0x20 (MIDI Channel
+  Prefix) stores the channel byte into `CS:[BX+0x80]` (modelled as `snd_seq_default_chan`,
+  reusing the SAME flat-global convention the 9 already-PORTED `snddrv_dispatch_b/c/d`
+  modeX backends already use to READ this exact byte — `BX` itself stays unmodelled
+  ambient state, per that established precedent); any other meta type skips its `len`
+  data bytes. The shared tail (reached by every branch except EOT) decodes the next
+  delta via `midi_read_varlen`; if it's 0, loop back and process another due event
+  immediately (asm label 873d, NOT the function's own entry 873c — so internal
+  iterations are invisible to the Task C2 oracle's function-boundary hook: 14 total
+  records for a 7-track file across 2 full cascades = exactly one record per track per
+  cascade, however many events each processed internally); otherwise
+  `seq_normalize_far_ptr()` and return the delta. `BX` is confirmed genuinely ambient
+  (no `MOV BX,...` anywhere in the fn) via `disassemble_function`; the Task C2 capture's
+  own `bx` register field climbs by 4 per record (0x81cc, 0x81d0, ...), confirming
+  `midi_init_track_table` — not this fn — supplies it as `track_ptr_table_base +
+  idx*4`, exactly as documented.
+- **(v) `midi_load_sequence`'s song_data/aux_ptr NAME CAVEAT (verified via raw disasm,
+  independently corroborated by `tools/midi_oracle.py`'s own pre-existing header
+  comment, lines 29-38).** Despite the established prototype's parameter names
+  (`song_data` 1st, `aux_ptr` 2nd, matching the brief + Ghidra's own decompiled
+  signature), the asm's actual data flow is the OPPOSITE: `song_data` (1st param, BP+4,
+  loaded via `LDS SI,[BP+4]`) is stored into `midi_aux_ptr_off`/`_seg` AND — since that
+  LDS is never reloaded before the `CALL 8809` — is ALSO the DS:SI "file image" argument
+  `midi_parse_file`'s register-entry ABI reads (confirmed: its captured entry snap shows
+  DS:SI pointing exactly at the real Bumpy.mid bytes fed through this param); `aux_ptr`
+  (2nd param, BP+8, `LES SI,[BP+8]`) is stored into `midi_song_data_off`/`_seg` — the
+  table `midi_emit_voice_msg_w1` (Task D2) walks for per-channel instrument lookups.
+  Same "Task C1 globals-only skeleton speculatively named a global before any body
+  reconstruction confirmed its real data flow" pattern as the pre-existing
+  `midi_data_seg` a.k.a. "midi_load_flag" caveat — NOT renamed (would ripple into the
+  already-validated Task D2 `w1` body + the FROZEN MIDI_SNAP trace field names +
+  `tools/midi_ctest.c`); documented at the fn's own definition instead.
+- **(w) `midi_install_tempo_timer` — tempo-ISR CARVE-OUT (the Phase-6 L5 precedent).**
+  The fn's own body (compute the PIT reload value from `midi_division` × 0xf42 divided
+  by the 24-bit tempo, then `set_timer_slot_raw(0, quotient, 0x864c, 0x1000)`) IS
+  reconstructed 1:1 and DOES run for real on every replay that reaches it (transitively,
+  via `midi_start_playback`, a PORTED entry) — its 3 captured entry states all have a
+  verified non-zero divisor (0x0c35/0x0c35/0x07a1), so this is safe, not a host-side
+  guard. What is NOT host-replayable is the per-PIT-tick PLAYBACK LOOP this installs:
+  `set_timer_slot_raw` only writes the DGROUP timer-slot table (confirmed port-I/O-free
+  — the oracle opened an L4 port-capture window for this fn's own address anyway, per
+  its `L4_FNS` set, and captured ZERO OUT/IN events across all 3 records, empirically
+  confirming the task brief's "0 port I/O" claim); the real sequencer advance lives in
+  the L5 ISR machinery (`pit_timer_isr_multiplexer`/`tone_seq_callback_*`, sound.c),
+  reached only through the far-pointer timer-slot install, driven by hardware IRQ0
+  ticks a deterministic host replay cannot reproduce. Registered UNPORTED-for-validation
+  (no `tools/midi_ctest.c` `PORTED[]` entry) — its own reload-value computation has
+  NOTHING observable in the MIDI_SNAP format to assert against
+  (`snd_timer_slot_table` isn't a captured field), so even a trivial "0 OUT events"
+  entry would assert nothing beyond what this note documents; not fabricating a PIT
+  port event this fn doesn't emit.
+- **(x) `midi_play_sequence` has ZERO trace records — an empirical correction to the task
+  brief's assumed "1 record".** Root-caused in the Task C2 oracle's own capture
+  mechanism: `midi_play_sequence`'s real asm is a TAIL JMP (not CALL) into
+  `midi_load_sequence`, reusing the caller's stack frame with NO new return address
+  pushed; the oracle's function-boundary hook tracks pending exits per return address
+  in a LIFO list, so when execution reaches `midi_load_sequence`'s entry (itself
+  hooked), a SECOND entry gets pushed onto the SAME return-address's pending list; the
+  single `RET` back to that shared landing pad pops only the LIFO-topmost entry
+  (`midi_load_sequence`'s), silently orphaning `midi_play_sequence`'s own pending entry
+  forever (verified by parsing the actual trace: `0x8977` never appears in the
+  per-`fn_off` record tally). Registered in `PORTED[]` anyway (reconstructed 1:1,
+  matching the task's explicit ask) but genuinely never exercised by
+  `run_per_function` — documented, not fabricated.
+- **(y) `set_timer_slot_reg` (1000:7e1f) — reused across translation units, renamed to
+  match Ghidra.** `midi_sound_init`/`midi_play_sequence` both call this SAME physical
+  address (`MOV AX,0x0; CALL 0x1000:7e1f`, confirmed via raw disasm of both) that
+  Task A3 already reconstructed in `src/sound.c` under the LOCAL name
+  `isr_disable_timer_slot` with `static` linkage (only its own 2 L5 tone-sequencer
+  retire-path callers). Reusing the ALREADY-reconstructed body (not duplicating it,
+  per "never invent") requires exposing it across TUs; renamed to Ghidra's own
+  canonical label (`get_function_by_address`/`decompile_function_by_address` confirm
+  1000:7e1f's canonical name IS `set_timer_slot_reg`, register-entry `in_AX`=channel,
+  matching the fn's own `channel` param) and un-`static`-ed + prototyped in `sound.h`.
+  Pure rename + linkage change, zero behavior difference; `sound_ctest.c` never
+  referenced the old name (grep-verified), so `validate_sound`'s pre-existing baseline
+  (PASS=4414 FAIL=0 UNPORTED=25 PORT_CHECKED=3752) is unaffected.
+- **(z) Host-harness fix: `midi_track_ptr_table`'s check_tbl comparator now compares by
+  LINEAR ADDRESS, not raw bytes.** Wiring `midi_parse_file`/`midi_init_track_table`'s
+  `check_tbl=1` gate for the first time (Task E1 left both UNPORTED, so this 128B
+  compare was never previously exercised) surfaced a REAL divergence: 2 of the
+  captured trace's 16 track slots (tracks 0 and 6) show `{off,seg}` bytes that differ
+  from this host's own recomputed split while resolving to the IDENTICAL linear address
+  (`0x8002b` / `0x88947` respectively — verified by hand). Root cause: a far
+  segment:offset pair is NOT a unique encoding of a linear address, and the engine's
+  OWN un-normalized far-pointer arithmetic (Watcom `-ml`: `snd_seq_cursor` increments
+  only the offset half; `seq_normalize_far_ptr` is the engine's explicit, occasional
+  "roll excess offset into segment" step — NOT run after every byte) can leave the
+  real offset >15 between normalize calls (e.g. a few bytes of MTrk-header validation
+  consumed right after a normalize that already reduced the accumulated offset to
+  0-15). The host's merged single-pointer `snd_seq_cursor` model (established for
+  `seq_normalize_far_ptr` itself, unaffected here — see (n) above) always yields the
+  SAME linear address as the real DS:SI pair at every point, but the host's
+  `FP_SEG`/`FP_OFF` shim (`tools/midi_ctest.c`'s `((linear)>>4)`/`(linear&0xF)`,
+  ALWAYS-fully-renormalized split) is not guaranteed to reproduce the SAME split the
+  real, less-eagerly-normalized far pointer happened to have. Fixed the COMPARATOR
+  (not the reconstructed C, which is correct) to check `(seg<<4)+off` equality per
+  track slot rather than `memcmp`; this is the engine's own actual contract for this
+  table ("a valid pointer to the track's position", not a specific bit-for-bit split)
+  — a genuine cursor-advance bug would still diverge here (a wrong byte position
+  changes the linear address, not just its split). `midi_track_time_table` (the
+  decoded delta values, unaffected by pointer-split ambiguity) is still `memcmp`'d
+  byte-exact, unchanged.
+
+Gate: `validate_midi` FAIL=0, 334 PASS (220 PORT_CHECKED) / 3 UNPORTED (all
+`midi_install_tempo_timer` — the documented tempo-ISR carve-out, (w) above) out of 337
+total records — ALL 5 of this task's PORTED targets (`midi_process_event`,
+`midi_load_sequence`, `midi_parse_file`, `midi_init_track_table`, `midi_start_playback`,
+`midi_sound_init`; `midi_play_sequence` registered but genuinely 0 records, (x) above)
+moved UNPORTED -> PASS. `validate_sound` unaffected: still PASS=4414 FAIL=0 UNPORTED=25
+PORT_CHECKED=3752 (the `set_timer_slot_reg` rename is behavior-neutral, (y) above).
+`validate_integration`: PASS (no dup symbols, all 39 spine callees resolve;
+`midi_process_event` removed from `game_stubs.c`'s `CARVEOUT_ALLOWLIST` — it's a real
+body now, not a stub).
+
+**Deferred from Phase 6 — NOW CLOSED (Task E2).** The sound-**effect** pipeline
+(dispatch + device + tone-engine + hardware drivers + ISR sequencer + the MIDI dispatch
+backends) AND the full MIDI/SMF sequencer (parser + sequencer driver + tempo timer +
+MIDI-to-OPL2 voice dispatch) are now reconstructed and validated (L1–L4 + the MIDI
+parser/driver) / documented (L5 + the tempo-ISR carve-out). The ONLY remaining MIDI-module
+gap is `midi_install_tempo_timer`'s per-PIT-tick playback loop (w above) — a documented,
+permanent carve-out in the same class as the L5 tone-sequencer, not a deferral. The
+**int8-synced end-to-end gate** remains the standing project-wide deferral (the Unicorn
+capture granularity does not match the engine's physics-frame rate; a frame-accurate
+DOSBox-path capture is needed before the full game loop can be replay-validated
+tick-for-tick — unchanged from Phases 2/3/4/5/6), alongside the separate CODES.EXE
+registration RE.
 
 ## Phase-7 module audit (front-end + in-game HUD — `src/screens.c`)
 

@@ -21,9 +21,15 @@
  *   - RENDER-CORE LEAVES — view/sprite/palette present leaves not reconstructed
  *     (init_sprite_structs, init_fullscreen_view_desc, setup_fullscreen_view,
  *     apply_level_palette, show_text_screen, show_pause_screen).
- *   - OUT-OF-SCOPE LEAVES — sound L4/L6 device drivers + player handler-table
- *     targets + the P2 indirect-call backend that the reconstructed bodies
- *     reference but that lie outside any validated slice (each cited below).
+ *   - OUT-OF-SCOPE LEAVES — the entity sweep (sweep_active_entities, reached from
+ *     play_contact_sound) + a PIT hardware counter-init leaf (pit_set_counter0 —
+ *     called from sound.c's timer_teardown_restore and the unrelated, unreconstructed
+ *     ISR-install subsystem) + player handler-table targets + the P2 indirect-call
+ *     backend that the reconstructed bodies reference but that lie outside any
+ *     validated slice (each cited below).  The sound L4/L6 device drivers + the 9
+ *     MIDI dispatch backends formerly carved out here are NOW RECONSTRUCTED in
+ *     sound.c / midi.c (audio-subsystem branch, Phases A-E) — no longer stubbed in
+ *     this file.
  *
  * Bodies are no-ops (void) or a benign default (0).  Where a return value steers
  * control flow the chosen default is noted.  These stubs make BUMPY.EXE LINK; the
@@ -81,34 +87,40 @@
  *  fns are likewise reconstructed in sound.c (T4); their stubs are not (re)defined here. */
 
 /* ── Phase-6 T3/T4 still-stubbed sound callees (faithful-signature; for the link only) ──
- *  RECONSTRUCTION FIDELITY: these are reached by the ported sound pipeline but are NOT
- *  part of the validated semantic state.  No-op body so BUMPY.EXE links.
- *    record_min_status_code (1000:945b) — records a min status code into CS:[0x946c].
- *  speaker_gate_reset (1000:9440) + FUN_1000_8a07 (1000:8a07) are NO LONGER stubbed —
- *  they are L4 hardware drivers RECONSTRUCTED in sound.c (Phase-6 T5; dup-symbol once
- *  sound.obj links).  FUN_1000_7df9 (set_timer_slot_raw) was un-stubbed in T4. */
-void record_min_status_code(u16 status)        { (void)status; }   /* 1000:945b */
+ *  record_min_status_code (1000:945b) is NO LONGER stubbed — RECONSTRUCTED in sound.c
+ *  (Task A3; stub removed to avoid a dup symbol).  speaker_gate_reset (1000:9440) +
+ *  snd_emit_raw_sample (1000:8a07) are ALSO no longer stubbed — L4 hardware drivers
+ *  RECONSTRUCTED in sound.c (Phase-6 T5).  set_timer_slot_raw (1000:7df9) was
+ *  un-stubbed in T4. */
 
 /* ── Phase-6 T4/T5 still-stubbed callees the sound bodies reach ──────────────────────
  *  RECONSTRUCTION FIDELITY: faithful-signature no-op stubs so BUMPY.EXE links.  The L4
  *  PC-speaker / MPU / OPL drivers are now RECONSTRUCTED in sound.c (T5; their stubs are
- *  removed here to avoid dup symbols).  STILL stubbed (T6 / out-of-scope): the MPU/init
- *  carve (mpu401_reset_to_uart 8a75 + FUN_8b2a), the dispatch_b/c/d backends, the timer
- *  teardown FUN_7fef, and the entity sweep FUN_6183 (reached from play_contact_sound for
- *  contact codes 0xe..0x11). */
-void mpu401_reset_to_uart(void)  {}   /* 1000:8a75 mpu401_reset_to_uart — L4 MPU reset (carve) */
-void FUN_1000_8b2a(void)         {}   /* 1000:8b2a snddrv_init_substep — snd-driver init (carve) */
-void FUN_1000_91cf(void)         {}   /* 1000:91cf snddrv_dispatch_b_mode0 — driver backend (carve) */
-void FUN_1000_8af6(void)         {}   /* 1000:8af6 snddrv_dispatch_b_mode4 — driver backend (carve) */
-void FUN_1000_8e48(void)         {}   /* 1000:8e48 snddrv_dispatch_b_mode1 — driver backend (carve) */
-void FUN_1000_91d7(void)         {}   /* 1000:91d7 snddrv_dispatch_c_mode0 — driver backend (carve) */
-void FUN_1000_8b04(void)         {}   /* 1000:8b04 snddrv_dispatch_c_mode4 — driver backend (carve) */
-void FUN_1000_8e50(void)         {}   /* 1000:8e50 snddrv_dispatch_c_mode1 — driver backend (carve) */
-void FUN_1000_91df(void)         {}   /* 1000:91df snddrv_dispatch_d backend (carve) */
-void FUN_1000_8b0d(void)         {}   /* 1000:8b0d snddrv_dispatch_d backend (carve) */
-void FUN_1000_8e58(void)         {}   /* 1000:8e58 snddrv_dispatch_d backend (carve) */
-void FUN_1000_7fef(void)         {}   /* 1000:7fef timer_teardown_restore — int8 timer teardown (carve) */
+ *  removed here to avoid dup symbols).  The 9 snddrv_dispatch_b/c/d MIDI mode{0,1,4}
+ *  backends (91cf/8af6/8e48/91d7/8b04/8e50/91df/8b0d/8e58) are NOW RECONSTRUCTED 1:1 in
+ *  sound.c too (their stubs removed here) — register-entry MIDI-track leaves, ported for
+ *  faithfulness + the link but NOT oracle-exercised (see the RECONSTRUCTION FIDELITY
+ *  note at their definitions in sound.c).  The MPU/init carve (mpu401_reset_to_uart
+ *  8a75 + snddrv_init_substep, 1000:8b2a) and the timer teardown (timer_teardown_restore,
+ *  1000:7fef) are ALSO now RECONSTRUCTED in sound.c (Task A3; stubs removed here).
+ *  STILL stubbed (out-of-scope): the entity sweep FUN_6183 (reached from
+ *  play_contact_sound for contact codes 0xe..0x11); and pit_set_counter0 (PIT hardware
+ *  init, called from timer_teardown_restore's isr_installed_flag-guarded body — also
+ *  called by the unrelated, unreconstructed uninstall_interrupt_handler/
+ *  pit_set_counter0_wrap, a separate ISR-install subsystem).  maybe_opl2_detect_chip
+ *  (8fb6) + opl2_reset_all_regs (8eeb) — carved out by Task A3 — are NOW RECONSTRUCTED
+ *  in sound.c (Task D1; their stubs removed here).  The 4 MIDI-note leaves
+ *  (seq_set_channel_param / midi_emit_voice_msg_w1 / midi_emit_voice_msg_w3 /
+ *  opl_event_note_on) — carved out by a prior task, extended by Task D1 with
+ *  midi_emit_voice_msg_w1 — are NOW RECONSTRUCTED in midi.c (Task D2; their stubs
+ *  removed here — midi.obj supplies the real bodies). */
 void FUN_1000_6183(void)         {}   /* 1000:6183 sweep_active_entities — out-of-scope entity sweep (carve) */
+void pit_set_counter0(void)       {}  /* 1000:7f9a — PIT hardware init (carve) */
+/* midi_process_event (1000:873c) — RECONSTRUCTED in midi.c (Task E2); its carve-out
+ * stub is REMOVED here (would be a duplicate symbol against midi.obj's real body).
+ * Task E1's midi_init_track_table (src/midi.c) has a genuine conditional CALL to it
+ * (when midi_read_varlen's decoded delta is exactly 0 — the real `OR BX,DX`/`JNZ`
+ * ZF test); that call site now resolves to the real reconstructed body. */
 /* apply_contact_action (1000:6a89) — RECONSTRUCTED in player.c (Phase-9 T1); the
    no-op stub is removed (it would now be a duplicate symbol against player.obj). */
 /* play_walk_anim_default (1000:4361) — RECONSTRUCTED in player.c (audit 2026-06-28); stub removed. */
