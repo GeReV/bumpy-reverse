@@ -181,4 +181,26 @@ void tone_seq_callback_9631(void);      /* 1000:9631 — sweep tone sequencer (s
 void tone_seq_callback_96c4(void);      /* 1000:96c4 — noise/PRNG tone sequencer (sched_b)*/
 void tone_seq_callback_95b5(void);      /* 1000:95b5 — noise/PRNG tone sequencer (sched_c)*/
 
+/* ── PORTED — the 9 snddrv_dispatch_b/c/d MIDI mode{0,1,4} backends ──────────────────
+ *  Reconstructed 1:1 from the raw disassembly (their caller, midi_process_event, is
+ *  register-entry and NOT reconstructed — separate, not-yet-started MIDI-engine work).
+ *  Register-entry (see the RECONSTRUCTION FIDELITY note at their definitions in
+ *  sound.c): NOT oracle-exercised / NOT runtime-gated, the same documented-exclusion
+ *  precedent as opl_play_note (905d) / FUN_8e2f (8e2f) and the L5 ISR sequencer above. */
+void FUN_1000_91cf(void);   /* 1000:91cf — dispatch_b_mode0: MIDI 0xF7 skip           */
+void FUN_1000_8e48(void);   /* 1000:8e48 — dispatch_b_mode1: MIDI 0xF7 skip           */
+void FUN_1000_91d7(void);   /* 1000:91d7 — dispatch_c_mode0: MIDI 0xF0 skip           */
+void FUN_1000_8e50(void);   /* 1000:8e50 — dispatch_c_mode1: MIDI 0xF0 skip           */
+void FUN_1000_8af6(void);   /* 1000:8af6 — dispatch_b_mode4: MIDI 0xF7 busy-wait      */
+void FUN_1000_8b04(void);   /* 1000:8b04 — dispatch_c_mode4: MIDI 0xF0 busy-wait      */
+void FUN_1000_8b0d(void);   /* 1000:8b0d — dispatch_d_mode4: channel-msg busy-wait    */
+void FUN_1000_91df(void);   /* 1000:91df — dispatch_d_mode0: channel-msg (PC-speaker) */
+void FUN_1000_8e58(void);   /* 1000:8e58 — dispatch_d_mode1: channel-msg (OPL)        */
+
+/* Register-entry standins for the 9 backends above (the ambient AL/DS:SI/CS:[BX+0x80]
+ *  midi_process_event would supply — see the RECONSTRUCTION FIDELITY note in sound.c). */
+extern u8  snd_seq_event_al;       /* engine AL    — the MIDI event status/data byte  */
+extern u8 *snd_seq_cursor;         /* engine DS:SI — the live MIDI-track read cursor  */
+extern u8  snd_seq_default_chan;   /* engine CS:[BX+0x80] — per-track default channel */
+
 #endif /* SOUND_H */

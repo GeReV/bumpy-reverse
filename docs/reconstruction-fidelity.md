@@ -279,6 +279,7 @@ L5 is reconstructed 1:1 as **documentation** (NOT runtime-gated — see below).
 | **L3 timer-table mgmt** (T4): `set_timer_slot(_raw)` (7de8/7df9), `arm_timer_callback` (7f2b), `disable_timer_callback` (7f65), `get_timer_slot_field` (7e3d), `timer_restore` (7fde) | Transcription | Two tables: the 0x5516 cb table (`arm`/`disable`, 8-byte slot `{current@0, reload@2, cb_off@4, cb_seg@6}`) and the 0x549c slot table (`set`/`get`, `{value@0, 0@2, cb_seg@4, cb_off@6}` at `(channel+2)*8`). Slot-store register semantics recovered from the asm. Semantic-state + TABLE-diff validated. |
 | **L4 hardware backends** (T5): `pc_speaker_silence` (9115), `speaker_gate_reset/strobe` (9440/9451), `record_status_and_strobe_speaker` (946e), `opl_write_reg` (9007), `opl_play_note` (905d), `FUN_89e2` (89e2, MPU byte-out), `FUN_8a07` (8a07, MPU sample), `FUN_8ad0` (8ad0, MPU settle), `FUN_8e2f` (8e2f, OPL all-off) | Transcription | The engine's real port-I/O drivers (PC-speaker/PIT 0x61, MPU-401 0x330/0x331, OPL2 0x388/0x389). Validated by the **port-write-sequence** differential: capture the engine's `OUT(port,val,size)` under Unicorn, replay the recorded IN sequence into the host `in()` shim, run the reconstructed driver, diff its OUT capture vs the engine's — a perturbation-proven real gate (corrupting any emitted OUT FAILs). |
 | **L5 ISR tone-sequencer** (T6): `pit_timer_isr_multiplexer` (7c02), `tone_seq_callback_9631` (9631), `tone_seq_callback_96c4` (96c4), `tone_seq_callback_95b5` (95b5) | **Behavior-faithful (NOT runtime-gated)** | The PIT (IRQ0/int-8) multiplexer walks the 0x5516 cb table each tick (`current += reload`; on the 500-tick period far-call the slot's installed callback) and the three tone-sequencer callbacks advance the L3 param frame + reprogram PIT ch2 (0x42/0x43) / strobe the speaker gate (0x61) to sweep the tone. Reached ONLY via the installed far pointer — NO Ghidra function boundary, NOT hooked by the oracle, so the trace has ZERO records and there is no host differential. Transcribed verbatim from the raw disasm as documentation; the **self-modifying graphics-overlay blitter precedent** (`sprite_blit`/`bg_render`): faithful to what the binary does, validated by inspection vs the asm, not by a runtime gate. |
+| **MIDI dispatch backends** (T7 closeout): `snddrv_dispatch_b_mode0/1/4` (91cf/8e48/8af6), `snddrv_dispatch_c_mode0/1/4` (91d7/8e50/8b04), `snddrv_dispatch_d_mode0/1/4` (91df/8b0d/8e58) | **Behavior-faithful (NOT oracle-exercised)** | The last 9 stub gaps `snddrv_dispatch_b/c/d` (already-ported) fan out to. Verified via the RAW disassembly (the Ghidra decompiler's simplified view hides the real body for 6 of the 9 — e.g. `snddrv_dispatch_b_mode0` decompiles to a bare `return in_AX` even though the asm does `LODSB;ADD SI,AX`, because the decompiler doesn't track SI as an output): all 9 read/advance the caller's ambient DS:SI (a live MIDI-track byte cursor), AL (the MIDI event status byte), and/or CS:[BX+0x80] (a per-track default-channel byte) as raw REGISTERS, not stack args. Confirmed via Ghidra xrefs: their ONLY real caller is `midi_process_event` (8751/8756/875b), itself register-entry (`unaff_SI`) and genuinely unreconstructed — separate, not-yet-started MIDI-engine work (this task closes the sound-**effect** pipeline's last gaps "before the MIDI engine work begins," per the task brief). Reconstructed 1:1 from the raw asm; register-entry inputs modelled as file-scope globals (`snd_seq_event_al`/`snd_seq_cursor`/`snd_seq_default_chan`, the `snd_mpu_byte_89e2` convention) since the true caller supplying them is out of scope and the EXISTING `snddrv_dispatch_b/c/d` call sites (unchanged by this task) pass no args. `snd_seq_cursor` defaults to a zero-filled scratch buffer (not real captured MIDI data — none exists) purely so the incidental invocation from the already-validated `snddrv_dispatch_b/c/d` mode0 replay (which DOES happen — `t4_l2_dispatch` seeds mode 0) is memory-safe; never inspected/asserted by any comparator. 3 further NEW carve-out leaves discovered and stubbed (`seq_set_channel_param` 922c, `midi_emit_voice_msg_w3` 8e93, `opl_event_note_on` 8ea3 — already canonically named, none reconstructed, same class as `FUN_1000_6183`/`FUN_1000_7fef`). |
 
 **Phase-6 deviations (all accurate; stated plainly; in-code RECONSTRUCTION FIDELITY notes present):**
 
@@ -320,6 +321,27 @@ L5 is reconstructed 1:1 as **documentation** (NOT runtime-gated — see below).
   param would perturb the 21-case switch's verbatim call sites). The `record_min_status_code`
   arg is given the available value (`param_1`) in lieu of reconstructing the host-absent
   packed-FLAGS register — observationally identical (the callee is a no-op stub).
+- **(h) MIDI dispatch backends: register-entry, not oracle-exercised (closeout task).**
+  The 9 `snddrv_dispatch_b/c/d` mode{0,1,4} backends (91cf/8af6/8e48/91d7/8b04/8e50/91df/
+  8b0d/8e58) are register-entry MIDI-track leaves whose ONLY real caller,
+  `midi_process_event`, is itself register-entry and genuinely unreconstructed (separate,
+  not-yet-started MIDI-engine work — see the fidelity-table row above for the full
+  reasoning). The combined task brief that closed these out (plan tasks A1+A2) called for
+  extending `tools/sound_oracle.py` to hook and exercise them, but its own COMBINED
+  DELIVERABLE also held the trace's total `UNPORTED` count fixed at the pre-task baseline
+  (25). Hooking/exercising them (or the 4 further out-of-scope leaves `snddrv_init_substep`
+  / `mpu401_reset_to_uart` / `timer_teardown_restore` / `record_min_status_code` the
+  original A1 steps also named) would have added new UNPORTED records for functions this
+  task does not reconstruct — already-existing scenarios (`device_init`,
+  `t4_l3_timer_table`) unconditionally reach 3 of those 4 today — which would raise
+  UNPORTED past the fixed baseline. Rather than force a scenario that either produces a
+  false-positive validation (the SND_SNAP captures none of SI/AL/BX) or breaks the
+  numeric gate, `tools/sound_oracle.py` / `tools/sound_ctest.c`'s `PORTED[]` were left
+  UNCHANGED (no new hooks, no new scenarios) — the brief's own escape hatch ("if the
+  backends genuinely cannot be exercised by the oracle... report as a documented
+  not-exercised UNPORTED... and proceed"), applied to all 9. The gate is unaffected
+  (`UNPORTED` stays exactly 25); the 9 are linked and reconstructed 1:1 but never invoked
+  by any `PORTED[]` wrapper.
 
 **Phase-6 validation method:** per-function differential with two comparators (the L1–L3
 **semantic-state** gate: seed entry SND_SNAP → call the reconstructed C fn → assert the
@@ -336,7 +358,8 @@ trace records). The L5 sequencer is reconstructed as documentation (no gate).
 
 ## Phase-6 status (sound subsystem)
 
-As of Phase-6 Task 6, the complete sound subsystem is **reconstructed**:
+As of Phase-6 Task 6, the effect-engine sound subsystem was reconstructed; a further
+closeout task (below) ported the last 9 stub gaps `snddrv_dispatch_b/c/d` called:
 
 - **Reconstructed 1:1** (live Ghidra decomp + raw disasm, verified via MCP): L1 dispatch
   (`play_sound` 6e11, `play_sound_effect` 6e30 + the 6 event wrappers), L2 device state
@@ -359,9 +382,23 @@ As of Phase-6 Task 6, the complete sound subsystem is **reconstructed**:
   links clean (216K, Open Watcom 16-bit DOS, `sound.obj` in the link set, no duplicate
   symbols).
 
-**Deferred from Phase 6:** none specific to sound — the complete subsystem
-(dispatch + device + tone-engine + hardware drivers + ISR sequencer) is reconstructed and
-validated (L1–L4) / documented (L5). The **int8-synced end-to-end gate** remains the standing
+**Closeout (MIDI dispatch backends, see the fidelity-table row + deviation (h) above):**
+the 9 `snddrv_dispatch_b/c/d` mode{0,1,4} backends (91cf/8af6/8e48/91d7/8b04/8e50/91df/
+8b0d/8e58) — the LAST stub gaps `snddrv_dispatch_b/c/d` referenced — are now reconstructed
+1:1 as register-entry MIDI-track leaves (behavior-faithful, NOT oracle-exercised; their
+real caller `midi_process_event` is unreconstructed, separate MIDI-engine work). Gate
+unchanged: `validate_sound` still FAIL=0 PORT_CHECKED=3752 UNPORTED=25 (the 9 add zero
+new records — no oracle/`PORTED[]` changes). 3 further out-of-scope carve-out leaves
+(`seq_set_channel_param` 922c, `midi_emit_voice_msg_w3` 8e93, `opl_event_note_on` 8ea3)
+discovered and stubbed alongside them.
+
+**Deferred from Phase 6:** the sound-**effect** pipeline (dispatch + device + tone-engine +
+hardware drivers + ISR sequencer + the now-closed-out MIDI dispatch backends) is
+reconstructed and validated (L1–L4) / documented (L5 + the MIDI backends). Genuinely
+deferred: the **MIDI engine** itself — `midi_process_event`/`midi_play_sequence`/
+`midi_sound_init` and the note-handling leaves the MIDI dispatch backends reach
+(`seq_set_channel_param`/`midi_emit_voice_msg_w2`/`w3`/`opl_event_note_on`) — separate,
+not-yet-started future work. The **int8-synced end-to-end gate** remains the standing
 project-wide deferral (the Unicorn capture granularity does not match the engine's
 physics-frame rate; a frame-accurate DOSBox-path capture is needed before the full game
 loop can be replay-validated tick-for-tick — unchanged from Phases 2/3/4/5). (At the time of

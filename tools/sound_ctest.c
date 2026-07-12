@@ -421,22 +421,23 @@ void record_min_status_code(u16 status)        { (void)status; }   /* 1000:945b 
 /* T4/T5 still-stubbed L5 + out-of-scope callees src/sound.c references (host no-ops).
  *  The L4 PC-speaker / MPU / OPL drivers (pc_speaker_silence / speaker_gate_* /
  *  FUN_8a07 / FUN_8ad0 / FUN_8e2f / FUN_89e2 / opl_write_reg / opl_play_note) are NOW
- *  PORTED in src/sound.c (T5) — no host stub here (they come from the included TU).  Still
- *  stubbed: the MPU/init carve (mpu401_reset_to_uart / FUN_8b2a), the dispatch_b/c/d
- *  backends, the timer teardown, the entity sweep.  p1_try_trigger_pending_action
+ *  PORTED in src/sound.c (T5) — no host stub here (they come from the included TU).  The
+ *  9 snddrv_dispatch_b/c/d MIDI mode{0,1,4} backends are ALSO now PORTED in src/sound.c
+ *  (this task) — likewise no host stub for THEM.  They are register-entry / NOT
+ *  oracle-exercised (see the RECONSTRUCTION FIDELITY note at their definitions in
+ *  sound.c), so no PORTED[] wrapper below calls them either — they are simply LINKED,
+ *  never invoked by this harness.  Still stubbed here: the MPU/init carve
+ *  (mpu401_reset_to_uart / FUN_8b2a), the timer teardown, the entity sweep, and the 3
+ *  out-of-scope MIDI-note leaves the 9 backends reach (seq_set_channel_param /
+ *  midi_emit_voice_msg_w3 / opl_event_note_on — same carve-out class, host no-ops so the
+ *  9 backends' bodies link on the host build too).  p1_try_trigger_pending_action
  *  (1000:654e) is a player.c fn play_state_sound calls — host no-op (mutates only player
  *  anim-channel state, outside the sound SNAP). */
 void mpu401_reset_to_uart(void)  {}
 void FUN_1000_8b2a(void)         {}
-void FUN_1000_91cf(void)         {}
-void FUN_1000_8af6(void)         {}
-void FUN_1000_8e48(void)         {}
-void FUN_1000_91d7(void)         {}
-void FUN_1000_8b04(void)         {}
-void FUN_1000_8e50(void)         {}
-void FUN_1000_91df(void)         {}
-void FUN_1000_8b0d(void)         {}
-void FUN_1000_8e58(void)         {}
+void seq_set_channel_param(void)  {}
+void midi_emit_voice_msg_w3(void) {}
+void opl_event_note_on(void)      {}
 void FUN_1000_7fef(void)         {}
 void FUN_1000_6183(void)         {}
 void p1_try_trigger_pending_action(void) {}   /* 1000:654e — player.c (host no-op) */

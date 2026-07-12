@@ -92,21 +92,22 @@ void record_min_status_code(u16 status)        { (void)status; }   /* 1000:945b 
 /* ── Phase-6 T4/T5 still-stubbed callees the sound bodies reach ──────────────────────
  *  RECONSTRUCTION FIDELITY: faithful-signature no-op stubs so BUMPY.EXE links.  The L4
  *  PC-speaker / MPU / OPL drivers are now RECONSTRUCTED in sound.c (T5; their stubs are
- *  removed here to avoid dup symbols).  STILL stubbed (T6 / out-of-scope): the MPU/init
- *  carve (mpu401_reset_to_uart 8a75 + FUN_8b2a), the dispatch_b/c/d backends, the timer
- *  teardown FUN_7fef, and the entity sweep FUN_6183 (reached from play_contact_sound for
- *  contact codes 0xe..0x11). */
+ *  removed here to avoid dup symbols).  The 9 snddrv_dispatch_b/c/d MIDI mode{0,1,4}
+ *  backends (91cf/8af6/8e48/91d7/8b04/8e50/91df/8b0d/8e58) are NOW RECONSTRUCTED 1:1 in
+ *  sound.c too (their stubs removed here) — register-entry MIDI-track leaves, ported for
+ *  faithfulness + the link but NOT oracle-exercised (see the RECONSTRUCTION FIDELITY
+ *  note at their definitions in sound.c).  STILL stubbed (out-of-scope): the MPU/init
+ *  carve (mpu401_reset_to_uart 8a75 + FUN_8b2a), the timer teardown FUN_7fef, the entity
+ *  sweep FUN_6183 (reached from play_contact_sound for contact codes 0xe..0x11), and the
+ *  3 out-of-scope MIDI-note leaves the 9 backends above reach (seq_set_channel_param /
+ *  midi_emit_voice_msg_w3 / opl_event_note_on — a NEW carve-out boundary this task
+ *  discovered; all 3 already carry canonical Ghidra names, none reconstructed here —
+ *  separate, not-yet-started MIDI-engine work). */
 void mpu401_reset_to_uart(void)  {}   /* 1000:8a75 mpu401_reset_to_uart — L4 MPU reset (carve) */
 void FUN_1000_8b2a(void)         {}   /* 1000:8b2a snddrv_init_substep — snd-driver init (carve) */
-void FUN_1000_91cf(void)         {}   /* 1000:91cf snddrv_dispatch_b_mode0 — driver backend (carve) */
-void FUN_1000_8af6(void)         {}   /* 1000:8af6 snddrv_dispatch_b_mode4 — driver backend (carve) */
-void FUN_1000_8e48(void)         {}   /* 1000:8e48 snddrv_dispatch_b_mode1 — driver backend (carve) */
-void FUN_1000_91d7(void)         {}   /* 1000:91d7 snddrv_dispatch_c_mode0 — driver backend (carve) */
-void FUN_1000_8b04(void)         {}   /* 1000:8b04 snddrv_dispatch_c_mode4 — driver backend (carve) */
-void FUN_1000_8e50(void)         {}   /* 1000:8e50 snddrv_dispatch_c_mode1 — driver backend (carve) */
-void FUN_1000_91df(void)         {}   /* 1000:91df snddrv_dispatch_d backend (carve) */
-void FUN_1000_8b0d(void)         {}   /* 1000:8b0d snddrv_dispatch_d backend (carve) */
-void FUN_1000_8e58(void)         {}   /* 1000:8e58 snddrv_dispatch_d backend (carve) */
+void seq_set_channel_param(void)  {}  /* 1000:922c — OPL/PC-spk program-change (carve) */
+void midi_emit_voice_msg_w3(void) {}  /* 1000:8e93 — OPL program-change fwd chain (carve) */
+void opl_event_note_on(void)      {}  /* 1000:8ea3 — OPL note-on -> opl_play_note (carve) */
 void FUN_1000_7fef(void)         {}   /* 1000:7fef timer_teardown_restore — int8 timer teardown (carve) */
 void FUN_1000_6183(void)         {}   /* 1000:6183 sweep_active_entities — out-of-scope entity sweep (carve) */
 /* apply_contact_action (1000:6a89) — RECONSTRUCTED in player.c (Phase-9 T1); the

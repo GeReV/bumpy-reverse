@@ -497,17 +497,265 @@ u16 schedule_timer_callback_c(u16 param_1, u16 param_2)
  *  below (Phase-6 T5 L4 hardware backends), declared in sound.h. */
 extern void mpu401_reset_to_uart(void);   /* 1000:8a75   L4 MPU reset (carve → T6) */
 extern void FUN_1000_8b2a(void);          /* 1000:8b2a   snddrv_init substep (carve → T6) */
-extern void FUN_1000_91cf(void);          /* 1000:91cf   dispatch_b mode-0 backend → T6 */
-extern void FUN_1000_8af6(void);          /* 1000:8af6   dispatch_b mode-4 backend → T6 */
-extern void FUN_1000_8e48(void);          /* 1000:8e48   dispatch_b mode-1 backend → T6 */
-extern void FUN_1000_91d7(void);          /* 1000:91d7   dispatch_c mode-0 backend → T6 */
-extern void FUN_1000_8b04(void);          /* 1000:8b04   dispatch_c mode-4 backend → T6 */
-extern void FUN_1000_8e50(void);          /* 1000:8e50   dispatch_c mode-1 backend → T6 */
-extern void FUN_1000_91df(void);          /* 1000:91df   dispatch_d mode-0 backend → T6 */
-extern void FUN_1000_8b0d(void);          /* 1000:8b0d   dispatch_d mode-4 backend → T6 */
-extern void FUN_1000_8e58(void);          /* 1000:8e58   dispatch_d mode-1 backend → T6 */
+
+/* out-of-scope MIDI-note carve-outs the 9 MIDI dispatch backends (below) reach — a
+ *  NEW carve-out boundary this task discovered (see the "MIDI dispatch backends"
+ *  section).  All three already carry canonical Ghidra names from a prior naming pass;
+ *  none is reconstructed here (genuinely out of scope — separate future MIDI-engine
+ *  work), matching the FUN_1000_6183 / FUN_1000_7fef precedent below. */
+extern void seq_set_channel_param(void);     /* 1000:922c — OPL/PC-spk program-change (carve) */
+extern void midi_emit_voice_msg_w3(void);    /* 1000:8e93 — OPL program-change fwd chain (carve) */
+extern void opl_event_note_on(void);         /* 1000:8ea3 — OPL note-on -> opl_play_note (carve) */
+
 extern void FUN_1000_7fef(void);          /* 1000:7fef   timer teardown/restore → T5/T6 */
 extern void FUN_1000_6183(void);          /* 1000:6183   out-of-scope entity sweep (→ entity) */
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  MIDI dispatch backends — snddrv_dispatch_b/c/d's 9 mode{0,1,4} backends.
+ *
+ *  snddrv_dispatch_b/c/d (85db/8600/8626, already PORTED above) fan out by snddrv_mode
+ *  to these 9 leaves.  Their ONLY real caller is `midi_process_event` (1000:8751 calls
+ *  dispatch_b, 8756 dispatch_c, 875b dispatch_d — confirmed via Ghidra xrefs), a MIDI
+ *  track-event parser that is ITSELF register-entry (`unaff_SI`) and NOT reconstructed
+ *  anywhere in this codebase — it is separate, not-yet-started MIDI-engine work (this
+ *  task closes out the sound-EFFECT pipeline's last stub gaps, "before the MIDI engine
+ *  work begins" per the task brief). Verified via the raw disassembly (not just the
+ *  decompiler's simplified "return in_AX" view, which hides the real SI/BX-relative
+ *  reads): all 9 read/advance the caller's DS:SI (the live MIDI-track byte cursor) and/or
+ *  AL (the MIDI event status byte) and/or CS:[BX+0x80] (a per-track default-channel
+ *  byte) directly as REGISTERS — no stack args, matching the existing snd_busy_delay
+ *  register-entry precedent (src/sound.c, "RECONSTRUCTION FIDELITY: register-args asm
+ *  routine").
+ *
+ *  ── RECONSTRUCTION FIDELITY (register-entry; applies to all 9 below) ──────────────
+ *  Modelled with the SAME convention as snd_mpu_byte_89e2 (the other ambient-register
+ *  standin already in this file): file-scope globals stand in for the registers a
+ *  reconstructed CALLER would otherwise supply as arguments, because the true caller
+ *  (midi_process_event) is unreconstructed and dispatch_b/c/d's own EXISTING,
+ *  already-committed call sites (`FUN_1000_9xxx();`, no args) are unchanged by this
+ *  task (per the brief). `snd_seq_cursor` models DS:SI (read-and-advanced in place by
+ *  LODSB, exactly as the asm does); `snd_seq_event_al` models AL; `snd_seq_default_chan`
+ *  models the resolved CS:[BX+0x80] byte (BX itself, an ambient per-track table
+ *  pointer, is never modelled as a real pointer — nothing in this codebase defines
+ *  what it points at, matching the "genuinely out of scope" MIDI-engine boundary).
+ *
+ *  ── NOT ORACLE-EXERCISED (documented, same precedent as opl_play_note/FUN_8e2f) ────
+ *  None of the 9 is hooked in tools/sound_oracle.py (no FN_NAMES/L4_FNS entries) and
+ *  none has a tools/sound_ctest.c PORTED[] entry. Reason: the oracle's call_near()
+ *  harness seeds DGROUP/CODE memory + explicit stack args, not CPU registers, and the
+ *  SND_SNAP captures neither SI/AL/BX nor the MIDI byte stream they read — so a
+ *  differential here could not observe a real captured ground truth for what these fns
+ *  actually do; it would either be gate-trivial (mode0/mode1: no OUT, no SND_SNAP field
+ *  touched, PASS either way) or would exercise genuinely uncontrolled/ambient register
+ *  content (mode4's snd_busy_delay count, or the two complex note handlers) with no way
+ *  to tell a correct port from an incorrect one. Forcing a scenario through them would
+ *  also newly reach the 3 out-of-scope carve-outs above and the always-carve-out
+ *  mpu401_reset_to_uart/FUN_1000_8b2a/FUN_1000_7fef (all still no-op stubs), which would
+ *  raise the trace's UNPORTED count above the 25 baseline the combined-task gate holds
+ *  fixed — a documented, deliberate scope decision (see docs/reconstruction-fidelity.md
+ *  + the task report), invoking the brief's own escape hatch ("if the backends
+ *  genuinely cannot be exercised by the oracle... report as a documented not-exercised
+ *  UNPORTED... and proceed"). All 9 are ported 1:1 here for faithfulness + the
+ *  BUMPY.EXE link, exactly like the L5 ISR tone-sequencer (pit_timer_isr_multiplexer /
+ *  tone_seq_callback_*) already in this file.
+ * ════════════════════════════════════════════════════════════════════════════ */
+u8  snd_seq_event_al;         /* engine AL   — the MIDI event status/data byte  */
+u8  snd_seq_default_chan;     /* engine CS:[BX+0x80] — per-track default channel */
+
+/* snd_seq_cursor's default backing: dispatch_b/c/d (already-ported, already-validated)
+ *  unconditionally reach one of the 9 backends below via their mode0 branch whenever
+ *  snddrv_mode==0 — which DOES happen on the validated semantic-state replay path (the
+ *  t4_l2_dispatch scenario seeds mode 0), so these register-entry leaves ARE incidentally
+ *  invoked even though nothing asserts their outcome. A NULL/uninitialised snd_seq_cursor
+ *  would fault on the very first LODSB. There is no captured real MIDI stream to point it
+ *  at (out of scope; not fabricated), so it defaults to a zero-filled scratch buffer —
+ *  memory-safe, never inspected/asserted by any comparator, NOT a stand-in for real
+ *  track data. */
+static u8 snd_seq_scratch_stream[4096];
+u8 *snd_seq_cursor = snd_seq_scratch_stream;   /* engine DS:SI — the live MIDI-track cursor */
+
+/* ── FUN_1000_91cf (1000:91cf) — snddrv_dispatch_b_mode0: MIDI 0xF7 skip (device mode 0) ──
+ *  0xF7 (SysEx continuation) handler for driver mode 0 (PC-speaker/silent): read a
+ *  length byte from the MIDI stream and skip that many bytes; the event is not
+ *  otherwise acted on. asm 1000:91cf verbatim: LODSB (len=*SI,SI++); XOR AH,AH;
+ *  ADD SI,AX. Register-entry (DS:SI) — see the MIDI-dispatch-backends note above. */
+void FUN_1000_91cf(void)
+{
+    u8 len = *snd_seq_cursor;
+    snd_seq_cursor++;
+    snd_seq_cursor += len;
+}
+
+/* ── FUN_1000_8e48 (1000:8e48) — snddrv_dispatch_b_mode1: MIDI 0xF7 skip (device mode 1) ──
+ *  Identical body to _mode0 (91cf) — the 0xF7 skip is device-independent for modes 0/1.
+ *  asm 1000:8e48 verbatim (byte-identical to 91cf). Kept as its OWN function (not
+ *  merged/shared) per the "no collapsing near-duplicate mode backends" rule. */
+void FUN_1000_8e48(void)
+{
+    u8 len = *snd_seq_cursor;
+    snd_seq_cursor++;
+    snd_seq_cursor += len;
+}
+
+/* ── FUN_1000_91d7 (1000:91d7) — snddrv_dispatch_c_mode0: MIDI 0xF0 skip (device mode 0) ──
+ *  0xF0 (SysEx) handler for driver mode 0: same length-prefixed skip as dispatch_b's
+ *  mode0/1 (91cf/8e48) — asm 1000:91d7 verbatim (byte-identical body, different event
+ *  class / call site). Kept as its own function per the no-collapsing rule. */
+void FUN_1000_91d7(void)
+{
+    u8 len = *snd_seq_cursor;
+    snd_seq_cursor++;
+    snd_seq_cursor += len;
+}
+
+/* ── FUN_1000_8e50 (1000:8e50) — snddrv_dispatch_c_mode1: MIDI 0xF0 skip (device mode 1) ──
+ *  Same length-prefixed skip, dispatch_c's mode-1 variant. asm 1000:8e50 verbatim. */
+void FUN_1000_8e50(void)
+{
+    u8 len = *snd_seq_cursor;
+    snd_seq_cursor++;
+    snd_seq_cursor += len;
+}
+
+/* ── FUN_1000_8af6 (1000:8af6) — snddrv_dispatch_b_mode4: MIDI 0xF7 busy-wait (mode 4) ──
+ *  OPL/mode-4 handling of the 0xF7 event: reads TWO stream bytes (len, then a second
+ *  byte that is read but never used) and busy-waits snd_busy_delay(len-1). asm 1000:8af6
+ *  verbatim: LODSB (CL=len); LODSB (discard); DEC CL; CALL 0x872e. The real CX's high
+ *  byte (CH) is whatever the (unreconstructed) MIDI player's own CX held at the time —
+ *  not modelled (never exercised; see the note above) — treated as 0. */
+void FUN_1000_8af6(void)
+{
+    u8 len;
+
+    len = *snd_seq_cursor;
+    snd_seq_cursor++;
+    (void)*snd_seq_cursor;         /* LODSB — consumed, value unused */
+    snd_seq_cursor++;
+    snd_busy_delay((u16)(u8)(len - 1));
+}
+
+/* ── FUN_1000_8b04 (1000:8b04) — snddrv_dispatch_c_mode4: MIDI 0xF0 busy-wait (mode 4) ──
+ *  OPL/mode-4 handling of the 0xF0 event: reads ONE stream byte (a direct byte read +
+ *  manual SI++, NOT LODSB) and busy-waits snd_busy_delay(len) — no decrement, unlike
+ *  the _b_mode4 sibling. asm 1000:8b04 verbatim: MOV CL,[SI]; INC SI; CALL 0x872e. */
+void FUN_1000_8b04(void)
+{
+    u8 len = *snd_seq_cursor;
+    snd_seq_cursor++;
+    snd_busy_delay((u16)len);
+}
+
+/* ── FUN_1000_8b0d (1000:8b0d) — snddrv_dispatch_d_mode4: MIDI channel-msg busy-wait (mode 4) ──
+ *  OPL/mode-4 handling of a channel voice message (dispatch_d's event class, status
+ *  nibble >= 0x80): default the channel nibble from the per-track byte (CS:[BX+0x80])
+ *  when the low nibble is 0, busy_delay(2), or busy_delay(1) if the event's upper
+ *  nibble is 0xC0 (program change). No MIDI-stream (SI) read at all — only AL/BX.
+ *  asm 1000:8b0d verbatim: TEST AL,0xf; JNZ +; OR AL,[BX+0x80]; MOV CX,2; MOV AH,AL;
+ *  AND AH,0xf0; CMP AH,0xc0; JNZ +; DEC CX; CALL 0x872e. */
+void FUN_1000_8b0d(void)
+{
+    u8  al = snd_seq_event_al;
+    u16 cx = 2;
+
+    if ((al & 0xf) == 0) {
+        al = (u8)(al | snd_seq_default_chan);
+    }
+    if ((u8)(al & 0xf0) == 0xc0) {
+        cx = 1;
+    }
+    snd_busy_delay(cx);
+}
+
+/* ── FUN_1000_91df (1000:91df) — snddrv_dispatch_d_mode0: MIDI channel-msg (PC-spk mode 0) ──
+ *  Channel voice message handler for driver mode 0 (PC-speaker/silent device). 0xC0
+ *  (program change, tested on the ORIGINAL undefaulted AL) tail-calls the out-of-scope
+ *  seq_set_channel_param (1000:922c). Otherwise default the channel nibble from
+ *  CS:[BX+0x80] when 0, then index snd_voice_table[channel] (CODE 0x83cc — the SAME
+ *  table pc_speaker_silence zeroes): on 0x90 (note-on; 2 stream bytes: note, velocity)
+ *  store the note (or 0 if velocity==0); on 0x80 (note-off; 2 stream bytes, both
+ *  discarded) store 0; any other status: skip 2 stream bytes, no write. asm 1000:91df
+ *  verbatim. RECONSTRUCTION FIDELITY: channel is a 4-bit nibble (0..15) but
+ *  snd_voice_table is 15 bytes (SND_VOICE_TABLE_LEN, matching pc_speaker_silence's
+ *  clear-loop count) — channel==15 is a genuine 1-byte-OOB index in the ORIGINAL image
+ *  too (writes an unlabeled CODE-segment byte at 0x83cc+15, not any named table); not
+ *  bounds-checked here (that would invent a safety net the binary doesn't have) — moot
+ *  in practice since this leaf is never invoked (not oracle-exercised; see above). */
+void FUN_1000_91df(void)
+{
+    u8 al = snd_seq_event_al;
+    u8 chan;
+    u8 note;
+    u8 velocity;
+
+    if ((u8)(al & 0xf0) == 0xc0) {
+        seq_set_channel_param();
+        return;
+    }
+    if ((al & 0xf) == 0) {
+        al = (u8)(al | snd_seq_default_chan);
+    }
+    chan = (u8)(al & 0xf);
+    al = (u8)(al & 0xf0);
+    if (al == 0x90) {
+        note = *snd_seq_cursor; snd_seq_cursor++;         /* LODSB — note number */
+        velocity = *snd_seq_cursor; snd_seq_cursor++;     /* LODSB — velocity    */
+        snd_voice_table[chan] = (velocity == 0) ? 0 : note;
+    } else if (al == 0x80) {
+        (void)*snd_seq_cursor; snd_seq_cursor++;          /* LODSB — note (unused)     */
+        (void)*snd_seq_cursor; snd_seq_cursor++;          /* LODSB — velocity (unused) */
+        snd_voice_table[chan] = 0;
+    } else {
+        (void)*snd_seq_cursor; snd_seq_cursor++;          /* LODSB — skip 2 stream bytes */
+        (void)*snd_seq_cursor; snd_seq_cursor++;
+    }
+}
+
+/* ── FUN_1000_8e58 (1000:8e58) — snddrv_dispatch_d_mode1: MIDI channel-msg (OPL mode 1) ──
+ *  Channel voice message handler for driver mode 1 (OPL/AdLib): default the channel
+ *  nibble from CS:[BX+0x80] when 0. If channel > 8 (only 9 OPL voices, 0..8) OR the
+ *  status nibble is none of 0xC0/0x90/0x80, skip the event's data bytes without acting
+ *  (1 byte for a 0xC0-shaped status, else 2) — asm 1000:8e58's 8e83 tail is the SAME
+ *  code for both the channel>8 skip AND the unrecognized-status fallthrough. Else
+ *  dispatch: 0xC0 (program change) -> the out-of-scope midi_emit_voice_msg_w3
+ *  (1000:8e93); 0x90 (note-on) -> the out-of-scope opl_event_note_on (1000:8ea3, which
+ *  itself calls the ALREADY-PORTED opl_play_note); 0x80 (note-off) -> read the CODE
+ *  0x80cc shadow byte for register (0xb0+channel), clear its key-on bit (AND 0xdf), and
+ *  call the ALREADY-PORTED opl_write_reg directly, then discard 2 stream bytes
+ *  (note+velocity). asm 1000:8e58 verbatim. */
+void FUN_1000_8e58(void)
+{
+    u8 al = snd_seq_event_al;
+    u8 chan;
+    u8 status;
+
+    if ((al & 0xf) == 0) {
+        al = (u8)(al | snd_seq_default_chan);
+    }
+    chan = (u8)(al & 0xf);
+    status = (u8)(al & 0xf0);
+    if (chan <= 8) {
+        if (status == 0xc0) {
+            midi_emit_voice_msg_w3();
+            return;
+        } else if (status == 0x90) {
+            opl_event_note_on();
+            return;
+        } else if (status == 0x80) {
+            u8 reg = (u8)(0xb0 + chan);
+            u8 shadow = (u8)(opl_reg_shadow_80cc[reg] & 0xdf);
+            opl_write_reg(reg, shadow);
+            (void)*snd_seq_cursor; snd_seq_cursor++;      /* LODSB — note (unused)     */
+            (void)*snd_seq_cursor; snd_seq_cursor++;      /* LODSB — velocity (unused) */
+            return;
+        }
+    }
+    /* channel > 8, OR an unrecognized status nibble: skip the event's data bytes
+     *  without acting — 1 byte for a program-change-shaped status, else 2. */
+    snd_seq_cursor++;
+    if (status != 0xc0) {
+        snd_seq_cursor++;
+    }
+}
 
 /* ════════════════════════════════════════════════════════════════════════════
  *  L1 event-wrapper LUTs — exact image bytes (BUMPY_unpacked.exe DGROUP offsets).
