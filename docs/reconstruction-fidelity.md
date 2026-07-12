@@ -2052,6 +2052,44 @@ edges (scroll==4), correct at edges (was shrinking). The `HR_SU_TOP_MARGIN` over
 as a labelled benign superset (repaints one extra already-saved clean-bg tile row). Host-only
 (`host_render.c`, `#ifdef BUMPY_PLAYABLE`); `BUMPY.EXE` unaffected.
 
+## Playable host — top-center flag flicker = P1 save-under captured a page-incoherent black, 2026-07-12
+
+**Symptom (playtest, EGA/F2, in-level after moving/bouncing a while):** a small black block a
+few pixels tall at the top-center of the screen flickers intermittently. Fixed dead-center-top,
+over the world-1 **flag** cell (grid cell `(8,0)`). Reproduced headlessly with a strided in-level
+SHOT burst at STRIDE 1 (stride 2 aliases the two VGA pages) → periodic black over the flag region.
+
+**What is faithful there.** The flag cell's static background is `.DEC` run cell code `0xf8` → base
+tile **167**, which is uniform **palette index 1** (world-1 EGA pal[1] = blue) with a masked overlay
+(tile 187). So the faithful top-center bg is **BLUE**, not black — confirmed against the pure-Python
+faithful renderer (`tools/extract/render_levels.py`, which decompresses the `.DEC` before reading the
+grid) and the atlas tile indices. (An early mis-read of the *compressed* `.DEC` bytes wrongly suggested
+black was faithful; decompressing corrected it.)
+
+**Root cause — page incoherence, not a wrong tile.** The two VGA pages (a000 `[0..0x1f40)`,
+a200 `[0x2000..0x3f40)`) can hold DIFFERENT values for the top-strip flag cell: blue on the composed
+page, black on the other. When Bumpy bounces to the top of the screen, his per-sprite save-under's
+`HR_SU_TOP_MARGIN` (1-tile upward over-coverage — the benign superset retained by the scroll-field fix
+above) reaches into the flag cell. If the save (`render_p1_view` → `hr_save_under`) samples the BLACK
+page, the paired erase (`erase_p1_view` → `hr_restore_under`) stamps that black over the blue flag on
+the composed page → the flicker. It is the **P1 (Bumpy) save-under**, NOT the layer-B anim save-under
+(`host_animb_*`, exonerated by disable-test) — established 2026-07-12 by resolving the full static-helper
+call chain (`erase_p1_view+0x38` → `hr_restore_under`; the WWATCH map first mislabeled it
+`host_animb_restore+0x210` because the `hr_*` statics carry no public symbol).
+
+**Fix (page-coherence guard, `hr_restore_under`, `host_render.c`, `#ifdef BUMPY_PLAYABLE`).** Before
+stamping a save-under quad, if it is **fully black** (all 4 planes 0) where the coherent clean level
+background (`hv_saveunder_buf`, captured by `setup_fullscreen_view` before any sprite draw; exposed via
+`host_clean_bg()`) is **non-black** at the same page-relative offset, restore the CLEAN bg instead so both
+pages converge on the true tile colour. Non-black captures (real dynamic content) are untouched, so the
+validated P1/P2 save-under geometry is unchanged and there is no world-2 regression (verified: world-2
+burst renders clean, no missing rows, no new artifacts). DEVIATION: the engine keeps both pages coherent
+via its `gfx_set_mode_11` full-page copy (undecompilable Loriciel overlay); the host reproduces the *net
+coherence* at the save-under boundary rather than the per-tick page copy. Verified headlessly: black
+top-strip frames 214/560 → **0/560**; flag cell uniform index-1 blue across frames 0/100/300/500.
+`BUMPY.EXE` md5 unchanged (`e8957fa0e38daa3fb27b360933cebbe4`; `host_render.c` is `play`-target only).
+User playtest remains the final oracle for this temporal bug.
+
 ## Playable host — menu cursor trail (save-under), 2026-06-28
 
 `run_main_menu`'s arrow left a trail when moved. The engine erases the moving cursor implicitly via its a000/a200 double-buffer (every frame recomposes the whole background into the draw page); the host composes into ONE page (`host_framebuffer`) and `run_main_menu` only recomposes the small option-2 strip per frame, NOT the cursor column. FIX (`host_render.c`, `BUMPY_PLAYABLE`): `host_blit_cursor` now saves the background box under the cursor before drawing and restores the PREVIOUS box before the next draw (`HR_CUR_BOX` 4 bytes × 20 rows × 4 planes, bounded inside page0), so exactly one cursor is ever live — a host-platform save-under standing in for the engine's double-buffer erase. The faithful `run_main_menu` structure is unchanged.

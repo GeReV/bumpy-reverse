@@ -463,6 +463,8 @@ void p2_blit_sprite_leaf(u16 obj_off, u16 obj_seg)
 static u8 s_p1_saveunder[4u * HR_SU_PLANE];
 static u8 s_p2_saveunder[4u * HR_SU_PLANE];
 static u8 s_p1_su_valid = 0u;   /* buffer holds a saved bg (skip the cold-start erase) */
+
+extern const u8 __far *host_clean_bg(void);   /* view_setup.c — coherent level-bg snapshot */
 static u8 s_p2_su_valid = 0u;
 
 /* ── Layer-B anim masked save-under (faithful mode-00 reconstruction — task B) ────
@@ -645,12 +647,42 @@ static void hr_restore_under(const u8 __far *view, const u8 *buf, u16 cell_off, 
     if (!hr_su_rect(view, cell_off, ext_off, &origin, &w, &h)) {
         return;
     }
-    for (row = 0u; row < h; row++) {
-        for (col = 0u; col < w; col++) {
-            u16 off = (u16)(origin + row * 40u + col);
-            u16 bi  = (u16)(row * w + col);
-            host_vga_put4(off, buf[bi], buf[HR_SU_PLANE + bi],
-                          buf[2u*HR_SU_PLANE + bi], buf[3u*HR_SU_PLANE + bi]);
+    {
+        const u8 __far *clean = host_clean_bg();
+        for (row = 0u; row < h; row++) {
+            for (col = 0u; col < w; col++) {
+                u16 off = (u16)(origin + row * 40u + col);
+                u16 bi  = (u16)(row * w + col);
+                u8  q0 = buf[bi];
+                u8  q1 = buf[HR_SU_PLANE + bi];
+                u8  q2 = buf[2u*HR_SU_PLANE + bi];
+                u8  q3 = buf[3u*HR_SU_PLANE + bi];
+                /* PAGE-COHERENCE GUARD (2026-07-12) — top-center flag flicker fix.
+                   The static top-strip bg (tile 167 = index-1 BLUE) can be page-incoherent:
+                   blue on one VGA page, black on the other.  When Bumpy bounces to the top his
+                   save-under's top-margin (HR_SU_TOP_MARGIN) footprint reaches that cell and can
+                   CAPTURE the black page, then this restore stamps black over the blue -> the
+                   top-center flicker (P1 save-under, not host_animb — grounded 2026-07-12).  The
+                   captured value is only wrong when it's fully BLACK where the coherent clean bg
+                   (hv_saveunder_buf, the level tile bg captured before sprites) is NON-black; in
+                   that case restore the CLEAN bg so both pages converge on the true tile colour.
+                   Non-black captures (real dynamic content) are untouched -> no regression to the
+                   validated P1/P2 save-under.  docs/reconstruction-fidelity.md. */
+                if (clean != (const u8 __far *)0 &&
+                    q0 == 0u && q1 == 0u && q2 == 0u && q3 == 0u) {
+                    u16 pr = (u16)(off & 0x1fffu);
+                    if (pr < (u16)GFX_PAGE_SIZE) {
+                        u8 c0 = clean[pr];
+                        u8 c1 = clean[(u16)GFX_PAGE_SIZE + pr];
+                        u8 c2 = clean[2u*(u16)GFX_PAGE_SIZE + pr];
+                        u8 c3 = clean[3u*(u16)GFX_PAGE_SIZE + pr];
+                        if ((c0 | c1 | c2 | c3) != 0u) {
+                            q0 = c0; q1 = c1; q2 = c2; q3 = c3;
+                        }
+                    }
+                }
+                host_vga_put4(off, q0, q1, q2, q3);
+            }
         }
     }
     host_vga_blit_end();
