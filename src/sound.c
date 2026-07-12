@@ -67,6 +67,12 @@
                         Skipped on the host replay harness (it #defines BUMPY_H and
                         supplies its own outp/inp capture+replay shims; see
                         tools/sound_ctest.c).  Under wcc these are the real OUT/IN. */
+#include <dos.h>     /* union REGS / struct SREGS / int86x — the DOS INT 21h vector
+                        get/set (AH=0x25/0x35) timer_teardown_restore issues.  Skipped
+                        on the host replay harness (BUMPY_H defined); it supplies a
+                        minimal type-checking-only shim (see tools/sound_ctest.c) since
+                        that guarded body is provably unreached on every replay scenario
+                        (isr_installed_flag stays 0 — see the fn's own FIDELITY note). */
 #endif
 #include "sound.h"
 #include "player.h"   /* extern sound_device_state + p1_pending_action /
@@ -114,10 +120,9 @@ u16 snd_select_scratch_83ef;      /* CODE   0x83ef — select-from-mask reset sc
  *  game_stubs.c for the BUMPY.EXE link; host stubs in tools/sound_ctest.c for the
  *  replay harness).  None contributes to the validated semantic state (the device-
  *  guarded dispatch + the 10-word tone param frame + the installed far cb ptr):
- *    record_min_status_code (1000:945b) — records a min status code from the packed
- *        CPU-flags word; not part of the validated frame.  → T4/T5.
  *    speaker_gate_reset     (1000:9440) — PC-speaker gate reset (L4 port write).  → T5.
  *    FUN_1000_8a07          (1000:8a07) — the OPL/MPU raw-sample emit (L4).       → T5.
+ *  record_min_status_code (1000:945b) is NO LONGER stubbed — PORTED below (Task A3).
  *
  *  ── RECONSTRUCTION FIDELITY: the record_min_status_code flags-carry convention ──
  *  schedule_timer_callback_a/b/c open (Borland/Turbo-C convention) by reading the
@@ -135,17 +140,47 @@ u16 snd_select_scratch_83ef;      /* CODE   0x83ef — select-from-mask reset sc
  *  call, breaking the 1:1 transcription of play_sound_effect's 21-case switch (whose
  *  calls must mirror the decomp verbatim).  A file-scope carry scalar carries the
  *  identical observable effect (frame fills iff carry clear) without perturbing the
- *  call sites.  record_min_status_code itself is a stub/no-op (it records a min status
- *  code — not part of the validated frame).  Recorded in docs/reconstruction-fidelity.md
- *  (the Phase-6 "L1 dispatch + L3 tone-submit" row + the flags-carry-convention deviation).
+ *  call sites.  record_min_status_code is PORTED below (Task A3; it records a min
+ *  status code — not part of the validated frame, but no longer a no-op).  Recorded in
+ *  docs/reconstruction-fidelity.md (the Phase-6 "L1 dispatch + L3 tone-submit" row +
+ *  the flags-carry-convention deviation).
  * ════════════════════════════════════════════════════════════════════════════ */
 
-/* extern stubs (still-stubbed callees — see header block above).
- *  record_min_status_code (1000:945b) stays a stub (records a min status code into
- *  CS:[0x946c]; not part of any validated frame/port sequence).  speaker_gate_reset
- *  (1000:9440) + FUN_1000_8a07 (1000:8a07) are NO LONGER stubs — they are L4 drivers
- *  PORTED 1:1 below (Phase-6 T5), declared in sound.h. */
-extern void record_min_status_code(u16 status);   /* 1000:945b — no-op stub */
+/* still-stubbed callees (see header block above).  speaker_gate_reset (1000:9440) +
+ *  FUN_1000_8a07 (1000:8a07) are NO LONGER stubs — they are L4 drivers PORTED 1:1
+ *  below (Phase-6 T5), declared in sound.h. */
+
+/* ── record_min_status_code (1000:945b) — PORTED (Task A3): status/result-code latch ──
+ *  Latches a status/result code into last_status_code (CODE 0x946c), keeping the
+ *  lowest/most-severe value ever seen: if the new value is 0xff (a hard-failure
+ *  sentinel) OR is <= the current latch, it replaces it.  asm 1000:945b verbatim:
+ *  CMP AX,0xff; JZ .set; CMP CS:[946c],AX; JC .skip; .set: MOV CS:[946c],AX; .skip: RET.
+ *
+ *  RECONSTRUCTION FIDELITY (register-entry arg modelled as a conventional parameter):
+ *  the asm passes the status ONLY in AX — no stack push at any call site (confirmed via
+ *  disassembly: schedule_timer_callback_a/b/c do `MOV AX,[BP+n]; CALL 0x945b` with zero
+ *  intervening instructions at 1000:9492/9495, 1000:949d.. (a/b analogues), and
+ *  record_status_and_strobe_speaker/the L5 ISR tone sequencers do `MOV AX,imm; CALL
+ *  0x945b` at 1000:9474/947c and 1000:9479/947c and the tone_seq_callback_* retire
+ *  paths).  A literal register-entry reconstruction would need a global stand-in (the
+ *  snd_mpu_byte_89e2 / FUN_1000_89e2 convention) PLUS reconciling all 6 already-
+ *  reconstructed/validated call sites.  Since every call site already stages the exact
+ *  intended value immediately before the call with nothing in between, the value this
+ *  fn receives is bit-identical whether modelled as AX or as a C parameter — so the
+ *  conventional `u16 status` parameter form is kept (matching the pre-existing stub
+ *  signature every call site already uses), avoiding any change to
+ *  schedule_timer_callback_a/b/c, record_status_and_strobe_speaker, or
+ *  tone_seq_callback_9631/96c4/95b5.  Not part of any validated SND_SNAP field (the
+ *  harness does not capture last_status_code), so this fn is not oracle-exercised by
+ *  the semantic-state differential either way — see docs/reconstruction-fidelity.md. */
+u16 last_status_code;   /* CODE 0x946c — the min/most-severe status-code latch */
+
+void record_min_status_code(u16 status)
+{
+    if (status == 0xff || status <= last_status_code) {
+        last_status_code = status;
+    }
+}
 
 /* set_timer_slot_raw (1000:7df9) — the L3 timer-slot-table writer the schedulers tail
  *  into (BX=channel, AX=value, CX:DX=far cb).  PORTED below (T4); the schedulers call it
@@ -477,8 +512,9 @@ u16 schedule_timer_callback_c(u16 param_1, u16 param_2)
  *  -> select_sound_device_from_mask scans the detected-device bitmask and latches the
  *  selected device into snddrv_mode (0x85b3) + sound_active_device_mask (0x5586).  The
  *  snddrv_dispatch_a/b/c/d fns fan out by snddrv_mode to the L4 backends (STUBBED → T5/T6).
- *  The L4 init/IO callees (mpu401_reset_to_uart, pc_speaker_silence, FUN_8ad0/8e2f/89e2,
- *  the dispatch_b/c/d backends, FUN_8b2a) stay STUBBED with notes.
+ *  The L4 init/IO callees pc_speaker_silence/FUN_8ad0/8e2f/89e2 + the dispatch_b/c/d
+ *  backends are PORTED (T5, below); mpu401_reset_to_uart + snddrv_init_substep
+ *  (FUN_1000_8b2a) are PORTED here (Task A3, just below).
  *
  *  L3 TIMER-TABLE MGMT.  Two engine tables:
  *    - 0x5516 callback table (arm_timer_callback / disable_timer_callback): per-channel
@@ -489,26 +525,217 @@ u16 schedule_timer_callback_c(u16 param_1, u16 param_2)
  * ════════════════════════════════════════════════════════════════════════════ */
 
 /* still-stubbed callees the T4 bodies reach (see header block).
- *  mpu401_reset_to_uart (1000:8a75) + FUN_1000_8b2a (1000:8b2a) stay STUBBED: the L5/L2
- *  init carve-out — mpu401_reset_to_uart is NOT in the captured trace (the oracle scopes
- *  port-I/O capture to the 10 L4 driver entry points; 8a75 is not one), so it has no
- *  port-write-sequence record to validate against; it is gated on mpu401_present anyway.
  *  pc_speaker_silence / FUN_1000_8ad0 / FUN_1000_8e2f / FUN_1000_89e2 are NOW PORTED 1:1
- *  below (Phase-6 T5 L4 hardware backends), declared in sound.h. */
-extern void mpu401_reset_to_uart(void);   /* 1000:8a75   L4 MPU reset (carve → T6) */
-extern void FUN_1000_8b2a(void);          /* 1000:8b2a   snddrv_init substep (carve → T6) */
+ *  below (Phase-6 T5 L4 hardware backends), declared in sound.h.  mpu401_reset_to_uart
+ *  + snddrv_init_substep (FUN_1000_8b2a) are PORTED here (Task A3). */
+
+/* ── mpu401_reset_to_uart (1000:8a75) — PORTED (Task A3): MPU-401 chip reset → UART ──
+ *  Gated on mpu401_present (DGROUP 0x557c): if nonzero, poll port 0x331 for DSR
+ *  (bit 0x40) CLEAR (up to 5000 iterations); on success send the reset command 0xFF to
+ *  0x331 and retry (up to 3x) polling 0x331 for the ACK-ready bit (0x80) CLEAR, then
+ *  read 0x330 expecting the ACK byte 0xFE; once ACKed, poll 0x331 for DSR CLEAR once
+ *  more and, on success, send the "enter UART mode" command 0x3F to 0x331.  Any timeout
+ *  (either poll) or a non-0xFE ACK byte clears mpu401_present (chip declared absent).
+ *  asm 1000:8a75 verbatim (LAB_1000_8a93 = the 3x retry loop around the ACK poll+check;
+ *  the final DSR poll before the 0x3F send is NOT retried — a timeout there falls
+ *  straight to the failure path, matching the disassembly's direct JNZ 0x8ac0).
+ *
+ *  Register-return: the engine returns CONCAT22(in_DX, mpu401_present) — a 32-bit value
+ *  whose high word is the ambient (uninitialised-from-the-decompiler's-view) DX
+ *  register, not real data.  Modelled as `int` returning mpu401_present alone (the low
+ *  word — the only part any caller could rely on); the high-word DX is a calling-
+ *  convention artifact, not modelled.  NOT oracle-exercised: 8a75 is not one of the 10
+ *  L4 driver entry points the oracle scopes port-I/O capture to (tools/sound_oracle.py
+ *  L4_FNS), so it has no port-write-sequence record — and mpu401_present defaults 0 (no
+ *  reconstructed code sets it nonzero), so its unconditionally-called site (snddrv_init,
+ *  below) exercises only the early-return no-op path, which is why the already-
+ *  validated device_init scenario is unaffected by wiring in this real body. */
+extern s16 mpu401_present;   /* DGROUP 0x557c — defined below with FUN_1000_89e2 (T5) */
+
+int mpu401_reset_to_uart(void)
+{
+    u16 cx;
+    u8  al;
+    u8  retry;
+
+    if (mpu401_present != 0) {
+        cx = 0x1388;                                  /* poll DSR (0x40) CLEAR */
+        do {
+            al = (u8)inp(0x331);
+            cx--;
+        } while (cx != 0 && (al & 0x40) != 0);
+        if ((al & 0x40) == 0) {
+            outp(0x331, 0xff);                         /* MOV AL,0xff; OUT DX,AL */
+            retry = 3;
+            for (;;) {
+                cx = 0x1388;                            /* poll ACK-ready (0x80) CLEAR */
+                do {
+                    al = (u8)inp(0x331);
+                    cx--;
+                } while (cx != 0 && (al & 0x80) != 0);
+                if ((al & 0x80) == 0 && (u8)inp(0x330) == 0xfe) {
+                    cx = 0x1388;                        /* poll DSR (0x40) CLEAR again */
+                    do {
+                        al = (u8)inp(0x331);
+                        cx--;
+                    } while (cx != 0 && (al & 0x40) != 0);
+                    if ((al & 0x40) == 0) {
+                        outp(0x331, 0x3f);               /* enter UART mode */
+                        return mpu401_present;
+                    }
+                    break;                              /* timeout — no retry, straight to fail */
+                }
+                retry--;
+                if (retry == 0) break;                  /* DEC BX; JNZ (3 attempts total) */
+            }
+        }
+        mpu401_present = 0;                              /* MOV word ptr [0x557c],0 */
+    }
+    return mpu401_present;
+}
+
+/* ── snddrv_init_substep (1000:8b2a) — PORTED (Task A3): snddrv_init's OPL init substep ─
+ *  Sets midi_seq_step_active (DGROUP 0x557e) = 1, calls the OPL-chip-detect leaf
+ *  maybe_opl2_detect_chip (1000:8fb6); if it reports "not detected" clears the flag,
+ *  else runs the OPL register-init leaf opl2_reset_all_regs (1000:8eeb).  Returns the
+ *  flag.  asm 1000:8b2a verbatim.
+ *
+ *  CARVE-OUT: maybe_opl2_detect_chip + opl2_reset_all_regs are further out-of-scope
+ *  leaves this port newly reaches (guidance: carve out anything beyond the 4 target
+ *  fns) — both already carry canonical Ghidra names (a prior naming pass) but neither
+ *  is reconstructed here: maybe_opl2_detect_chip is an OPL2-status-register probe
+ *  (reads port 0x388 into AL/DL, tests bit patterns) and opl2_reset_all_regs is an
+ *  ~20-register OPL init sequence with 2 status-poll loops — genuine OPL-driver work,
+ *  separate from this task's MPU/init/timer/status-latch scope.  Faithful-signature
+ *  no-op carve-out stubs in game_stubs.c + tools/sound_ctest.c (the established
+ *  `void f(void)` convention, e.g. FUN_1000_6183 / the 3 MIDI-note carve-outs above).
+ *
+ *  RECONSTRUCTION FIDELITY (the ZF-only branch): maybe_opl2_detect_chip's asm computes
+ *  its detected/not-detected verdict into AH, then executes `AND AH,AH` (setting ZF)
+ *  BEFORE popping its saved AX/CX/DX off the stack — so by the time it RETs, the AX
+ *  register the caller sees is the CALLER's OWN original AX (restored by the POPs), not
+ *  the verdict; only the ZERO FLAG survives to convey the result.  A void-returning C
+ *  stub cannot convey a flags-only outcome, so the branch this fn takes on that verdict
+ *  is modelled via the file-scope `snd_opl_detect_zf` (defaulting to "not detected",
+ *  matching the snd_sched_carry_in modelled-flag convention).  The exact default is
+ *  IMMATERIAL to the validated state: both destinations (clearing
+ *  midi_seq_step_active, a global not in the SND_SNAP, or calling the equally-carved-
+ *  out opl2_reset_all_regs) have zero observable effect on any comparator-asserted
+ *  global — so wiring this real body into snddrv_init's already-validated call site
+ *  (below) cannot regress the device_init scenario either way. */
+u16 midi_seq_step_active;             /* DGROUP 0x557e */
+static u8 snd_opl_detect_zf = 1;      /* modelled ZF from maybe_opl2_detect_chip (1=not detected) */
+
+extern void maybe_opl2_detect_chip(void);   /* 1000:8fb6 — OPL2 chip-status probe (carve) */
+extern void opl2_reset_all_regs(void);      /* 1000:8eeb — OPL2 register init (carve) */
+
+u16 snddrv_init_substep(void)
+{
+    midi_seq_step_active = 1;
+    maybe_opl2_detect_chip();
+    if (snd_opl_detect_zf) {
+        midi_seq_step_active = 0;
+    } else {
+        opl2_reset_all_regs();
+    }
+    return midi_seq_step_active;
+}
 
 /* out-of-scope MIDI-note carve-outs the 9 MIDI dispatch backends (below) reach — a
  *  NEW carve-out boundary this task discovered (see the "MIDI dispatch backends"
  *  section).  All three already carry canonical Ghidra names from a prior naming pass;
  *  none is reconstructed here (genuinely out of scope — separate future MIDI-engine
- *  work), matching the FUN_1000_6183 / FUN_1000_7fef precedent below. */
+ *  work), matching the FUN_1000_6183 precedent below (and the pit_set_counter0 /
+ *  maybe_opl2_detect_chip / opl2_reset_all_regs carve-outs Task A3 adds just above and
+ *  just below). */
 extern void seq_set_channel_param(void);     /* 1000:922c — OPL/PC-spk program-change (carve) */
 extern void midi_emit_voice_msg_w3(void);    /* 1000:8e93 — OPL program-change fwd chain (carve) */
 extern void opl_event_note_on(void);         /* 1000:8ea3 — OPL note-on -> opl_play_note (carve) */
 
-extern void FUN_1000_7fef(void);          /* 1000:7fef   timer teardown/restore → T5/T6 */
 extern void FUN_1000_6183(void);          /* 1000:6183   out-of-scope entity sweep (→ entity) */
+
+/* ── timer_teardown_restore (1000:7fef) — PORTED (Task A3): int-8/int-0Fh vector teardown ─
+ *  Register-entry (no stack args — confirmed via disasm: AX/CX/DX are read directly,
+ *  never [BP+n]).  Gated on isr_installed_flag (DGROUP 0x54d4): if zero, no-op.  Else:
+ *  disables interrupts (PUSHF;CLI), restores interrupt vector 8 (the PIT/IRQ0 timer) to
+ *  the caller-supplied far pointer (CX=offset, DX=segment) via DOS INT 21h AH=0x25;
+ *  then saves the CURRENT vector 0x0F (DOS INT 21h AH=0x35) into DGROUP 0x54d8/0x54da
+ *  before overwriting it with the game's own handler at CS:0x8086 (INT 21h AH=0x25);
+ *  then reads a per-index reload value from a table at DGROUP 0x54de (indexed by the
+ *  caller-supplied AX), stages it at DGROUP 0x54dc, and tail-calls pit_set_counter0
+ *  (1000:7f9a) with that value in AX (the register-entry reload arg); finally re-enables
+ *  interrupts (POPF).  asm 1000:7fef verbatim.
+ *
+ *  RECONSTRUCTION FIDELITY (register-entry args + provably-dead body): timer_restore
+ *  (1000:7fde, already PORTED/validated in T4) is the sole reconstructed caller and
+ *  calls this fn with NO args (`timer_teardown_restore();`) — matching timer_restore's
+ *  existing validated contract, which this task must not disturb.  The engine's real
+ *  AX (table index) / CX:DX (vector-8 restore far ptr) inputs are modelled as the
+ *  file-scope snd_isr_restore_index/off/seg globals (the snd_mpu_byte_89e2 register-
+ *  entry convention), defaulting to 0.  isr_installed_flag (DGROUP 0x54d4) defaults 0
+ *  and is never set nonzero by any function this codebase reconstructs or exercises —
+ *  so the entire guarded body (the vector restore, the INT 21h calls, the table read,
+ *  the pit_set_counter0 call) is PROVABLY UNREACHED by every scenario in the trace; the
+ *  exact register-stand-in values are therefore immaterial to the gate.  Ported 1:1 for
+ *  faithfulness + the BUMPY.EXE link (documented, same "reconstructed as documentation,
+ *  not runtime-gated" precedent as the L5 ISR tone sequencer later in this file).
+ *
+ *  CARVE-OUT: pit_set_counter0 (1000:7f9a) is a further out-of-scope PIT hardware-init
+ *  leaf this port reaches (also called by the unrelated, unreconstructed
+ *  uninstall_interrupt_handler / pit_set_counter0_wrap — a separate ISR-install
+ *  subsystem, out of this task's scope) — faithful-signature no-op carve-out stub in
+ *  game_stubs.c + tools/sound_ctest.c.
+ *
+ *  HOST-BUILD NOTE: the 3 DOS INT 21h calls use int86x()/union REGS/struct SREGS (the
+ *  project's established DOS-interrupt convention — see config_screens.c/input.c/
+ *  gfx_palette.c/video.c), available via <dos.h> (pulled in transitively by sound.h ->
+ *  bumpy.h on the real wcc build, and via this file's own guarded <dos.h> include).  The
+ *  host replay harness (BUMPY_H defined) supplies a minimal type-checking-only shim
+ *  (tools/sound_ctest.c) since the guarded body above is provably unreached there. */
+u8  isr_installed_flag;         /* DGROUP 0x54d4 — set by the (unreconstructed,
+                                    out-of-scope) interrupt-install routine */
+u16 saved_timer_vector_off;     /* DGROUP 0x54d8 — saved INT 0Fh vector offset */
+u16 saved_timer_vector_seg;     /* DGROUP 0x54da — saved INT 0Fh vector segment */
+u16 timer_restore_reload_value; /* DGROUP 0x54dc — table[index] staged for pit_set_counter0 */
+u16 timer_restore_table[8];     /* DGROUP 0x54de.. — per-index restore table (unknown
+                                    real extent — out of scope; sized defensively) */
+u16 snd_isr_restore_index;      /* engine AX — table index into timer_restore_table */
+u16 snd_isr_restore_off;        /* engine CX — vector-8 restore far-ptr OFFSET */
+u16 snd_isr_restore_seg;        /* engine DX — vector-8 restore far-ptr SEGMENT */
+
+extern void pit_set_counter0(void);   /* 1000:7f9a — PIT hardware init (carve, out of scope) */
+
+void timer_teardown_restore(void)
+{
+    union REGS  r;
+    struct SREGS sr;
+
+    if (isr_installed_flag == 0) {              /* CMP [0x54d4],0; JZ (skip to epilogue) */
+        return;
+    }
+    /* PUSHF; CLI — not modelled on the host (no CPU IF to save/restore). */
+    r.h.ah = 0x25; r.h.al = 0x08;                /* AH=0x25 AL=8: DOS set-vector(int 8) */
+    sr.ds  = snd_isr_restore_seg;
+    r.x.dx = snd_isr_restore_off;
+    int86x(0x21, &r, &r, &sr);
+
+    r.x.ax = 0x350f;                             /* AH=0x35 AL=0xF: DOS get-vector(int 0Fh) */
+    int86x(0x21, &r, &r, &sr);
+    saved_timer_vector_off = r.x.bx;            /* MOV [0x54d8],BX */
+    saved_timer_vector_seg = sr.es;             /* MOV BX,ES; MOV [0x54da],BX */
+
+    r.h.ah = 0x25; r.h.al = 0x0f;                /* AH=0x25 AL=0xF: DOS set-vector(int 0Fh) */
+    sr.ds  = 0x1000;
+    r.x.dx = 0x8086;
+    int86x(0x21, &r, &r, &sr);
+
+    timer_restore_reload_value =                 /* MOV BX,0x54de; ADD AX,AX; ADD BX,AX;
+                                                     MOV AX,[BX] */
+        timer_restore_table[snd_isr_restore_index &
+                             (sizeof(timer_restore_table) / sizeof(timer_restore_table[0]) - 1)];
+    /* POPF — not modelled on the host (see above). */
+    pit_set_counter0();                          /* CALL 0x7f9a (carve — out of scope) */
+}
 
 /* ════════════════════════════════════════════════════════════════════════════
  *  MIDI dispatch backends — snddrv_dispatch_b/c/d's 9 mode{0,1,4} backends.
@@ -549,10 +776,9 @@ extern void FUN_1000_6183(void);          /* 1000:6183   out-of-scope entity swe
  *  touched, PASS either way) or would exercise genuinely uncontrolled/ambient register
  *  content (mode4's snd_busy_delay count, or the two complex note handlers) with no way
  *  to tell a correct port from an incorrect one. Forcing a scenario through them would
- *  also newly reach the 3 out-of-scope carve-outs above and the always-carve-out
- *  mpu401_reset_to_uart/FUN_1000_8b2a/FUN_1000_7fef (all still no-op stubs), which would
- *  raise the trace's UNPORTED count above the 25 baseline the combined-task gate holds
- *  fixed — a documented, deliberate scope decision (see docs/reconstruction-fidelity.md
+ *  also newly reach the 3 out-of-scope carve-outs above (still no-op stubs) — which
+ *  would raise the trace's UNPORTED count above the 25 baseline the combined-task gate
+ *  holds fixed — a documented, deliberate scope decision (see docs/reconstruction-fidelity.md
  *  + the task report), invoking the brief's own escape hatch ("if the backends
  *  genuinely cannot be exercised by the oracle... report as a documented not-exercised
  *  UNPORTED... and proceed"). All 9 are ported 1:1 here for faithfulness + the
@@ -992,10 +1218,16 @@ void sound_select_device(void)
 
 /* ── snddrv_init (1000:88e5) ──────────────────────────────────────────────────────
  *  One-time driver init (guard sound_init_state 0x557a==0): set state=1, run the MPU
- *  reset + FUN_8b2a substep, set snddrv_mode=1 + sound_active_device_mask=1, return a
- *  status bitmask (0=ok; |4 / |1 on a sub-step failure).  The substep_ok flag is always
- *  true here (the L4 reset/8b2a are STUBBED → T5), so the failure ORs never fire — the
- *  decomp's dead `if(!substep_ok)` arms are preserved 1:1. */
+ *  reset + snddrv_init_substep, set snddrv_mode=1 + sound_active_device_mask=1, return
+ *  a status bitmask (0=ok; |4 / |1 on a sub-step failure).  The decomp's `substep_ok`
+ *  is a LOCAL flag the ORIGINAL never actually reassigns from either callee's return
+ *  (both are called for effect, their results discarded) — it stays true, so the
+ *  failure ORs never fire; the decomp's dead `if(!substep_ok)` arms are preserved 1:1.
+ *  mpu401_reset_to_uart + snddrv_init_substep are PORTED (Task A3): mpu401_reset_to_uart
+ *  is gated on mpu401_present (defaults 0 — early-return no-op here); snddrv_init_substep
+ *  only touches midi_seq_step_active (not in the SND_SNAP) — so wiring in their real
+ *  bodies does not perturb this fn's already-validated device_init semantic-state
+ *  record. */
 u16 snddrv_init(void)
 {
     u16 status;
@@ -1012,7 +1244,7 @@ u16 snddrv_init(void)
             status = 4;
             substep_ok = 0;
         }
-        FUN_1000_8b2a();
+        snddrv_init_substep();
         if (!substep_ok) {
             status = status | 1;
         }
@@ -1219,11 +1451,14 @@ int get_timer_slot_field(int slot_index)
 }
 
 /* ── timer_restore (1000:7fde) — thunk to the timer teardown/restore ──────────────
- *  Thunk to FUN_1000_7fef (restore the PIT int vector via DOS int 21h + reprogram the
- *  PIT).  FUN_1000_7fef is an L4/L5 hardware/DOS routine, STUBBED → T5/T6. */
+ *  Thunk to timer_teardown_restore (restore the PIT int vector via DOS int 21h +
+ *  reprogram the PIT).  timer_teardown_restore is PORTED (Task A3); its guarded body
+ *  is a provable no-op here (isr_installed_flag defaults 0 and this fn's own call site
+ *  passes no args), so wiring it in does not perturb this fn's already-validated
+ *  t4_l3_timer_table semantic-state records. */
 void timer_restore(void)
 {
-    FUN_1000_7fef();
+    timer_teardown_restore();
 }
 
 /* ════════════════════════════════════════════════════════════════════════════

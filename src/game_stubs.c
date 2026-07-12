@@ -81,13 +81,11 @@
  *  fns are likewise reconstructed in sound.c (T4); their stubs are not (re)defined here. */
 
 /* ── Phase-6 T3/T4 still-stubbed sound callees (faithful-signature; for the link only) ──
- *  RECONSTRUCTION FIDELITY: these are reached by the ported sound pipeline but are NOT
- *  part of the validated semantic state.  No-op body so BUMPY.EXE links.
- *    record_min_status_code (1000:945b) — records a min status code into CS:[0x946c].
- *  speaker_gate_reset (1000:9440) + FUN_1000_8a07 (1000:8a07) are NO LONGER stubbed —
- *  they are L4 hardware drivers RECONSTRUCTED in sound.c (Phase-6 T5; dup-symbol once
- *  sound.obj links).  FUN_1000_7df9 (set_timer_slot_raw) was un-stubbed in T4. */
-void record_min_status_code(u16 status)        { (void)status; }   /* 1000:945b */
+ *  record_min_status_code (1000:945b) is NO LONGER stubbed — RECONSTRUCTED in sound.c
+ *  (Task A3; stub removed to avoid a dup symbol).  speaker_gate_reset (1000:9440) +
+ *  FUN_1000_8a07 (1000:8a07) are ALSO no longer stubbed — L4 hardware drivers
+ *  RECONSTRUCTED in sound.c (Phase-6 T5).  FUN_1000_7df9 (set_timer_slot_raw) was
+ *  un-stubbed in T4. */
 
 /* ── Phase-6 T4/T5 still-stubbed callees the sound bodies reach ──────────────────────
  *  RECONSTRUCTION FIDELITY: faithful-signature no-op stubs so BUMPY.EXE links.  The L4
@@ -96,20 +94,28 @@ void record_min_status_code(u16 status)        { (void)status; }   /* 1000:945b 
  *  backends (91cf/8af6/8e48/91d7/8b04/8e50/91df/8b0d/8e58) are NOW RECONSTRUCTED 1:1 in
  *  sound.c too (their stubs removed here) — register-entry MIDI-track leaves, ported for
  *  faithfulness + the link but NOT oracle-exercised (see the RECONSTRUCTION FIDELITY
- *  note at their definitions in sound.c).  STILL stubbed (out-of-scope): the MPU/init
- *  carve (mpu401_reset_to_uart 8a75 + FUN_8b2a), the timer teardown FUN_7fef, the entity
- *  sweep FUN_6183 (reached from play_contact_sound for contact codes 0xe..0x11), and the
- *  3 out-of-scope MIDI-note leaves the 9 backends above reach (seq_set_channel_param /
- *  midi_emit_voice_msg_w3 / opl_event_note_on — a NEW carve-out boundary this task
- *  discovered; all 3 already carry canonical Ghidra names, none reconstructed here —
- *  separate, not-yet-started MIDI-engine work). */
-void mpu401_reset_to_uart(void)  {}   /* 1000:8a75 mpu401_reset_to_uart — L4 MPU reset (carve) */
-void FUN_1000_8b2a(void)         {}   /* 1000:8b2a snddrv_init_substep — snd-driver init (carve) */
+ *  note at their definitions in sound.c).  The MPU/init carve (mpu401_reset_to_uart
+ *  8a75 + snddrv_init_substep/FUN_8b2a) and the timer teardown (timer_teardown_restore/
+ *  FUN_7fef) are ALSO now RECONSTRUCTED in sound.c (Task A3; stubs removed here).
+ *  STILL stubbed (out-of-scope): the entity sweep FUN_6183 (reached from
+ *  play_contact_sound for contact codes 0xe..0x11); the 3 out-of-scope MIDI-note leaves
+ *  the 9 backends above reach (seq_set_channel_param / midi_emit_voice_msg_w3 /
+ *  opl_event_note_on — a carve-out boundary a prior task discovered; all 3 already
+ *  carry canonical Ghidra names, none reconstructed here — separate, not-yet-started
+ *  MIDI-engine work); and 3 further out-of-scope leaves Task A3's reconstructions newly
+ *  reach: maybe_opl2_detect_chip/opl2_reset_all_regs (OPL2-chip-detect + register-init,
+ *  called from snddrv_init_substep — genuine OPL-driver work, out of this task's MPU/
+ *  init/timer/status-latch scope) and pit_set_counter0 (PIT hardware init, called from
+ *  timer_teardown_restore's isr_installed_flag-guarded body — also called by the
+ *  unrelated, unreconstructed uninstall_interrupt_handler/pit_set_counter0_wrap, a
+ *  separate ISR-install subsystem). */
 void seq_set_channel_param(void)  {}  /* 1000:922c — OPL/PC-spk program-change (carve) */
 void midi_emit_voice_msg_w3(void) {}  /* 1000:8e93 — OPL program-change fwd chain (carve) */
 void opl_event_note_on(void)      {}  /* 1000:8ea3 — OPL note-on -> opl_play_note (carve) */
-void FUN_1000_7fef(void)         {}   /* 1000:7fef timer_teardown_restore — int8 timer teardown (carve) */
 void FUN_1000_6183(void)         {}   /* 1000:6183 sweep_active_entities — out-of-scope entity sweep (carve) */
+void maybe_opl2_detect_chip(void) {}  /* 1000:8fb6 — OPL2 chip-status probe (carve) */
+void opl2_reset_all_regs(void)    {}  /* 1000:8eeb — OPL2 register init (carve) */
+void pit_set_counter0(void)       {}  /* 1000:7f9a — PIT hardware init (carve) */
 /* apply_contact_action (1000:6a89) — RECONSTRUCTED in player.c (Phase-9 T1); the
    no-op stub is removed (it would now be a duplicate symbol against player.obj). */
 /* play_walk_anim_default (1000:4361) — RECONSTRUCTED in player.c (audit 2026-06-28); stub removed. */

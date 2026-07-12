@@ -126,6 +126,34 @@ static HOST_UNUSED unsigned inpw (u16 port)          { return host_in(port); }
 static HOST_UNUSED void     out  (u16 port, u16 val) { host_out_sz(port, val, 1); }
 static HOST_UNUSED u16      in   (u16 port)          { return host_in(port); }
 
+/* ── Minimal host shim for <dos.h>'s union REGS / struct SREGS / int86x ────────────
+ *  src/sound.c's timer_teardown_restore (Task A3) issues 3 real DOS INT 21h calls
+ *  (AH=0x25/0x35, interrupt-vector get/set) inside its isr_installed_flag-guarded body.
+ *  isr_installed_flag (DGROUP 0x54d4) defaults 0 and is never set nonzero by any
+ *  function this harness reconstructs or exercises, so that body is PROVABLY UNREACHED
+ *  by every scenario in the trace (see the RECONSTRUCTION FIDELITY note at
+ *  timer_teardown_restore's definition) — this shim exists purely so sound.c's (dead,
+ *  on this harness) call sites TYPE-CHECK on the host build; it performs no real
+ *  interrupt dispatch.  Field layout matches Open Watcom's <dos.h> (verified: the real
+ *  wcc build of sound.c compiles clean against it) so the reconstructed body is
+ *  identical source on both targets.  Must precede the #include below (sound.c's
+ *  timer_teardown_restore references these types/this function textually). */
+union REGS { struct { unsigned char al,ah,bl,bh,cl,ch,dl,dh; } h;
+             struct { unsigned int  ax,bx,cx,dx,si,di; } x; };
+struct SREGS { unsigned int es,cs,ss,ds; };
+static int int86x(int intno, union REGS *inr, union REGS *outr, struct SREGS *segr)
+{
+    (void)intno; (void)inr;
+    /* Deterministically zero the "returned" registers (real DOS would fill AX/BX/ES
+     * etc. from the interrupt) so the never-taken read sites downstream (this body is
+     * dead — see the comment above) have a defined value instead of triggering a
+     * host-compiler uninitialized-read diagnostic. */
+    if (outr) { outr->x.ax = 0; outr->x.bx = 0; outr->x.cx = 0;
+                outr->x.dx = 0; outr->x.si = 0; outr->x.di = 0; }
+    if (segr) { segr->es = 0; segr->cs = 0; segr->ss = 0; segr->ds = 0; }
+    return 0;
+}
+
 #include "../src/sound.c"
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -415,8 +443,10 @@ u8  prev_game_mode;         /* player.c 0x8552 */
  *  In BUMPY.EXE these resolve to the faithful-signature stubs in game_stubs.c; the
  *  harness does NOT link game_stubs.c (it #includes only src/sound.c), so it supplies
  *  its own no-op host stubs — the same convention items_ctest uses for play_sound etc.
- *  None affects the validated semantic state (device-guarded dispatch + tone frame). */
-void record_min_status_code(u16 status)        { (void)status; }   /* 1000:945b */
+ *  None affects the validated semantic state (device-guarded dispatch + tone frame).
+ *  record_min_status_code / mpu401_reset_to_uart / snddrv_init_substep (FUN_8b2a) /
+ *  timer_teardown_restore (FUN_7fef) are NO LONGER stubbed here — RECONSTRUCTED in
+ *  src/sound.c (Task A3; no host stub, they come from the included TU). */
 
 /* T4/T5 still-stubbed L5 + out-of-scope callees src/sound.c references (host no-ops).
  *  The L4 PC-speaker / MPU / OPL drivers (pc_speaker_silence / speaker_gate_* /
@@ -426,20 +456,22 @@ void record_min_status_code(u16 status)        { (void)status; }   /* 1000:945b 
  *  (this task) — likewise no host stub for THEM.  They are register-entry / NOT
  *  oracle-exercised (see the RECONSTRUCTION FIDELITY note at their definitions in
  *  sound.c), so no PORTED[] wrapper below calls them either — they are simply LINKED,
- *  never invoked by this harness.  Still stubbed here: the MPU/init carve
- *  (mpu401_reset_to_uart / FUN_8b2a), the timer teardown, the entity sweep, and the 3
+ *  never invoked by this harness.  Still stubbed here: the entity sweep, the 3
  *  out-of-scope MIDI-note leaves the 9 backends reach (seq_set_channel_param /
  *  midi_emit_voice_msg_w3 / opl_event_note_on — same carve-out class, host no-ops so the
- *  9 backends' bodies link on the host build too).  p1_try_trigger_pending_action
- *  (1000:654e) is a player.c fn play_state_sound calls — host no-op (mutates only player
- *  anim-channel state, outside the sound SNAP). */
-void mpu401_reset_to_uart(void)  {}
-void FUN_1000_8b2a(void)         {}
+ *  9 backends' bodies link on the host build too); and 3 further out-of-scope leaves
+ *  Task A3's reconstructions newly reach: maybe_opl2_detect_chip/opl2_reset_all_regs
+ *  (called from snddrv_init_substep) and pit_set_counter0 (called from
+ *  timer_teardown_restore's dead-on-this-harness guarded body).
+ *  p1_try_trigger_pending_action (1000:654e) is a player.c fn play_state_sound calls —
+ *  host no-op (mutates only player anim-channel state, outside the sound SNAP). */
 void seq_set_channel_param(void)  {}
 void midi_emit_voice_msg_w3(void) {}
 void opl_event_note_on(void)      {}
-void FUN_1000_7fef(void)         {}
 void FUN_1000_6183(void)         {}
+void maybe_opl2_detect_chip(void) {}
+void opl2_reset_all_regs(void)    {}
+void pit_set_counter0(void)       {}
 void p1_try_trigger_pending_action(void) {}   /* 1000:654e — player.c (host no-op) */
 
 /* ════════════════════════════════════════════════════════════════════════════

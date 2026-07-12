@@ -141,6 +141,27 @@ int  disable_timer_callback(int channel);         /* 1000:7f65 — PORTED (T4) *
 int  get_timer_slot_field(int slot_index);        /* 1000:7e3d — PORTED (T4) */
 void timer_restore(void);                         /* 1000:7fde — PORTED (T4) */
 
+/* ── PORTED (Task A3 — MPU reset / init substep / timer teardown / status latch) ──────
+ *  Finishes the last 4 stubbed leaves of the sound-effect pipeline.  See the per-fn
+ *  RECONSTRUCTION FIDELITY notes at each definition in sound.c. */
+void record_min_status_code(u16 status);          /* 1000:945b — PORTED (A3) */
+int  mpu401_reset_to_uart(void);                  /* 1000:8a75 — PORTED (A3) */
+u16  snddrv_init_substep(void);                   /* 1000:8b2a — PORTED (A3) */
+void timer_teardown_restore(void);                /* 1000:7fef — PORTED (A3) */
+
+/* Task A3 state (owned in sound.c). */
+extern u16 last_status_code;            /* CODE   0x946c — record_min_status_code latch */
+extern u16 midi_seq_step_active;        /* DGROUP 0x557e — snddrv_init_substep flag      */
+extern u8  isr_installed_flag;          /* DGROUP 0x54d4 — timer_teardown_restore guard  */
+extern u16 saved_timer_vector_off;      /* DGROUP 0x54d8 — saved INT 0Fh vector offset   */
+extern u16 saved_timer_vector_seg;      /* DGROUP 0x54da — saved INT 0Fh vector segment  */
+extern u16 timer_restore_reload_value;  /* DGROUP 0x54dc — table[index] staged for pit_set_counter0 */
+extern u16 timer_restore_table[8];      /* DGROUP 0x54de.. — per-index restore table (out-of-scope extent) */
+/* register-entry standins timer_teardown_restore reads (see its FIDELITY note). */
+extern u16 snd_isr_restore_index;        /* engine AX */
+extern u16 snd_isr_restore_off;          /* engine CX */
+extern u16 snd_isr_restore_seg;          /* engine DX */
+
 /* ── PORTED (Phase-6 T5 — L4 hardware backends; the port-write drivers) ──────────────
  *  These issue the engine's real OUT/IN to 0x61 / 0x330-0x331 / 0x388-0x389.  Validated
  *  by the port-write-sequence differential (tools/sound_ctest.c comparator B) where the

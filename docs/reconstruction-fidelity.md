@@ -280,6 +280,7 @@ L5 is reconstructed 1:1 as **documentation** (NOT runtime-gated — see below).
 | **L4 hardware backends** (T5): `pc_speaker_silence` (9115), `speaker_gate_reset/strobe` (9440/9451), `record_status_and_strobe_speaker` (946e), `opl_write_reg` (9007), `opl_play_note` (905d), `FUN_89e2` (89e2, MPU byte-out), `FUN_8a07` (8a07, MPU sample), `FUN_8ad0` (8ad0, MPU settle), `FUN_8e2f` (8e2f, OPL all-off) | Transcription | The engine's real port-I/O drivers (PC-speaker/PIT 0x61, MPU-401 0x330/0x331, OPL2 0x388/0x389). Validated by the **port-write-sequence** differential: capture the engine's `OUT(port,val,size)` under Unicorn, replay the recorded IN sequence into the host `in()` shim, run the reconstructed driver, diff its OUT capture vs the engine's — a perturbation-proven real gate (corrupting any emitted OUT FAILs). |
 | **L5 ISR tone-sequencer** (T6): `pit_timer_isr_multiplexer` (7c02), `tone_seq_callback_9631` (9631), `tone_seq_callback_96c4` (96c4), `tone_seq_callback_95b5` (95b5) | **Behavior-faithful (NOT runtime-gated)** | The PIT (IRQ0/int-8) multiplexer walks the 0x5516 cb table each tick (`current += reload`; on the 500-tick period far-call the slot's installed callback) and the three tone-sequencer callbacks advance the L3 param frame + reprogram PIT ch2 (0x42/0x43) / strobe the speaker gate (0x61) to sweep the tone. Reached ONLY via the installed far pointer — NO Ghidra function boundary, NOT hooked by the oracle, so the trace has ZERO records and there is no host differential. Transcribed verbatim from the raw disasm as documentation; the **self-modifying graphics-overlay blitter precedent** (`sprite_blit`/`bg_render`): faithful to what the binary does, validated by inspection vs the asm, not by a runtime gate. |
 | **MIDI dispatch backends** (T7 closeout): `snddrv_dispatch_b_mode0/1/4` (91cf/8e48/8af6), `snddrv_dispatch_c_mode0/1/4` (91d7/8e50/8b04), `snddrv_dispatch_d_mode0/1/4` (91df/8b0d/8e58) | **Behavior-faithful (NOT oracle-exercised)** | The last 9 stub gaps `snddrv_dispatch_b/c/d` (already-ported) fan out to. Verified via the RAW disassembly (the Ghidra decompiler's simplified view hides the real body for 6 of the 9 — e.g. `snddrv_dispatch_b_mode0` decompiles to a bare `return in_AX` even though the asm does `LODSB;ADD SI,AX`, because the decompiler doesn't track SI as an output): all 9 read/advance the caller's ambient DS:SI (a live MIDI-track byte cursor), AL (the MIDI event status byte), and/or CS:[BX+0x80] (a per-track default-channel byte) as raw REGISTERS, not stack args. Confirmed via Ghidra xrefs: their ONLY real caller is `midi_process_event` (8751/8756/875b), itself register-entry (`unaff_SI`) and genuinely unreconstructed — separate, not-yet-started MIDI-engine work (this task closes the sound-**effect** pipeline's last gaps "before the MIDI engine work begins," per the task brief). Reconstructed 1:1 from the raw asm; register-entry inputs modelled as file-scope globals (`snd_seq_event_al`/`snd_seq_cursor`/`snd_seq_default_chan`, the `snd_mpu_byte_89e2` convention) since the true caller supplying them is out of scope and the EXISTING `snddrv_dispatch_b/c/d` call sites (unchanged by this task) pass no args. `snd_seq_cursor` defaults to a zero-filled scratch buffer (not real captured MIDI data — none exists) purely so the incidental invocation from the already-validated `snddrv_dispatch_b/c/d` mode0 replay (which DOES happen — `t4_l2_dispatch` seeds mode 0) is memory-safe; never inspected/asserted by any comparator. 3 further NEW carve-out leaves discovered and stubbed (`seq_set_channel_param` 922c, `midi_emit_voice_msg_w3` 8e93, `opl_event_note_on` 8ea3 — already canonically named, none reconstructed, same class as `FUN_1000_6183`/`FUN_1000_7fef`). |
+| **MPU reset / init substep / timer teardown / status latch** (Task A3): `mpu401_reset_to_uart` (8a75), `snddrv_init_substep` (8b2a), `timer_teardown_restore` (7fef), `record_min_status_code` (945b) | **Transcription** (`mpu401_reset_to_uart`/`record_min_status_code`, oracle-inert) / **Behavior-faithful, provably dead** (`snddrv_init_substep`'s ZF branch is immaterial; `timer_teardown_restore`'s guarded body never executes) | Finishes the last 4 stubbed sound-pipeline leaves. `mpu401_reset_to_uart`: MPU-401 chip reset → UART mode, gated on `mpu401_present` (defaults 0 — early-return no-op in every scenario; not one of the oracle's 10 L4 port-I/O entry points, so no port-write record exists). `record_min_status_code`: latches AX into `last_status_code` (0x946c) — see deviation (i). `snddrv_init_substep` (renamed from `FUN_1000_8b2a`, Ghidra's own canonical name): sets `midi_seq_step_active`, calls the carved-out `maybe_opl2_detect_chip` (8fb6) then branches on its ZF-only verdict to clear the flag or call the equally carved-out `opl2_reset_all_regs` (8eeb) — see deviation (i). `timer_teardown_restore` (renamed from `FUN_1000_7fef`): register-entry (AX=table index, CX/DX=vector-8 restore far ptr — confirmed no `[BP+n]` stack access in the disasm), guarded by `isr_installed_flag` (0x54d4, defaults 0 and never set nonzero by any reconstructed code — the guarded body, including 3 DOS INT 21h vector get/sets via `int86x`/`union REGS`/`struct SREGS` and the carved-out `pit_set_counter0` (7f9a), is **provably unreached** by every scenario in the trace). All 4 wired into their ALREADY-VALIDATED call sites (`snddrv_init` calls the first two; `timer_restore` calls the third; 6 already-committed L3 fns call the fourth) with **zero effect** on any of those records — confirmed by re-running `validate_sound`: identical PASS=4414/FAIL=0/UNPORTED=25/PORT_CHECKED=3752 before and after. |
 
 **Phase-6 deviations (all accurate; stated plainly; in-code RECONSTRUCTION FIDELITY notes present):**
 
@@ -342,6 +343,39 @@ L5 is reconstructed 1:1 as **documentation** (NOT runtime-gated — see below).
   not-exercised UNPORTED... and proceed"), applied to all 9. The gate is unaffected
   (`UNPORTED` stays exactly 25); the 9 are linked and reconstructed 1:1 but never invoked
   by any `PORTED[]` wrapper.
+- **(i) Task A3 — the 4 leaves deviation (h) named are now reconstructed.** `record_min_
+  status_code` (945b) is a true register-entry fn (AX only — every one of its 6 call
+  sites does `MOV AX,val; CALL 0x945b` with no intervening instruction, confirmed via
+  disasm, no stack push). Reconstructed with a conventional `u16 status` PARAMETER
+  rather than a register-stand-in global: since every call site already stages the exact
+  value immediately before the call, the value received is bit-identical either way, and
+  the parameter form needs zero changes to the 6 already-reconstructed/validated callers
+  (`schedule_timer_callback_a/b/c`, `record_status_and_strobe_speaker`,
+  `tone_seq_callback_9631/96c4/95b5`). `snddrv_init_substep`'s carved-out callee
+  `maybe_opl2_detect_chip` (8fb6) conveys its OPL-chip-detected verdict via the ZERO FLAG
+  ONLY — its asm pops the saved AX/CX/DX (restoring the CALLER's original AX) AFTER the
+  `AND AH,AH` that sets ZF, so no register survives to carry the result to a
+  void-returning C stub. Modelled via a file-scope `snd_opl_detect_zf` (default
+  "not detected"), documented as immaterial: both branch targets are themselves
+  void carve-out stubs (`opl2_reset_all_regs`, 8eeb) with zero effect on any
+  SND_SNAP-tracked global. `timer_teardown_restore`'s guarded body (3 DOS INT 21h vector
+  get/set calls + the carved-out `pit_set_counter0`, 7f9a) is gated on `isr_installed_flag`
+  (0x54d4), which defaults 0 and is never set nonzero by ANY function this codebase
+  reconstructs (in-scope or out) — so that body is **provably dead** on every current
+  scenario/gate path; ported 1:1 from the raw disasm (register-entry AX/CX/DX inputs
+  modelled as file-scope globals, the `snd_mpu_byte_89e2` convention) for faithfulness +
+  the BUMPY.EXE link, using the project's established `int86x`/`union REGS`/`struct
+  SREGS` DOS-interrupt convention (config_screens.c/input.c/gfx_palette.c/video.c). 3
+  further out-of-scope carve-out leaves discovered and stubbed: `maybe_opl2_detect_chip`
+  (8fb6), `opl2_reset_all_regs` (8eeb — genuine OPL-driver register-init work, separate
+  from this task's MPU/init/timer/status-latch scope) and `pit_set_counter0` (7f9a —
+  also called by the unrelated, unreconstructed `uninstall_interrupt_handler`/
+  `pit_set_counter0_wrap`, a separate ISR-install subsystem). None of the 4 fns has a
+  trace record of its own (none is in `tools/sound_oracle.py`'s `FN_NAMES`/`L4_FNS`), so
+  — matching the deviation (h) precedent — no new `PORTED[]` entries were added for
+  them; `validate_sound` is unaffected (`PASS=4414 FAIL=0 UNPORTED=25
+  PORT_CHECKED=3752`, identical to the pre-task baseline) and `validate_int8` (the
+  end-to-end replay gate) still passes its full 150-frame replay unchanged.
 
 **Phase-6 validation method:** per-function differential with two comparators (the L1–L3
 **semantic-state** gate: seed entry SND_SNAP → call the reconstructed C fn → assert the
@@ -391,6 +425,23 @@ unchanged: `validate_sound` still FAIL=0 PORT_CHECKED=3752 UNPORTED=25 (the 9 ad
 new records — no oracle/`PORTED[]` changes). 3 further out-of-scope carve-out leaves
 (`seq_set_channel_param` 922c, `midi_emit_voice_msg_w3` 8e93, `opl_event_note_on` 8ea3)
 discovered and stubbed alongside them.
+
+**Closeout (Task A3 — MPU reset / init substep / timer teardown / status latch, see the
+fidelity-table row + deviation (i) above):** the 4 remaining stubbed sound-pipeline leaves
+— `mpu401_reset_to_uart` (8a75), `snddrv_init_substep` (8b2a, renamed from
+`FUN_1000_8b2a`), `timer_teardown_restore` (7fef, renamed from `FUN_1000_7fef`), and
+`record_min_status_code` (945b) — are now reconstructed 1:1. `mpu401_reset_to_uart` +
+`record_min_status_code` are oracle-inert transcriptions; `snddrv_init_substep`'s ZF-only
+carved-out branch and `timer_teardown_restore`'s `isr_installed_flag`-guarded DOS-vector
+body are behavior-faithful but provably unreached by every current scenario. Gate
+unchanged: `validate_sound` still PASS=4414 FAIL=0 UNPORTED=25 PORT_CHECKED=3752 (all 4
+wired into already-validated call sites with zero effect); `validate_int8` (the
+end-to-end replay gate) still passes its full 150-frame replay unchanged. 3 further
+out-of-scope carve-out leaves (`maybe_opl2_detect_chip` 8fb6, `opl2_reset_all_regs`
+8eeb, `pit_set_counter0` 7f9a) discovered and stubbed alongside them. The sound-**effect**
+pipeline now has zero remaining stub gaps of its own; only the genuinely separate MIDI
+engine + the 2 newly-discovered OPL2-init leaves + the unrelated ISR-install subsystem
+(`uninstall_interrupt_handler`/`pit_set_counter0_wrap`) remain out of scope.
 
 **Deferred from Phase 6:** the sound-**effect** pipeline (dispatch + device + tone-engine +
 hardware drivers + ISR sequencer + the now-closed-out MIDI dispatch backends) is
