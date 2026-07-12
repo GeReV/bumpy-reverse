@@ -199,10 +199,26 @@ Entry/thunk no-ops in `1000`: `process_sprites` (`93d8`), `set_sprite_table_ptr`
 
 These run in the original but are no-ops even in the playable. Decompilable unless noted.
 
-**Sound L4/L6 driver backend** (reached by the ported sound pipeline):
-`snddrv_dispatch_b_mode0/1/4` (`91cf/8e48/8af6`), `…c…` (`91d7/8e50/8b04`), `…d…`
-(`91df/8e58/8b0d`), `snddrv_init_substep` (`8b2a`), `mpu401_reset_to_uart` (`8a75`),
-`timer_teardown_restore` (`7fef`), `record_min_status_code` (`945b`). → reconstruct 1:1.
+**MIDI-engine event handlers + MPU/OPL init leaves — RESOLVED, RECONSTRUCTED (audio-subsystem
+branch, Phases A-E).** `snddrv_dispatch_b_mode0/1/4` (`91cf/8e48/8af6`), `…c…`
+(`91d7/8e50/8b04`), `…d…` (`91df/8e58/8b0d`) were mislabeled here as a **"Sound L4/L6 driver
+backend"** — they are NOT PC-speaker/MPU hardware-driver backends. Raw-asm + xref analysis
+(Ghidra `get_xrefs_to`) proved they are the **MIDI sequencer's own event handlers**:
+register-entry (DS:SI live MIDI-track byte cursor, AL the MIDI event status byte,
+CS:[BX+0x80] the per-track default channel), with their **only** real caller being
+`midi_process_event` (itself reconstructed in `src/midi.c`, Task E2). `snddrv_init_substep`
+(`8b2a`), `mpu401_reset_to_uart` (`8a75`), `timer_teardown_restore` (`7fef`), and
+`record_min_status_code` (`945b`) are the sound-**effect** pipeline's own remaining L4/init
+leaves (unrelated to the MIDI-handler mislabel above) — reconstructed 1:1 in `src/sound.c`
+(Task A3). All 9 MIDI handlers + these 4 leaves are now reconstructed and linked (no longer
+`game_stubs.c` carve-outs): the MIDI handlers are behavior-faithful but not
+oracle-exercised (no captured SI/AL/BX register state exists to replay — the sound oracle
+only hooks stack-arg ABIs); the 4 sound-pipeline leaves are either oracle-inert
+transcriptions or behavior-faithful bodies whose guarded paths are provably unreached on
+every current scenario. Full reasoning + gate numbers:
+`docs/reconstruction-fidelity.md`'s Phase-6 sound-subsystem audit (fidelity-table rows
+"MIDI dispatch backends" / "MPU reset / init substep / timer teardown / status latch",
+deviations (h)/(i)) and the Phase-6 status section's task closeouts.
 
 **Player handler-table targets outside the level-1 slice** (used on other game modes):
 `move_walk_right_anim_step` (`2423`), `enter_mode_0b_jump_start` (`2470`),
@@ -276,7 +292,10 @@ reconstructed — not part of this.)
 4. **graphics-overlay text/font (§1 text group + §4 glyph no-ops)** — menu/highscore/HUD text.
 5. **Title/menu pacing (§4: `play_intro_animation_loop`, `wait_50_frames`)** — fixes the
    black-gap/“extra input”/jitter pacing.
-6. **Sound L4/L6 backend (§3)** — audio fidelity.
+6. ~~**MIDI-engine handlers + sound init/L4 leaves (§3)** — audio fidelity.~~ **DONE**
+   (audio-subsystem branch, Phases A-E: the full effect-tone engine + MIDI/SMF engine are
+   reconstructed and validated — see §3 above + `docs/reconstruction-fidelity.md`'s Phase-6
+   sound-subsystem audit).
 7. **Player out-of-scope handlers (§3)** — full game-mode coverage beyond the level-1 slice.
 8. **Hardware-init un-merge (§5)** — `init_display_*`/CRTC to 1:1 where decompilable.
 9. **Borland CRT (§6)** — only if documenting the runtime is in scope (else keep documented

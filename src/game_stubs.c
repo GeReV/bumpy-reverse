@@ -21,9 +21,15 @@
  *   - RENDER-CORE LEAVES — view/sprite/palette present leaves not reconstructed
  *     (init_sprite_structs, init_fullscreen_view_desc, setup_fullscreen_view,
  *     apply_level_palette, show_text_screen, show_pause_screen).
- *   - OUT-OF-SCOPE LEAVES — sound L4/L6 device drivers + player handler-table
- *     targets + the P2 indirect-call backend that the reconstructed bodies
- *     reference but that lie outside any validated slice (each cited below).
+ *   - OUT-OF-SCOPE LEAVES — the entity sweep (sweep_active_entities, reached from
+ *     play_contact_sound) + a PIT hardware counter-init leaf (pit_set_counter0 —
+ *     called from sound.c's timer_teardown_restore and the unrelated, unreconstructed
+ *     ISR-install subsystem) + player handler-table targets + the P2 indirect-call
+ *     backend that the reconstructed bodies reference but that lie outside any
+ *     validated slice (each cited below).  The sound L4/L6 device drivers + the 9
+ *     MIDI dispatch backends formerly carved out here are NOW RECONSTRUCTED in
+ *     sound.c / midi.c (audio-subsystem branch, Phases A-E) — no longer stubbed in
+ *     this file.
  *
  * Bodies are no-ops (void) or a benign default (0).  Where a return value steers
  * control flow the chosen default is noted.  These stubs make BUMPY.EXE LINK; the
