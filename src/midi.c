@@ -330,10 +330,18 @@ void emit_midi_voice_message(void)
 
         dl = (u8)(al + 0x20);                            /* reg 0x20+slot: AM/VIB/EG/KSR/mult, operator 1 */
         dh = (u8)(p[3] & 0xf);
-        if (p[0xb] != 0) dh = (u8)(dh | 0x80);
-        if (p[0xc] != 0) dh = (u8)(dh | 0x40);
-        if (p[7]  != 0) dh = (u8)(dh | 0x20);
-        if (p[0xd] != 0) dh = (u8)(dh | 0x10);
+        if (p[0xb] != 0) {
+            dh = (u8)(dh | 0x80);
+        }
+        if (p[0xc] != 0) {
+            dh = (u8)(dh | 0x40);
+        }
+        if (p[7]  != 0) {
+            dh = (u8)(dh | 0x20);
+        }
+        if (p[0xd] != 0) {
+            dh = (u8)(dh | 0x10);
+        }
         opl_write_reg(dl, dh);
 
         dl = (u8)(al + 0x43);                            /* reg 0x43+slot: level/KSL, operator 2 */
@@ -356,10 +364,18 @@ void emit_midi_voice_message(void)
 
         dl = (u8)(al + 0x23);                            /* reg 0x23+slot: AM/VIB/EG/KSR/mult, operator 2 */
         dh = (u8)(p[0x10] & 0xf);
-        if (p[0x18] != 0) dh = (u8)(dh | 0x80);
-        if (p[0x19] != 0) dh = (u8)(dh | 0x40);
-        if (p[0x14] != 0) dh = (u8)(dh | 0x20);
-        if (p[0x1a] != 0) dh = (u8)(dh | 0x10);
+        if (p[0x18] != 0) {
+            dh = (u8)(dh | 0x80);
+        }
+        if (p[0x19] != 0) {
+            dh = (u8)(dh | 0x40);
+        }
+        if (p[0x14] != 0) {
+            dh = (u8)(dh | 0x20);
+        }
+        if (p[0x1a] != 0) {
+            dh = (u8)(dh | 0x10);
+        }
         opl_write_reg(dl, dh);
 
         dl = (u8)(al + 0xe0);                            /* reg 0xE0+slot: waveform, operator 1 */
@@ -394,10 +410,18 @@ void emit_midi_voice_message(void)
 
         dl = (u8)(al + 0x20);                            /* reg 0x21: AM/VIB/EG/KSR/mult */
         dh = (u8)(p[3] & 0xf);
-        if (p[0xb] != 0) dh = (u8)(dh | 0x80);
-        if (p[0xc] != 0) dh = (u8)(dh | 0x40);
-        if (p[7]  != 0) dh = (u8)(dh | 0x20);
-        if (p[0xd] != 0) dh = (u8)(dh | 0x10);
+        if (p[0xb] != 0) {
+            dh = (u8)(dh | 0x80);
+        }
+        if (p[0xc] != 0) {
+            dh = (u8)(dh | 0x40);
+        }
+        if (p[7]  != 0) {
+            dh = (u8)(dh | 0x20);
+        }
+        if (p[0xd] != 0) {
+            dh = (u8)(dh | 0x10);
+        }
         opl_write_reg(dl, dh);
     }
 }
@@ -742,27 +766,41 @@ int midi_parse_file(void)
     u16 cx, idx;
     u16 off_before, off_after;
 
-    if (midi_rd16_raw(snd_seq_cursor) != 0x544d) return 0;         /* 8809 "MT" */
+    if (midi_rd16_raw(snd_seq_cursor) != 0x544d) {                  /* 8809 "MT" */
+        return 0;
+    }
     snd_seq_cursor += 2;
-    if (midi_rd16_raw(snd_seq_cursor) != 0x6468) return 0;         /* 8814 "hd" */
+    if (midi_rd16_raw(snd_seq_cursor) != 0x6468) {                  /* 8814 "hd" */
+        return 0;
+    }
     snd_seq_cursor += 2;
-    if (midi_rd16_raw(snd_seq_cursor) != 0x0000) return 0;         /* 881f length hi word == 0 */
+    if (midi_rd16_raw(snd_seq_cursor) != 0x0000) {                  /* 881f length hi word == 0 */
+        return 0;
+    }
     snd_seq_cursor += 2;
-    if (midi_rd16_raw(snd_seq_cursor) != 0x0600) return 0;         /* 8829 length lo word == 6 (raw, per asm) */
+    if (midi_rd16_raw(snd_seq_cursor) != 0x0600) {                  /* 8829 length lo word == 6 (raw, per asm) */
+        return 0;
+    }
     snd_seq_cursor += 2;
 
     fmt_raw = midi_rd16_raw(snd_seq_cursor);
-    if (fmt_raw == 0x0200) return 0;                                /* 8831/8835 reject format==2 (checked pre-swap) */
+    if (fmt_raw == 0x0200) {                                        /* 8831/8835 reject format==2 (checked pre-swap) */
+        return 0;
+    }
     snd_seq_cursor += 2;                                             /* 8837 — format value itself never read/stored */
 
     track_count = midi_bswap16(midi_rd16_raw(snd_seq_cursor));       /* 8839/883a LODSW; XCHG AL,AH */
     snd_seq_cursor += 2;
-    if (track_count == 0 || track_count > 0x10) return 0;             /* 883c..8844 */
+    if (track_count == 0 || track_count > 0x10) {                    /* 883c..8844 */
+        return 0;
+    }
     midi_track_count = (s16)track_count;                                /* 8846 */
 
     division = midi_bswap16(midi_rd16_raw(snd_seq_cursor));             /* 884a/884b */
     snd_seq_cursor += 2;
-    if ((division & 0x8000) != 0) return 0;                              /* 884d/8850 reject SMPTE division */
+    if ((division & 0x8000) != 0) {                                   /* 884d/8850 reject SMPTE division */
+        return 0;
+    }
     midi_division = division;                                             /* 8852 */
 
     cx  = track_count;                                                     /* 8856 MOV CX,... */
@@ -771,14 +809,20 @@ int midi_parse_file(void)
     for (;;) {
         seq_normalize_far_ptr();                                             /* 885e CALL 8a23 */
 
-        if (midi_rd16_raw(snd_seq_cursor) != 0x544d) return 0;                /* 8861/8862 "MT" */
+        if (midi_rd16_raw(snd_seq_cursor) != 0x544d) {                        /* 8861/8862 "MT" */
+            return 0;
+        }
         snd_seq_cursor += 2;
-        if (midi_rd16_raw(snd_seq_cursor) != 0x6b72) return 0;                 /* 8867/8868 "rk" */
+        if (midi_rd16_raw(snd_seq_cursor) != 0x6b72) {                         /* 8867/8868 "rk" */
+            return 0;
+        }
         snd_seq_cursor += 2;
 
         len_hi = midi_rd16_raw(snd_seq_cursor);                                 /* 886d */
         snd_seq_cursor += 2;
-        if (len_hi != 0) return 0;                                               /* 886e/8871 */
+        if (len_hi != 0) {                                                       /* 886e/8871 */
+            return 0;
+        }
 
         len_lo = midi_rd16_raw(snd_seq_cursor);                                   /* 8873 (raw, pre-swap) */
         snd_seq_cursor += 2;
@@ -790,7 +834,9 @@ int midi_parse_file(void)
         track_len  = midi_bswap16(len_lo);                                           /* 887e XCHG AL,AH */
         off_before = FP_OFF(snd_seq_cursor);
         off_after  = (u16)(off_before + track_len);
-        if (off_after < off_before) return 0;                                         /* 8882 JC — 16-bit offset overflow */
+        if (off_after < off_before) {                                                 /* 8882 JC — 16-bit offset overflow */
+            return 0;
+        }
         snd_seq_cursor += track_len;                                                   /* 8880 ADD SI,AX */
 
         cx--;                                                                           /* 8884 LOOP's own decrement */
