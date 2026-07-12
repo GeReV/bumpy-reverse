@@ -15,14 +15,16 @@ Extraction scripts live in `tools/extract/`.
 | `.BUM` | yes (`D1..D9`) | Level objects/masks (vector stream) | **big** | [BUM.md](BUM.md) |
 | `.BIN` | no | Sprite/image bank (offset directory) | **big** | [BIN.md](BIN.md) |
 | `.CAR` | no | Bitmap font ("caractères") | **big** | [CAR.md](CAR.md) |
-| `.BNK` | no | **Standard AdLib OPL2 instrument bank** (`ADLIB-` signature, little-endian) | little | — |
-| `.MID` | no | **Standard MIDI** (format 1, 7 trk, 192 tpqn) | — | use any SMF tool |
+| `.BNK` | no | **Standard AdLib OPL2 instrument bank** (`ADLIB-` signature, little-endian) | little | [BNK.md](BNK.md) |
+| `.MID` | no | **Standard MIDI** (format 1, 7 trk, 192 tpqn) | — | [MID.md](MID.md) |
 
 `.VEC/.PAV/.DEC/.BUM` are the **same container** (below), all consumed by the same
 interpreter (`vec_run`, overlay segment `1c28`). `.BNK` is the published AdLib Inc.
-instrument-bank format readable by AdPlug/adplug and other OPL2 tools — no custom
-doc is required; use existing tooling. `.MID` is a standard MIDI file; play or
-convert with timidity, fluidsynth, or any SMF tool.
+instrument-bank format readable by AdPlug/adplug and other OPL2 tools (see
+[BNK.md](BNK.md) for the header/name-index layout and the `rol0NN` instrument
+naming). `.MID` is a standard MIDI file — play or convert with timidity,
+fluidsynth, or any SMF tool; see [MID.md](MID.md) for the track layout and how the
+engine's MIDI sequencer consumes it.
 
 ## The shared container (VEC/PAV/DEC/BUM)
 
