@@ -58,23 +58,26 @@ void host_animb_capture(u16 voff, u16 cols, u16 rows, u16 stride);
 #define DG_POSB_X_BASE 0x03f4u  /* posB X: dg[0x3f4 + cell*4] */
 #define DG_POSB_Y_BASE 0x03f6u  /* posB Y */
 
-/* p1_sprite obj field offsets (bytes within the 0x18-byte struct) */
-#define OBJ_X         0x00u     /* s16 pixel X */
-#define OBJ_Y         0x02u     /* s16 pixel Y */
-#define OBJ_FRAME_IDX 0x04u     /* u16 frame index */
-#define OBJ_FTBL_OFF  0x06u     /* u16 frametable far ptr: offset half */
-#define OBJ_FTBL_SEG  0x08u     /* u16 frametable far ptr: segment half */
-#define OBJ_FLAGS     0x0au     /* u8 flags: 0x80=visible 0x20=hflip 0x01=align */
-
+/* p1_sprite/p2_sprite obj field layout: see sprite_obj_t (entity.h). */
 #define OBJ_VISIBLE   0x80u     /* flags bit: visible */
 
 /* P1 hidden-sentinel: move_anim == 100 → player hidden, skip draw */
 #define P1_HIDDEN_SENTINEL  100u
 
 /* Size of the sprite object work buffer.  sprite_prepare_frame writes up to
-   obj+0x2c (count + 3 sub-header entries * 6 bytes starting at obj+0x1a);
-   use 0x40 to match the work buffer size in anim_ctest.c. */
+   obj+0x2c (sizeof(sprite_obj_t) exactly — count + 3 sub-header entries * 6
+   bytes starting at obj+0x1a); use 0x40 to match the work buffer size in
+   anim_ctest.c. */
 #define OBJ_SIZE      0x40u
+
+/* entity.c's per-call sprite-object work buffer: a sprite_obj_t overlaid on a
+   flat OBJ_SIZE byte buffer, so entity_blit_object's byte-blob pipeline
+   (sprite_prepare_frame / sprite_blit_build_desc, which address it generically
+   as u8 __far *) is unaffected while callers here get named field access. */
+typedef union {
+    sprite_obj_t s;
+    u8 raw[OBJ_SIZE];
+} entity_obj_t;
 
 /* PLANE_SIZE must match sprite_blit.c's PLANE_SIZE / HOST_PLANE_SIZE (HOST_FB_16K). */
 #ifdef HOST_FB_16K
@@ -307,10 +310,14 @@ static u16 dg_rd16(const u8 __far *dg, u16 off)
     return (u16)((u16)dg[off] | ((u16)dg[off + 1u] << 8));
 }
 
-static void ent_wr16(u8 *obj, u16 off, u16 val)
+/* Seed obj's frametable far ptr (ftbl_off/ftbl_seg) from the engine's sprite
+   obj struct captured in the dg snapshot at DGROUP offset dg_obj_base (0x792e
+   for p1_sprite, 0x795a for p2_sprite). */
+static void seed_ftbl(entity_obj_t *obj, const u8 __far *dg, u16 dg_obj_base)
 {
-    obj[off]      = (u8)val;
-    obj[off + 1u] = (u8)(val >> 8);
+    const sprite_obj_t __far *src = (const sprite_obj_t __far *)(dg + dg_obj_base);
+    obj->s.ftbl_off = src->ftbl_off;
+    obj->s.ftbl_seg = src->ftbl_seg;
 }
 
 /* -----------------------------------------------------------------------
@@ -330,6 +337,7 @@ static void entity_blit_object(u8 __huge *planes, u8 *obj,
                                 const sprite_view *view)
 {
     u8  desc[0x18];
+    const blit_desc_t *bd = (const blit_desc_t *)desc;   /* see sprite_chain.h */
     u16 voff;
     u16 dst_stride;
     u16 full_w;
@@ -351,20 +359,18 @@ static void entity_blit_object(u8 __huge *planes, u8 *obj,
     /* Stage 3: sprite_blit_planar_vga
        Unpack descriptor fields per chain_ctest.c / blit_ctest.c. */
     {
-        u32 dlin = (u32)dg_rd16((const u8 __far *)desc, 0x0au) * 16u
-                 + (u32)dg_rd16((const u8 __far *)desc, 0x08u);
+        u32 dlin = (u32)bd->dst_seg * 16u + (u32)bd->dst_off;
         voff = (u16)(dlin - 0xA0000UL);
     }
-    dst_stride = (u16)((u16)desc[0x0eu] | ((u16)desc[0x0fu] << 8));
-    full_w     = (u16)((u16)desc[0x0cu] | ((u16)desc[0x0du] << 8));
-    cols       = (u16)((u16)desc[0x10u] | ((u16)desc[0x11u] << 8));
-    rows       = (u16)((u16)desc[0x12u] | ((u16)desc[0x13u] << 8));
-    shift      = desc[0x16u];
-    clip_flags = desc[0x17u];
+    dst_stride = bd->dst_stride;
+    full_w     = bd->full_w;
+    cols       = bd->cols;
+    rows       = bd->rows;
+    shift      = bd->shift;
+    clip_flags = bd->clip_flags;
 
     {
-        u32 src_lin = (u32)((u16)desc[2] | ((u16)desc[3] << 8)) * 16u
-                    + (u32)((u16)desc[0] | ((u16)desc[1] << 8));
+        u32 src_lin = (u32)bd->src_seg * 16u + (u32)bd->src_off;
         const u8 __far *src = (const u8 __far *)(bank + (src_lin - bank_base_lin));
 #ifdef BUMPY_PLAYABLE
         /* Faithful layer-B masked erase (task B): save the untouched footprint bg-under
@@ -386,7 +392,7 @@ void entity_draw_layer_c(u8 __huge *planes, const u8 __far *bum,
                          const u8 __far *dg, u8 __huge *bank,
                          u32 bank_base_lin, const sprite_view *view)
 {
-    u8  obj[OBJ_SIZE];
+    entity_obj_t obj;
     u16 row;
     u16 col;
 
@@ -396,17 +402,12 @@ void entity_draw_layer_c(u8 __huge *planes, const u8 __far *bum,
             u8  cv;
 
             /* Zero the work buffer each iteration. */
-            memset(obj, 0, sizeof(obj));
+            memset(&obj, 0, sizeof(obj));
 
-            /* Seed obj[6..9] (frametable far ptr) from the captured p1_sprite obj in dg.
+            /* Seed the frametable far ptr from the captured p1_sprite obj in dg.
                This is constant across all cells — set at level init.  Re-seeded after
-               each memset since the zero wipes bytes 6..9. */
-            {
-                u16 ftbl_off = dg_rd16(dg, (u16)(DG_P1_OBJ + OBJ_FTBL_OFF));
-                u16 ftbl_seg = dg_rd16(dg, (u16)(DG_P1_OBJ + OBJ_FTBL_SEG));
-                ent_wr16(obj, OBJ_FTBL_OFF, ftbl_off);
-                ent_wr16(obj, OBJ_FTBL_SEG, ftbl_seg);
-            }
+               each memset since the zero wipes it. */
+            seed_ftbl(&obj, dg, DG_P1_OBJ);
 
             cv = bum[0x60u + cell];
 
@@ -415,12 +416,12 @@ void entity_draw_layer_c(u8 __huge *planes, const u8 __far *bum,
             }
 
             /* Build sprite object: write X, Y, frame, flags. */
-            ent_wr16(obj, OBJ_X,         dg_rd16(dg, (u16)(DG_POSC_BASE + cell * 4u)));
-            ent_wr16(obj, OBJ_Y,         dg_rd16(dg, (u16)(DG_POSC_BASE + cell * 4u + 2u)));
-            ent_wr16(obj, OBJ_FRAME_IDX, (u16)(cv + 0x179u));
-            obj[OBJ_FLAGS] = OBJ_VISIBLE;
+            obj.s.x     = (s16)dg_rd16(dg, (u16)(DG_POSC_BASE + cell * 4u));
+            obj.s.y     = (s16)dg_rd16(dg, (u16)(DG_POSC_BASE + cell * 4u + 2u));
+            obj.s.frame = (u16)(cv + 0x179u);
+            obj.s.flags = OBJ_VISIBLE;
 
-            entity_blit_object(planes, obj, bank, bank_base_lin, view);
+            entity_blit_object(planes, obj.raw, bank, bank_base_lin, view);
         }
     }
 }
@@ -436,35 +437,30 @@ void entity_draw_p1(u8 __huge *planes, const u8 __far *dg,
                     u8 __huge *bank, u32 bank_base_lin,
                     const sprite_view *view)
 {
-    u8  obj[OBJ_SIZE];
+    entity_obj_t obj;
 
     /* draw_p1_sprite (1000:1cb2): if p1_move_anim == 100, return (hidden). */
     if (move_anim == P1_HIDDEN_SENTINEL) {
         return;
     }
 
-    memset(obj, 0, sizeof(obj));
+    memset(&obj, 0, sizeof(obj));
 
     /* Seed frametable far ptr from engine's p1_sprite obj at DGROUP:0x792e[+6..9].
        This mirrors the engine where the frametable ptr is set at level init and
        reused by every draw_p1_sprite call. */
-    {
-        u16 ftbl_off = dg_rd16(dg, (u16)(DG_P1_OBJ + OBJ_FTBL_OFF));
-        u16 ftbl_seg = dg_rd16(dg, (u16)(DG_P1_OBJ + OBJ_FTBL_SEG));
-        ent_wr16(obj, OBJ_FTBL_OFF, ftbl_off);
-        ent_wr16(obj, OBJ_FTBL_SEG, ftbl_seg);
-    }
+    seed_ftbl(&obj, dg, DG_P1_OBJ);
 
     /* draw_p1_sprite field writes:
-         *puVar1 = p1_pixel_x;           obj[+0] = pixel X
-         sprite_fields[1] = p1_pixel_y;  obj[+2] = pixel Y
-         sprite_fields[2] = p1_move_anim; obj[+4] = frame index */
-    ent_wr16(obj, OBJ_X,         pixel_x);
-    ent_wr16(obj, OBJ_Y,         pixel_y);
-    ent_wr16(obj, OBJ_FRAME_IDX, move_anim);
-    obj[OBJ_FLAGS] = OBJ_VISIBLE;
+         *puVar1 = p1_pixel_x;           obj.x = pixel X
+         sprite_fields[1] = p1_pixel_y;  obj.y = pixel Y
+         sprite_fields[2] = p1_move_anim; obj.frame = frame index */
+    obj.s.x     = (s16)pixel_x;
+    obj.s.y     = (s16)pixel_y;
+    obj.s.frame = move_anim;
+    obj.s.flags = OBJ_VISIBLE;
 
-    entity_blit_object(planes, obj, bank, bank_base_lin, view);
+    entity_blit_object(planes, obj.raw, bank, bank_base_lin, view);
 }
 
 #ifdef BUMPY_PLAYABLE
@@ -481,16 +477,16 @@ void entity_draw_screen_sprite(u8 __huge *planes, u16 pixel_x, u16 pixel_y, u16 
                                u8 __huge *bank, u32 bank_base_lin,
                                const sprite_view *view)
 {
-    u8 obj[OBJ_SIZE];
+    entity_obj_t obj;
 
-    memset(obj, 0, sizeof(obj));
-    ent_wr16(obj, OBJ_FTBL_OFF, ftbl_off);
-    ent_wr16(obj, OBJ_FTBL_SEG, ftbl_seg);
-    ent_wr16(obj, OBJ_X,         pixel_x);
-    ent_wr16(obj, OBJ_Y,         pixel_y);
-    ent_wr16(obj, OBJ_FRAME_IDX, frame);
-    obj[OBJ_FLAGS] = OBJ_VISIBLE;
-    entity_blit_object(planes, obj, bank, bank_base_lin, view);
+    memset(&obj, 0, sizeof(obj));
+    obj.s.ftbl_off = ftbl_off;
+    obj.s.ftbl_seg = ftbl_seg;
+    obj.s.x        = (s16)pixel_x;
+    obj.s.y        = (s16)pixel_y;
+    obj.s.frame    = frame;
+    obj.s.flags    = OBJ_VISIBLE;
+    entity_blit_object(planes, obj.raw, bank, bank_base_lin, view);
 }
 #endif /* BUMPY_PLAYABLE */
 
@@ -549,7 +545,7 @@ void entity_draw_layer_a(u8 __huge *planes, const u8 __far *bum,
                          const u8 __far *dg, u8 __huge *bank,
                          u32 bank_base_lin, const sprite_view *view)
 {
-    u8  obj[OBJ_SIZE];
+    entity_obj_t obj;
     u16 row;
     u16 col;
 
@@ -595,27 +591,22 @@ void entity_draw_layer_a(u8 __huge *planes, const u8 __far *bum,
                  sprite_prepare_frame → sprite_blit_build_desc → sprite_blit_planar_vga
                This is the ONLY step that writes visible entity pixels.
                ------------------------------------------------------- */
-            memset(obj, 0, sizeof(obj));
+            memset(&obj, 0, sizeof(obj));
 
             /* Seed frametable far ptr from engine's p1_sprite obj (same obj used
                for layer A as for layer C and P1). */
-            {
-                u16 ftbl_off = dg_rd16(dg, (u16)(DG_P1_OBJ + OBJ_FTBL_OFF));
-                u16 ftbl_seg = dg_rd16(dg, (u16)(DG_P1_OBJ + OBJ_FTBL_SEG));
-                ent_wr16(obj, OBJ_FTBL_OFF, ftbl_off);
-                ent_wr16(obj, OBJ_FTBL_SEG, ftbl_seg);
-            }
+            seed_ftbl(&obj, dg, DG_P1_OBJ);
 
             /* posA position from dg (draw_anim_channels_a: 0xf4/0xf6 tables). */
             pos_x = dg_rd16(dg, (u16)(DG_POSA_X_BASE + cell * 4u));
             pos_y = dg_rd16(dg, (u16)(DG_POSA_Y_BASE + cell * 4u));
 
-            ent_wr16(obj, OBJ_X,         pos_x);
-            ent_wr16(obj, OBJ_Y,         (u16)((s16)pos_y + yoff));
-            ent_wr16(obj, OBJ_FRAME_IDX, frame);
-            obj[OBJ_FLAGS] = OBJ_VISIBLE;
+            obj.s.x     = (s16)pos_x;
+            obj.s.y     = (s16)((s16)pos_y + yoff);
+            obj.s.frame = frame;
+            obj.s.flags = OBJ_VISIBLE;
 
-            entity_blit_object(planes, obj, bank, bank_base_lin, view);
+            entity_blit_object(planes, obj.raw, bank, bank_base_lin, view);
 
             /* -------------------------------------------------------
                STEP 3: SAVE-UNDER — render_player_view (1000:93b8 → 1ab9:1028)
@@ -670,7 +661,7 @@ void entity_draw_layer_b(u8 __huge *planes, const u8 __far *bum,
                          const u8 __far *dg, u8 __huge *bank,
                          u32 bank_base_lin, const sprite_view *view)
 {
-    u8  obj[OBJ_SIZE];
+    entity_obj_t obj;
     u16 row;
     u16 col;
 
@@ -716,27 +707,22 @@ void entity_draw_layer_b(u8 __huge *planes, const u8 __far *bum,
             /* -------------------------------------------------------
                STEP 2: BLIT SPRITE — entity_blit_object (= blit_sprite)
                ------------------------------------------------------- */
-            memset(obj, 0, sizeof(obj));
+            memset(&obj, 0, sizeof(obj));
 
             /* Seed frametable far ptr from p1_sprite obj (same obj for all layers). */
-            {
-                u16 ftbl_off = dg_rd16(dg, (u16)(DG_P1_OBJ + OBJ_FTBL_OFF));
-                u16 ftbl_seg = dg_rd16(dg, (u16)(DG_P1_OBJ + OBJ_FTBL_SEG));
-                ent_wr16(obj, OBJ_FTBL_OFF, ftbl_off);
-                ent_wr16(obj, OBJ_FTBL_SEG, ftbl_seg);
-            }
+            seed_ftbl(&obj, dg, DG_P1_OBJ);
 
             /* posB position from dg (draw_anim_channels_b: 0x3f4/0x3f6 tables). */
             pos_x = dg_rd16(dg, (u16)(DG_POSB_X_BASE + cell * 4u));
             pos_y = dg_rd16(dg, (u16)(DG_POSB_Y_BASE + cell * 4u));
 
             /* Layer-B frame bias: draw_anim_channels_b assigns frame + 0xf1. */
-            ent_wr16(obj, OBJ_X,         pos_x);
-            ent_wr16(obj, OBJ_Y,         (u16)((s16)pos_y + yoff));
-            ent_wr16(obj, OBJ_FRAME_IDX, (u16)(frame + LAYER_B_FRAME_BIAS));
-            obj[OBJ_FLAGS] = OBJ_VISIBLE;
+            obj.s.x     = (s16)pos_x;
+            obj.s.y     = (s16)((s16)pos_y + yoff);
+            obj.s.frame = (u16)(frame + LAYER_B_FRAME_BIAS);
+            obj.s.flags = OBJ_VISIBLE;
 
-            entity_blit_object(planes, obj, bank, bank_base_lin, view);
+            entity_blit_object(planes, obj.raw, bank, bank_base_lin, view);
 
             /* -------------------------------------------------------
                STEP 3: SAVE-UNDER — render_player_view (1000:93b8 → 1ab9:1028)
@@ -768,32 +754,27 @@ void entity_draw_p2(u8 __huge *planes, const u8 __far *dg,
                     u8 __huge *bank, u32 bank_base_lin,
                     const sprite_view *view)
 {
-    u8  obj[OBJ_SIZE];
+    entity_obj_t obj;
 
     /* draw_p2_sprite (1000:1cea): if p2_cell == -1, P2 absent — return. */
     if (p2_cell == (s8)(-1)) {
         return;
     }
 
-    memset(obj, 0, sizeof(obj));
+    memset(&obj, 0, sizeof(obj));
 
     /* Seed frametable far ptr from engine's p2_sprite obj at DGROUP:0x795a[+6..9].
        P2 uses its own sprite obj struct (distinct from p1_sprite at 0x792e). */
-    {
-        u16 ftbl_off = dg_rd16(dg, (u16)(DG_P2_OBJ + OBJ_FTBL_OFF));
-        u16 ftbl_seg = dg_rd16(dg, (u16)(DG_P2_OBJ + OBJ_FTBL_SEG));
-        ent_wr16(obj, OBJ_FTBL_OFF, ftbl_off);
-        ent_wr16(obj, OBJ_FTBL_SEG, ftbl_seg);
-    }
+    seed_ftbl(&obj, dg, DG_P2_OBJ);
 
     /* draw_p2_sprite field writes:
          *puVar1 = p2_pixel_x;
          sprite_fields[1] = p2_pixel_y;
          sprite_fields[2] = p2_frame_base + p2_move_anim; */
-    ent_wr16(obj, OBJ_X,         pixel_x);
-    ent_wr16(obj, OBJ_Y,         pixel_y);
-    ent_wr16(obj, OBJ_FRAME_IDX, (u16)(frame_base + move_anim));
-    obj[OBJ_FLAGS] = OBJ_VISIBLE;
+    obj.s.x     = (s16)pixel_x;
+    obj.s.y     = (s16)pixel_y;
+    obj.s.frame = (u16)(frame_base + move_anim);
+    obj.s.flags = OBJ_VISIBLE;
 
-    entity_blit_object(planes, obj, bank, bank_base_lin, view);
+    entity_blit_object(planes, obj.raw, bank, bank_base_lin, view);
 }

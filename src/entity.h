@@ -4,6 +4,32 @@
 #include "bumpy.h"
 #include "sprite_chain.h"   /* sprite_view */
 
+/* sprite_obj_t — the engine's sprite-object record (p1_sprite @ DGROUP:0x792e,
+   p2_sprite @ 0x795a, and a third HUD instance @ 0x7986 — same 0x2c-byte shape
+   reused at three DGROUP bases 0x2c apart).  Populated in two stages: the
+   caller (entity_draw_*) sets x/y/frame/ftbl_off/ftbl_seg/flags, then
+   sprite_prepare_frame (sprite_anim.c) resolves the frame table and fills the
+   rest from the sprite bank.  Confirmed field-by-field from real writes in
+   entity.c, level.c, view_setup.c, and sprite_anim.c's prepare_sprite_frames. */
+typedef struct {
+    s16 x;             /* +0x00 pixel X */
+    s16 y;             /* +0x02 pixel Y */
+    u16 frame;         /* +0x04 frame index (move_anim on P1/P2) */
+    u16 ftbl_off;      /* +0x06 frame-table far ptr: offset half */
+    u16 ftbl_seg;      /* +0x08 frame-table far ptr: segment half */
+    u8  flags;         /* +0x0a 0x80=visible 0x20=h-flip 0x01=align-to-8 */
+    u8  ctrl;          /* +0x0b frame control byte (sprite_prepare_frame) */
+    u16 pf_off;        /* +0x0c prepared-frame far ptr: offset half */
+    u16 pf_seg;        /* +0x0e prepared-frame far ptr: segment half */
+    u16 width;         /* +0x10 width in words */
+    u16 height;        /* +0x12 height (rows) */
+    s16 anchor_x;      /* +0x14 X anchor */
+    s16 anchor_y;      /* +0x16 Y anchor */
+    u16 subhdr_count;  /* +0x18 sub-header entry count (0..3, clamped) */
+    struct { u16 w0, w1, w2; } subhdr[3]; /* +0x1a..+0x2b, 3-word entries, backwards-walked */
+} sprite_obj_t;         /* 0x2c bytes of real content; entity.c allocates OBJ_SIZE (0x40)
+                            scratch headroom beyond that (see entity.c) */
+
 /* Faithful C ports of the entity draw functions from spawn_and_draw_level_entities
    (1000:2a78), draw_p1_sprite (1000:1cb2) / draw_p2_sprite (1000:1cea), and the
    anim-channel draw helpers draw_anim_channels_a (1000:165e) /

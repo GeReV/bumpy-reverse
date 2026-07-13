@@ -82,6 +82,34 @@
 /* ── L3 tone param frame (CODE 0x9788..0x979a) ──────────────────────────────── */
 u16 snd_param_frame[SND_PARAM_FRAME_WORDS];
 
+/* snd_tone_param_frame_t — named-field view of snd_param_frame, used identically
+   by the 3 schedulers (writers) and the tone_seq_callback_9631/96c4 ISRs
+   (readers) below.  The array itself stays a plain u16[SND_PARAM_FRAME_WORDS]
+   (tools/sound_ctest.c compares it generically by index against a captured
+   trace), so consumers overlay this struct locally via SND_PF rather than
+   changing the global's type.
+   NOTE: field [9] (marker) occupies the same CODE address (0x979a) as the
+   separate snd_isr_state_979a byte array's [0] byte — a real overlap in the
+   original engine's memory that this reconstruction models as two distinct
+   storage locations (see tone_seq_callback_96c4's comment); not modeled here. */
+typedef struct {
+    u16 lifetime_count;        /* [0] 0x9788 — retire when this hits 0 */
+    u16 pitch_reload;          /* [1] 0x978a — PIT ch2 pitch value */
+    u16 step_reload;           /* [2] 0x978c — reload source for step_current */
+    u16 pitch_increment;       /* [3] 0x978e — added to pitch_reload each lifetime tick */
+    u16 ch2_reload_current;    /* [4] 0x9790 — current PIT ch2 reload (re-armed via set_timer_slot_raw) */
+    u16 subsweep_reload;       /* [5] 0x9792 — reload source for subsweep_current */
+    u16 ch2_reload_increment;  /* [6] 0x9794 — added to ch2_reload_current each subsweep wrap */
+    u16 step_current;          /* [7] 0x9796 — decremented each tick; wrap -> lifetime tick */
+    u16 subsweep_current;      /* [8] 0x9798 — decremented each tick; wrap -> ch2 re-arm */
+    u16 marker;                /* [9] 0x979a — always seeded 0x0f; see the overlap note above */
+} snd_tone_param_frame_t;
+
+/* Overlay macro rather than a function: callers need an lvalue-capable view
+   (`SND_PF->field = x;`) of the plain array, matching the sprite_obj_t /
+   blit_desc_t overlay pattern used elsewhere in this codebase. */
+#define SND_PF ((snd_tone_param_frame_t *)snd_param_frame)
+
 /* installed far timer-callback pointer (CODE 0x97a1 off / 0x979f seg). */
 u16 snd_timer_cb_off;
 u16 snd_timer_cb_seg;
@@ -198,20 +226,23 @@ static u8 snd_sched_carry_in = 0;
  *  table holds 0x30 entries (effect ids 0x00-0x2f): entry 0 is the (0,0) silent slot,
  *  the rest are {note, 0x7f}.  0x2f is the highest id any caller uses (land_sound_tbl_*
  *  top out at 0x2f; direct calls at 0x2a/0x28/0x26).  Copied VERBATIM from the binary.
- *  Kept at [0x200] (effect_id is u8; the emit reads effect_id*2) so any id indexes a
- *  defined slot; bytes past 0x60 are the adjacent DGROUP object in the original, never
+ *  Kept at [0x100] entries (effect_id is u8, indexes directly) so any id indexes a
+ *  defined slot; entries past 0x30 are the adjacent DGROUP object in the original, never
  *  indexed by a real id, left zero here.
  *  RECONSTRUCTION FIDELITY: was a zeroed placeholder (the device-4 SFX path was not
  *  exercised by the validated semantic-state records) — that silenced EVERY MT-32 sound
  *  effect, because the emit then sent note-on velocity 0 = a silent note-off.  Now
  *  populated 1:1 from DGROUP 0x27ae so MT-32 SFX (e.g. the platform-bounce snare) sound. */
-static const u8 snd_opl_sample_table[0x200] = {   /* DGROUP 0x27ae (file 0x13bee) */
-    0x00,0x00,0x23,0x7f,0x41,0x7f,0x28,0x7f,0x26,0x7f,0x40,0x7f,0x3f,0x7f,0x3e,0x7f,
-    0x27,0x7f,0x54,0x7f,0x43,0x7f,0x47,0x7f,0x41,0x7f,0x4d,0x7f,0x3d,0x7f,0x29,0x7f,
-    0x2a,0x7f,0x5b,0x7f,0x2e,0x7f,0x25,0x7f,0x38,0x7f,0x4f,0x7f,0x28,0x7f,0x26,0x7f,
-    0x40,0x7f,0x3f,0x7f,0x3e,0x7f,0x46,0x7f,0x60,0x7f,0x44,0x7f,0x47,0x7f,0x31,0x7f,
-    0x38,0x7f,0x42,0x7f,0x3d,0x7f,0x29,0x7f,0x2c,0x7f,0x2e,0x7f,0x4e,0x7f,0x49,0x7f,
-    0x53,0x7f,0x55,0x7f,0x58,0x7f,0x62,0x7f,0x5a,0x7f,0x63,0x7f,0x63,0x7f,0x45,0x7f,
+typedef struct { u8 note; u8 vel; } snd_opl_sample_t;
+
+static const snd_opl_sample_t snd_opl_sample_table[0x100] = {   /* DGROUP 0x27ae (file 0x13bee) */
+    {0x00,0x00},{0x23,0x7f},{0x41,0x7f},{0x28,0x7f},{0x26,0x7f},{0x40,0x7f},{0x3f,0x7f},{0x3e,0x7f},
+    {0x27,0x7f},{0x54,0x7f},{0x43,0x7f},{0x47,0x7f},{0x41,0x7f},{0x4d,0x7f},{0x3d,0x7f},{0x29,0x7f},
+    {0x2a,0x7f},{0x5b,0x7f},{0x2e,0x7f},{0x25,0x7f},{0x38,0x7f},{0x4f,0x7f},{0x28,0x7f},{0x26,0x7f},
+    {0x40,0x7f},{0x3f,0x7f},{0x3e,0x7f},{0x46,0x7f},{0x60,0x7f},{0x44,0x7f},{0x47,0x7f},{0x31,0x7f},
+    {0x38,0x7f},{0x42,0x7f},{0x3d,0x7f},{0x29,0x7f},{0x2c,0x7f},{0x2e,0x7f},{0x4e,0x7f},{0x49,0x7f},
+    {0x53,0x7f},{0x55,0x7f},{0x58,0x7f},{0x62,0x7f},{0x5a,0x7f},{0x63,0x7f},{0x63,0x7f},{0x45,0x7f},
+    /* remaining entries (effect ids 0x30..0xff): zero-initialized (never indexed by a real id) */
 };
 
 /* ── play_sound (1000:6e11) — L1 entry guard ─────────────────────────────────────
@@ -240,8 +271,8 @@ void play_sound_effect(u8 effect_id)
     u16 uVar4;
 
     if (sound_device_state == 4) {
-        snd_emit_raw_sample(snd_opl_sample_table[(u16)effect_id * 2 + 0],
-                            snd_opl_sample_table[(u16)effect_id * 2 + 1]);
+        snd_emit_raw_sample(snd_opl_sample_table[effect_id].note,
+                            snd_opl_sample_table[effect_id].vel);
         return;
     }
     switch (effect_id) {
@@ -424,16 +455,16 @@ u16 schedule_timer_callback_a(u16 param_1, u16 param_2, u16 param_3, u16 param_4
                                         *  bit-OR); param_1 stands in for it (callee is PORTED) */
     ret_status = 0xffff;
     if (!in_CF) {
-        snd_param_frame[0] = param_2;   /* DAT_1000_9788 */
-        snd_param_frame[1] = param_3;   /* DAT_1000_978a */
-        snd_param_frame[7] = param_4;   /* DAT_1000_9796 */
-        snd_param_frame[2] = param_4;   /* DAT_1000_978c */
-        snd_param_frame[3] = param_5;   /* DAT_1000_978e */
-        snd_param_frame[4] = param_6;   /* DAT_1000_9790 */
-        snd_param_frame[5] = param_7;   /* DAT_1000_9792 */
-        snd_param_frame[8] = param_7;   /* DAT_1000_9798 */
-        snd_param_frame[6] = param_8;   /* DAT_1000_9794 */
-        snd_param_frame[9] = 0xf;       /* DAT_1000_979a (byte 0x0f) */
+        SND_PF->lifetime_count       = param_2;   /* DAT_1000_9788 */
+        SND_PF->pitch_reload         = param_3;   /* DAT_1000_978a */
+        SND_PF->step_current         = param_4;   /* DAT_1000_9796 */
+        SND_PF->step_reload          = param_4;   /* DAT_1000_978c */
+        SND_PF->pitch_increment      = param_5;   /* DAT_1000_978e */
+        SND_PF->ch2_reload_current   = param_6;   /* DAT_1000_9790 */
+        SND_PF->subsweep_reload      = param_7;   /* DAT_1000_9792 */
+        SND_PF->subsweep_current     = param_7;   /* DAT_1000_9798 */
+        SND_PF->ch2_reload_increment = param_8;   /* DAT_1000_9794 */
+        SND_PF->marker               = 0xf;       /* DAT_1000_979a (byte 0x0f) */
         snd_timer_cb_off = 0x9631;      /* timer_callback_off (CODE 0x97a1) */
         snd_timer_cb_seg = 0x1000;      /* timer_callback_seg (CODE 0x979f) */
         /* The decomp renders this tail as a void set_timer_slot_raw() call; the disassembly
@@ -461,13 +492,13 @@ u16 schedule_timer_callback_b(u16 param_1, u16 param_2, u16 param_3, u16 param_4
     record_min_status_code(param_1);    /* ORIGINAL: packed entry-FLAGS word (record_min_status_code is PORTED) */
     ret_status = 0xffff;
     if (!in_CF) {
-        snd_param_frame[0] = param_2;   /* DAT_1000_9788 */
-        snd_param_frame[1] = param_3;   /* DAT_1000_978a */
-        snd_param_frame[4] = param_4;   /* DAT_1000_9790 */
-        snd_param_frame[5] = param_5;   /* DAT_1000_9792 */
-        snd_param_frame[8] = param_5;   /* DAT_1000_9798 */
-        snd_param_frame[6] = param_6;   /* DAT_1000_9794 */
-        snd_param_frame[9] = 0xf;       /* DAT_1000_979a (byte 0x0f) */
+        SND_PF->lifetime_count       = param_2;   /* DAT_1000_9788 */
+        SND_PF->pitch_reload         = param_3;   /* DAT_1000_978a */
+        SND_PF->ch2_reload_current   = param_4;   /* DAT_1000_9790 */
+        SND_PF->subsweep_reload      = param_5;   /* DAT_1000_9792 */
+        SND_PF->subsweep_current     = param_5;   /* DAT_1000_9798 */
+        SND_PF->ch2_reload_increment = param_6;   /* DAT_1000_9794 */
+        SND_PF->marker               = 0xf;       /* DAT_1000_979a (byte 0x0f) */
         snd_timer_cb_off = 0x96c4;      /* timer_callback_off (CODE 0x97a1) */
         snd_timer_cb_seg = 0x1000;      /* timer_callback_seg (CODE 0x979f) */
         /* asm 1000:9557 MOV AX,[BP+0xa]=param_4; MOV BX,0x2; CALL 0x7df9 -> the writer
@@ -491,8 +522,8 @@ u16 schedule_timer_callback_c(u16 param_1, u16 param_2)
     record_min_status_code(param_1);    /* ORIGINAL: packed entry-FLAGS word (record_min_status_code is PORTED) */
     ret_status = 0xffff;
     if (!in_CF) {
-        snd_param_frame[9] = 0xf;       /* DAT_1000_979a (byte 0x0f) */
-        snd_param_frame[1] = param_2;   /* DAT_1000_978a */
+        SND_PF->marker       = 0xf;      /* DAT_1000_979a (byte 0x0f) */
+        SND_PF->pitch_reload = param_2;  /* DAT_1000_978a */
         snd_timer_cb_off = 0x95b5;      /* timer_callback_off (CODE 0x97a1) */
         snd_timer_cb_seg = 0x1000;      /* timer_callback_seg (CODE 0x979f) */
         /* asm 1000:959f MOV AX,[BP+0x8]; MOV BX,0x2; CALL 0x7df9.  [BP+0x8] is a THIRD
@@ -2278,31 +2309,31 @@ void tone_seq_callback_9631(void)
     if (sound_mode != 0) {              /* call 0x9439; jne 0x96ba (exit) */
         return;
     }
-    snd_param_frame[8] -= 1;            /* dec word cs:[0x9798] */
-    if (snd_param_frame[8] == 0) {      /* jne 0x9672 */
-        snd_param_frame[8] = snd_param_frame[5];                 /* [0x9798] = [0x9792] */
-        snd_param_frame[4] += snd_param_frame[6];                /* [0x9790] += [0x9794] */
-        set_timer_slot_raw(2, (int)snd_param_frame[4],           /* AX=[0x9790], BX=2     */
+    SND_PF->subsweep_current -= 1;            /* dec word cs:[0x9798] */
+    if (SND_PF->subsweep_current == 0) {      /* jne 0x9672 */
+        SND_PF->subsweep_current = SND_PF->subsweep_reload;             /* [0x9798] = [0x9792] */
+        SND_PF->ch2_reload_current += SND_PF->ch2_reload_increment;     /* [0x9790] += [0x9794] */
+        set_timer_slot_raw(2, (int)SND_PF->ch2_reload_current,    /* AX=[0x9790], BX=2     */
                            snd_timer_cb_off, snd_timer_cb_seg);  /* CX=[0x97a1], DX=[0x979f] */
     }
-    snd_param_frame[7] -= 1;            /* dec word cs:[0x9796] */
-    if (snd_param_frame[7] != 0) {      /* jne 0x96ba (exit) */
+    SND_PF->step_current -= 1;            /* dec word cs:[0x9796] */
+    if (SND_PF->step_current != 0) {      /* jne 0x96ba (exit) */
         return;
     }
-    snd_param_frame[0] -= 1;            /* dec word cs:[0x9788] */
-    if (snd_param_frame[0] == 0) {      /* jne 0x9691 */
+    SND_PF->lifetime_count -= 1;            /* dec word cs:[0x9788] */
+    if (SND_PF->lifetime_count == 0) {      /* jne 0x9691 */
         record_min_status_code(0xff);          /* MOV AX,0xff; CALL 0x945b */
         set_timer_slot_reg(2);             /* MOV AX,2;    CALL 0x7e1f */
         speaker_gate_strobe();                 /* CALL 0x9451 */
         return;                                /* jmp 0x96ba (exit) */
     }
-    snd_param_frame[7] = snd_param_frame[2];   /* [0x9796] = [0x978c] */
-    snd_param_frame[1] += snd_param_frame[3];  /* [0x978a] += [0x978e] */
+    SND_PF->step_current = SND_PF->step_reload;      /* [0x9796] = [0x978c] */
+    SND_PF->pitch_reload += SND_PF->pitch_increment; /* [0x978a] += [0x978e] */
     outp(0x43, 0xb6);                          /* MOV AL,0xb6; OUT 0x43,AL */
     (void)0;                                   /* CALL 0x9434 (noop thunk chain) */
-    outp(0x42, (u8)snd_param_frame[1]);        /* MOV AX,[0x978a]; OUT 0x42,AL (lo) */
+    outp(0x42, (u8)SND_PF->pitch_reload);      /* MOV AX,[0x978a]; OUT 0x42,AL (lo) */
     (void)0;                                   /* CALL 0x9434 */
-    ax_hi_lo = (u8)(snd_param_frame[1] >> 8);  /* XCHG AH,AL */
+    ax_hi_lo = (u8)(SND_PF->pitch_reload >> 8);  /* XCHG AH,AL */
     outp(0x42, ax_hi_lo);                      /* OUT 0x42,AL (hi) */
 }
 
@@ -2337,22 +2368,22 @@ void tone_seq_callback_96c4(void)
         snd_isr_state_979a[0] = 0;                /* xor ax,ax; mov cs:[0x979a],al */
         outp(0x43, 0xb4);                         /* MOV AL,0xb4; OUT 0x43,AL (mode 2) */
         (void)0;                                  /* CALL 0x9434 */
-        outp(0x42, (u8)snd_param_frame[1]);       /* MOV AX,[0x978a]; OUT 0x42,AL (lo) */
+        outp(0x42, (u8)SND_PF->pitch_reload);       /* MOV AX,[0x978a]; OUT 0x42,AL (lo) */
         (void)0;                                  /* CALL 0x9434 */
-        outp(0x42, (u8)(snd_param_frame[1] >> 8));/* XCHG AH,AL; OUT 0x42,AL (hi) */
+        outp(0x42, (u8)(SND_PF->pitch_reload >> 8));/* XCHG AH,AL; OUT 0x42,AL (hi) */
     }
-    snd_param_frame[8] -= 1;                    /* dec word cs:[0x9798] */
-    if (snd_param_frame[8] == 0) {              /* jne 0x9766 */
-        snd_param_frame[0] -= 1;               /* dec word cs:[0x9788] */
-        if (snd_param_frame[0] == 0) {         /* jne 0x973d */
+    SND_PF->subsweep_current -= 1;                    /* dec word cs:[0x9798] */
+    if (SND_PF->subsweep_current == 0) {              /* jne 0x9766 */
+        SND_PF->lifetime_count -= 1;               /* dec word cs:[0x9788] */
+        if (SND_PF->lifetime_count == 0) {         /* jne 0x973d */
             record_min_status_code(0xff);          /* MOV AX,0xff; CALL 0x945b */
             set_timer_slot_reg(2);             /* MOV AX,2;    CALL 0x7e1f */
             speaker_gate_strobe();                 /* CALL 0x9451 */
             return;                                /* jmp 0x977e (exit) */
         }
-        snd_param_frame[8] = snd_param_frame[5];                /* [0x9798] = [0x9792] */
-        snd_param_frame[4] += snd_param_frame[6];               /* [0x9790] += [0x9794] */
-        set_timer_slot_raw(2, (int)snd_param_frame[4],          /* AX=[0x9790], BX=2     */
+        SND_PF->subsweep_current = SND_PF->subsweep_reload;                /* [0x9798] = [0x9792] */
+        SND_PF->ch2_reload_current += SND_PF->ch2_reload_increment;               /* [0x9790] += [0x9794] */
+        set_timer_slot_raw(2, (int)SND_PF->ch2_reload_current,          /* AX=[0x9790], BX=2     */
                            snd_timer_cb_off, snd_timer_cb_seg); /* CX=[0x97a1], DX=[0x979f] */
     }
     *(u16 *)(snd_isr_state_979a + 1) =                          /* mov ax,[0x979b]; rol ax,1 */
@@ -2398,9 +2429,9 @@ void tone_seq_callback_95b5(void)
         snd_isr_state_979a[0] = 0;                /* xor ax,ax; mov cs:[0x979a],al */
         outp(0x43, 0xb4);                         /* MOV AL,0xb4; OUT 0x43,AL (mode 2) */
         (void)0;                                  /* CALL 0x9434 */
-        outp(0x42, (u8)snd_param_frame[1]);       /* MOV AX,[0x978a]; OUT 0x42,AL (lo) */
+        outp(0x42, (u8)SND_PF->pitch_reload);       /* MOV AX,[0x978a]; OUT 0x42,AL (lo) */
         (void)0;                                  /* CALL 0x9434 */
-        outp(0x42, (u8)(snd_param_frame[1] >> 8));/* XCHG AH,AL; OUT 0x42,AL (hi) */
+        outp(0x42, (u8)(SND_PF->pitch_reload >> 8));/* XCHG AH,AL; OUT 0x42,AL (hi) */
     }
     *(u16 *)(snd_isr_state_979a + 1) =                          /* mov ax,[0x979b]; rol ax,1 */
         (u16)((*(u16 *)(snd_isr_state_979a + 1) << 1) |

@@ -31,6 +31,30 @@ typedef struct {
     u16 data_seg;   /* cur_sprite_data_seg — VGA dest segment (page-flipped) */
 } sprite_view;
 
+/* blit_desc_t — the 0x18-byte blit descriptor (engine DGROUP block 0x26bd5)
+   sprite_blit_setup fills and entity_blit_object (entity.c) unpacks for
+   sprite_blit_planar_vga.  Field offsets per the sprite_blit_setup comment in
+   sprite_chain.c.  Two 2-byte spans (+0x04/+0x06) and one byte (+0x14) are
+   always zeroed by the constructor; their role in the original descriptor
+   isn't established from the decomp available here, so they are named as
+   reserved rather than guessed. */
+typedef struct {
+    u16 src_off;      /* +0x00 source far ptr: offset half */
+    u16 src_seg;      /* +0x02 source far ptr: segment half */
+    u16 _rsvd_04;     /* +0x04 always zeroed here */
+    u16 _rsvd_06;     /* +0x06 always zeroed here */
+    u16 dst_off;      /* +0x08 dest far ptr: offset half */
+    u16 dst_seg;      /* +0x0a dest far ptr: segment half */
+    u16 full_w;       /* +0x0c stored frame width in columns */
+    u16 dst_stride;   /* +0x0e dest row pitch in bytes (=0x28 for the 320px view) */
+    u16 cols;         /* +0x10 visible/drawn columns */
+    u16 rows;         /* +0x12 row count */
+    u8  _rsvd_14;     /* +0x14 always zeroed here */
+    u8  sel;          /* +0x15 column-dispatch selector (always 0 for sprites) */
+    u8  shift;        /* +0x16 sub-byte horizontal shift 0..7 */
+    u8  clip_flags;   /* +0x17 clip flags */
+} blit_desc_t;
+
 /* Build the blit descriptor for one sprite object. Returns 1 and fills desc[0x18]
    if the sprite is visible and overlaps the view; 0 (descriptor untouched) if the
    object is hidden or fully culled.

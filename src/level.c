@@ -440,17 +440,16 @@ static void level_populate_dg(void)
     ftbl_off = FP_OFF(g_bank_buf);
     ftbl_seg = FP_SEG(g_bank_buf);
 
-    /* p1_sprite obj at DG_P1_OBJ */
-    g_entity_dg[DG_P1_OBJ + OBJ_FTBL_OFF]     = (u8)(ftbl_off & 0xffu);
-    g_entity_dg[DG_P1_OBJ + OBJ_FTBL_OFF + 1] = (u8)(ftbl_off >> 8u);
-    g_entity_dg[DG_P1_OBJ + OBJ_FTBL_SEG]     = (u8)(ftbl_seg & 0xffu);
-    g_entity_dg[DG_P1_OBJ + OBJ_FTBL_SEG + 1] = (u8)(ftbl_seg >> 8u);
-
-    /* p2_sprite obj at DG_P2_OBJ */
-    g_entity_dg[DG_P2_OBJ + OBJ_FTBL_OFF]     = (u8)(ftbl_off & 0xffu);
-    g_entity_dg[DG_P2_OBJ + OBJ_FTBL_OFF + 1] = (u8)(ftbl_off >> 8u);
-    g_entity_dg[DG_P2_OBJ + OBJ_FTBL_SEG]     = (u8)(ftbl_seg & 0xffu);
-    g_entity_dg[DG_P2_OBJ + OBJ_FTBL_SEG + 1] = (u8)(ftbl_seg >> 8u);
+    /* p1_sprite / p2_sprite obj ftbl fields — sprite_obj_t overlaid on the dg
+       shadow buffer at each object's DGROUP base (see entity.h). */
+    {
+        sprite_obj_t __far *p1o = (sprite_obj_t __far *)(g_entity_dg + DG_P1_OBJ);
+        sprite_obj_t __far *p2o = (sprite_obj_t __far *)(g_entity_dg + DG_P2_OBJ);
+        p1o->ftbl_off = ftbl_off;
+        p1o->ftbl_seg = ftbl_seg;
+        p2o->ftbl_off = ftbl_off;
+        p2o->ftbl_seg = ftbl_seg;
+    }
 
     /* p2_cell = -1 (P2 absent on level 1) */
     g_entity_dg[DG_P2_CELL] = (u8)0xffu;  /* -1 as unsigned byte */
@@ -767,7 +766,7 @@ void copyprotect_challenge(void)
     u8  copy_idx;               /* SS [BP-0x01] — patch-loop counter              */
     u16 index;                  /* SI           — random sprite index, 2..15       */
     int handle;
-    u8 __far *p1d;              /* p1_sprite blit descriptor                       */
+    sprite_obj_t __far *p1d;    /* p1_sprite blit descriptor (entity.h)             */
 
     round_state = 0;
 
@@ -835,10 +834,10 @@ void copyprotect_challenge(void)
         play_iris_wipe_transition();
         load_palette(0u, 0u);   /* engine passes a src far ptr; the host body ignores
                                    it and sources cur_level_ptr (host_video.c) */
-        p1d = p1_sprite;
-        *(u16 __far *)(p1d + 4) = sprite_id_tbl[index];  /* frame */
-        *(u16 __far *)(p1d + 0) = 0x90u;                 /* x = 144 */
-        *(u16 __far *)(p1d + 2) = 100u;                  /* y = 100 */
+        p1d = (sprite_obj_t __far *)p1_sprite;
+        p1d->frame = sprite_id_tbl[index];  /* frame */
+        p1d->x     = 0x90;                  /* x = 144 */
+        p1d->y     = 100;                   /* y = 100 */
         blit_sprite(FP_OFF(p1_sprite), FP_SEG(p1_sprite));
 
         /* "Enter the platform number" prompt + the current entry. */

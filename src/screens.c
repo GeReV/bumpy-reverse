@@ -380,76 +380,76 @@ void draw_number_sprites(u16 value_lo, u16 value_hi, u8 width, u16 base_x, u16 f
  * ════════════════════════════════════════════════════════════════════════════ */
 void draw_hud_composite(void)
 {
-    u8 __far *d = render_descriptor_ptr;
+    screen_view_desc __far *d = (screen_view_desc __far *)render_descriptor_ptr;
 
     /* fill 1 — full descriptor (image far ptr, src 0,0, 0x14×0x19, tile @0x9d3a) */
-    *(u16 __far *)(d + 0x02) = fullscreen_buf + 99;          /* image off (+99) */
-    *(u16 __far *)(d + 0x04) = fullscreen_buf_seg;           /* image seg */
-    *(u16 __far *)(d + 0x06) = 0;                            /* src x */
-    *(u16 __far *)(d + 0x08) = 0;                            /* src y */
-    *(u16 __far *)(d + 0x0a) = 0x14;                         /* width  */
-    *(u16 __far *)(d + 0x0c) = 0x19;                         /* height */
-    *(u16 __far *)(d + 0x10) = 0x9d3a;                       /* tile-source off */
-    *(u16 __far *)(d + 0x12) = SCREENS_DGROUP_RUNTIME_SEG;   /* tile-source seg (DS) */
-    *(u16 __far *)(d + 0x14) = 0;                            /* dest x */
-    *(u16 __far *)(d + 0x16) = 0;                            /* dest y */
-    *(u16 __far *)(d + 0x18) = 3;                            /* sub-extent w */
-    *(u16 __far *)(d + 0x1a) = 2;                            /* sub-extent h */
-    *(u16 __far *)(d + 0x1c) = 0;                            /* clip x */
-    *(u16 __far *)(d + 0x1e) = 3;                            /* clip w */
-    *(u16 __far *)(d + 0x20) = 2;                            /* clip h */
+    d->image_off = fullscreen_buf + 99;          /* image off (+99) */
+    d->image_seg = fullscreen_buf_seg;           /* image seg */
+    d->src_x = 0;                            /* src x */
+    d->src_y = 0;                            /* src y */
+    d->width = 0x14;                         /* width  */
+    d->height = 0x19;                         /* height */
+    d->blit_off = 0x9d3a;                       /* tile-source off */
+    d->blit_seg = SCREENS_DGROUP_RUNTIME_SEG;   /* tile-source seg (DS) */
+    d->dest_x = 0;                            /* dest x */
+    d->dest_y = 0;                            /* dest y */
+    d->sub_w = 3;                            /* sub-extent w */
+    d->sub_h = 2;                            /* sub-extent h */
+    d->subhandler = 0;                            /* subhandler (was mislabeled "clip x") */
+    d->clip_w = 3;                            /* clip w */
+    d->clip_h = 2;                            /* clip h */
     anim_render_leaf_80ac(render_descriptor_ptr);
 
     /* fill 2 — src x=4, tile @0x9baf */
-    d = render_descriptor_ptr;
-    *(u16 __far *)(d + 0x06) = 4;
-    *(u16 __far *)(d + 0x10) = 0x9baf;
-    *(u16 __far *)(d + 0x12) = SCREENS_DGROUP_RUNTIME_SEG;
+    d = (screen_view_desc __far *)render_descriptor_ptr;
+    d->src_x = 4;
+    d->blit_off = 0x9baf;
+    d->blit_seg = SCREENS_DGROUP_RUNTIME_SEG;
     anim_render_leaf_80ac(render_descriptor_ptr);
 
     /* fill 3 — src 0,8, tile @0x9eba, sub/clip 1×4 */
-    d = render_descriptor_ptr;
-    *(u16 __far *)(d + 0x06) = 0;
-    *(u16 __far *)(d + 0x08) = 8;
-    *(u16 __far *)(d + 0x10) = 0x9eba;
-    *(u16 __far *)(d + 0x12) = SCREENS_DGROUP_RUNTIME_SEG;
-    *(u16 __far *)(d + 0x18) = 1;
-    *(u16 __far *)(d + 0x1a) = 4;
-    *(u16 __far *)(d + 0x1e) = 1;
-    *(u16 __far *)(d + 0x20) = 4;
+    d = (screen_view_desc __far *)render_descriptor_ptr;
+    d->src_x = 0;
+    d->src_y = 8;
+    d->blit_off = 0x9eba;
+    d->blit_seg = SCREENS_DGROUP_RUNTIME_SEG;
+    d->sub_w = 1;
+    d->sub_h = 4;
+    d->clip_w = 1;
+    d->clip_h = 4;
     anim_render_leaf_80ac(render_descriptor_ptr);
 
     /* fill 4 — src y=3, tile @0x9fba */
-    d = render_descriptor_ptr;
-    *(u16 __far *)(d + 0x08) = 3;
-    *(u16 __far *)(d + 0x10) = 0x9fba;
-    *(u16 __far *)(d + 0x12) = SCREENS_DGROUP_RUNTIME_SEG;
+    d = (screen_view_desc __far *)render_descriptor_ptr;
+    d->src_y = 3;
+    d->blit_off = 0x9fba;
+    d->blit_seg = SCREENS_DGROUP_RUNTIME_SEG;
     anim_render_leaf_80ac(render_descriptor_ptr);
 
     /* fill 5 — src 0,0xd, tile @0x8b88, sub/clip 6×2 */
-    d = render_descriptor_ptr;
-    *(u16 __far *)(d + 0x06) = 0;
-    *(u16 __far *)(d + 0x08) = 0xd;
-    *(u16 __far *)(d + 0x10) = 0x8b88;
-    *(u16 __far *)(d + 0x12) = SCREENS_DGROUP_RUNTIME_SEG;
-    *(u16 __far *)(d + 0x18) = 6;
-    *(u16 __far *)(d + 0x1a) = 2;
-    *(u16 __far *)(d + 0x1e) = 6;
-    *(u16 __far *)(d + 0x20) = 2;
+    d = (screen_view_desc __far *)render_descriptor_ptr;
+    d->src_x = 0;
+    d->src_y = 0xd;
+    d->blit_off = 0x8b88;
+    d->blit_seg = SCREENS_DGROUP_RUNTIME_SEG;
+    d->sub_w = 6;
+    d->sub_h = 2;
+    d->clip_w = 6;
+    d->clip_h = 2;
     anim_render_leaf_80ac(render_descriptor_ptr);
 
     /* fill 6 — src y=0x11, tile @0x824e */
-    d = render_descriptor_ptr;
-    *(u16 __far *)(d + 0x08) = 0x11;
-    *(u16 __far *)(d + 0x10) = 0x824e;
-    *(u16 __far *)(d + 0x12) = SCREENS_DGROUP_RUNTIME_SEG;
+    d = (screen_view_desc __far *)render_descriptor_ptr;
+    d->src_y = 0x11;
+    d->blit_off = 0x824e;
+    d->blit_seg = SCREENS_DGROUP_RUNTIME_SEG;
     anim_render_leaf_80ac(render_descriptor_ptr);
 
     /* fill 7 — src y=0x15, tile @0x8582 */
-    d = render_descriptor_ptr;
-    *(u16 __far *)(d + 0x08) = 0x15;
-    *(u16 __far *)(d + 0x10) = 0x8582;
-    *(u16 __far *)(d + 0x12) = SCREENS_DGROUP_RUNTIME_SEG;
+    d = (screen_view_desc __far *)render_descriptor_ptr;
+    d->src_y = 0x15;
+    d->blit_off = 0x8582;
+    d->blit_seg = SCREENS_DGROUP_RUNTIME_SEG;
     anim_render_leaf_80ac(render_descriptor_ptr);
     return;
 }
@@ -890,37 +890,37 @@ void wait_vretrace_thunk(void)
  * ════════════════════════════════════════════════════════════════════════════ */
 void play_iris_wipe_transition(void)
 {
-    u8 __far *d;
+    screen_view_desc __far *d;
     u16 clear_idx;
     u8  right_edge;
     u8  bottom_edge;
     u8  step;
 
-    d = render_descriptor_ptr;
-    *(u8 __far *)(d + 0x22) = 0;
-    *(u8 __far *)(d + 0x23) = 0;
-    *(u8 __far *)(d + 0x24) = 0;
-    *(u8 __far *)(d + 0x25) = 0;
-    *(u16 __far *)(d + 0x0e) = 0;
-    *(u16 __far *)(d + 0x1c) = 0;
+    d = (screen_view_desc __far *)render_descriptor_ptr;
+    d->status[0] = 0;
+    d->status[1] = 0;
+    d->status[2] = 0;
+    d->status[3] = 0;
+    d->flag = 0;
+    d->subhandler = 0;
     right_edge  = 0x14;
     bottom_edge = 0x19;
     for (step = 0; step < 10; step = step + 1) {
-        d = render_descriptor_ptr;
-        *(u16 __far *)(d + 0x14) = (u16)step;
-        *(u16 __far *)(d + 0x16) = (u16)step;
-        *(u16 __far *)(d + 0x1e) = (u16)right_edge;
-        *(u16 __far *)(d + 0x20) = 1;
+        d = (screen_view_desc __far *)render_descriptor_ptr;
+        d->dest_x = (u16)step;
+        d->dest_y = (u16)step;
+        d->clip_w = (u16)right_edge;
+        d->clip_h = 1;
         fun_7b4a_view_blit(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
         wait_vretrace_thunk();
         *(u16 __far *)(render_descriptor_ptr + 0x16) = 0x18 - (u16)step;
         fun_7b4a_view_blit(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
         wait_vretrace_thunk();
         right_edge = right_edge - 2;
-        d = render_descriptor_ptr;
-        *(u16 __far *)(d + 0x16) = (u16)step;
-        *(u16 __far *)(d + 0x1e) = 1;
-        *(u16 __far *)(d + 0x20) = (u16)bottom_edge;
+        d = (screen_view_desc __far *)render_descriptor_ptr;
+        d->dest_y = (u16)step;
+        d->clip_w = 1;
+        d->clip_h = (u16)bottom_edge;
         fun_7b4a_view_blit(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
         wait_vretrace_thunk();
         *(u16 __far *)(render_descriptor_ptr + 0x14) = 0x13 - (u16)step;
@@ -1046,7 +1046,7 @@ void show_title_background(void)
 {
     int  file_handle;
     u32  bytes_read;
-    u8 __far *d;
+    screen_view_desc __far *d;
 
     file_handle = open_resource(2, 4);
     bytes_read = read_chunked(file_handle, fullscreen_buf, fullscreen_buf_seg, 0x0942, 0x0944);
@@ -1056,19 +1056,19 @@ void show_title_background(void)
         patch_image_palette(dgroup_pal_patch_63a);
     }
     play_iris_wipe_transition();
-    d = render_descriptor_ptr;
-    *(u16 __far *)(d + 0x02) = fullscreen_buf + 99;
-    *(u16 __far *)(d + 0x04) = fullscreen_buf_seg;
-    *(u16 __far *)(d + 0x06) = 0;
-    *(u16 __far *)(d + 0x08) = 0;
-    *(u16 __far *)(d + 0x0a) = 0x14;
-    *(u16 __far *)(d + 0x0c) = 0x19;
-    *(u16 __far *)(d + 0x0e) = 1;
-    *(u16 __far *)(d + 0x14) = 0;
-    *(u16 __far *)(d + 0x16) = 0;
-    *(u16 __far *)(d + 0x1c) = 0;
-    *(u16 __far *)(d + 0x1e) = 0x14;
-    *(u16 __far *)(d + 0x20) = 0x19;
+    d = (screen_view_desc __far *)render_descriptor_ptr;
+    d->image_off = fullscreen_buf + 99;
+    d->image_seg = fullscreen_buf_seg;
+    d->src_x = 0;
+    d->src_y = 0;
+    d->width = 0x14;
+    d->height = 0x19;
+    d->flag = 1;
+    d->dest_x = 0;
+    d->dest_y = 0;
+    d->subhandler = 0;
+    d->clip_w = 0x14;
+    d->clip_h = 0x19;
     restore_bg_view(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
     fun_7b93_present_blank(fullscreen_buf, fullscreen_buf_seg, 0);
     fun_7bca_flip(0);
@@ -1119,7 +1119,7 @@ void show_title_and_init(void)
 {
     int  res_handle;
     u32  bytes_read;
-    u8 __far *d;
+    screen_view_desc __far *d;
 
     show_highscore_screen();
     res_handle = open_resource(0x11, 4);
@@ -1130,19 +1130,19 @@ void show_title_and_init(void)
         patch_image_palette(dgroup_pal_patch_72e);
     }
     play_iris_wipe_transition();
-    d = render_descriptor_ptr;
-    *(u16 __far *)(d + 0x02) = fullscreen_buf + 99;
-    *(u16 __far *)(d + 0x04) = fullscreen_buf_seg;
-    *(u16 __far *)(d + 0x06) = 0;
-    *(u16 __far *)(d + 0x08) = 0;
-    *(u16 __far *)(d + 0x0a) = 0x14;
-    *(u16 __far *)(d + 0x0c) = 0x19;
-    *(u16 __far *)(d + 0x0e) = 1;
-    *(u16 __far *)(d + 0x14) = 0;
-    *(u16 __far *)(d + 0x16) = 0;
-    *(u16 __far *)(d + 0x1c) = 0;
-    *(u16 __far *)(d + 0x1e) = 0x14;
-    *(u16 __far *)(d + 0x20) = 0x19;
+    d = (screen_view_desc __far *)render_descriptor_ptr;
+    d->image_off = fullscreen_buf + 99;
+    d->image_seg = fullscreen_buf_seg;
+    d->src_x = 0;
+    d->src_y = 0;
+    d->width = 0x14;
+    d->height = 0x19;
+    d->flag = 1;
+    d->dest_x = 0;
+    d->dest_y = 0;
+    d->subhandler = 0;
+    d->clip_w = 0x14;
+    d->clip_h = 0x19;
     restore_bg_view(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
     fun_7b93_present_blank(fullscreen_buf, fullscreen_buf_seg, 0);
     fun_7bca_flip(0);
@@ -1176,7 +1176,7 @@ u8 run_main_menu(void)
 {
     int  iVar3;
     char key;
-    u8 __far *d;
+    screen_view_desc __far *d;
     u16 __far *p;
     u32 bytes_read;
     u8  cursor_index;
@@ -1205,35 +1205,35 @@ u8 run_main_menu(void)
     timing_flag_accumulator = 0;
     input_state = 0;
     play_iris_wipe_transition();
-    d = render_descriptor_ptr;
-    *(u16 __far *)(d + 0x02) = fullscreen_buf + 99;
-    *(u16 __far *)(d + 0x04) = fullscreen_buf_seg;
-    *(u16 __far *)(d + 0x06) = 0;
-    *(u16 __far *)(d + 0x08) = 0;
-    *(u16 __far *)(d + 0x0a) = 0x14;
-    *(u16 __far *)(d + 0x0c) = 0x19;
-    *(u16 __far *)(d + 0x0e) = 1;
-    *(u16 __far *)(d + 0x14) = 0;
-    *(u16 __far *)(d + 0x16) = 0;
-    *(u16 __far *)(d + 0x1c) = 0;
-    *(u16 __far *)(d + 0x1e) = 0x14;
-    *(u16 __far *)(d + 0x20) = 0x19;
+    d = (screen_view_desc __far *)render_descriptor_ptr;
+    d->image_off = fullscreen_buf + 99;
+    d->image_seg = fullscreen_buf_seg;
+    d->src_x = 0;
+    d->src_y = 0;
+    d->width = 0x14;
+    d->height = 0x19;
+    d->flag = 1;
+    d->dest_x = 0;
+    d->dest_y = 0;
+    d->subhandler = 0;
+    d->clip_w = 0x14;
+    d->clip_h = 0x19;
     restore_bg_view(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
     fun_7b93_present_blank(fullscreen_buf, fullscreen_buf_seg, 0);
     fun_7bca_flip(0);
     while (selected_item == 0xff) {
         /* draw the option-2 sub-image strip (the cycling option's label). */
-        d = render_descriptor_ptr;
-        *(u16 __far *)(d + 0x02) = menu_opt2_img_off[menu_option2_setting];
-        *(u16 __far *)(d + 0x04) = menu_opt2_img_seg[menu_option2_setting];
-        *(u16 __far *)(d + 0x06) = 0;
-        *(u16 __far *)(d + 0x08) = 0;
-        *(u16 __far *)(d + 0x0a) = 6;
-        *(u16 __far *)(d + 0x0c) = 2;
-        *(u16 __far *)(d + 0x14) = 0xb;
-        *(u16 __far *)(d + 0x16) = 0x12;
-        *(u16 __far *)(d + 0x1e) = 6;
-        *(u16 __far *)(d + 0x20) = 2;
+        d = (screen_view_desc __far *)render_descriptor_ptr;
+        d->image_off = menu_opt2_img_off[menu_option2_setting];
+        d->image_seg = menu_opt2_img_seg[menu_option2_setting];
+        d->src_x = 0;
+        d->src_y = 0;
+        d->width = 6;
+        d->height = 2;
+        d->dest_x = 0xb;
+        d->dest_y = 0x12;
+        d->clip_w = 6;
+        d->clip_h = 2;
         restore_bg_view(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
         present_frame(1);
         init_fullscreen_view_desc(0, 1);
@@ -2043,7 +2043,7 @@ void show_highscore_screen(void)
 {
     int res_handle;
     u32 decoded_len;
-    u8 __far *d;
+    screen_view_desc __far *d;
 
     set_resource_table(0x928, SCREENS_DGROUP_RUNTIME_SEG);
     fullscreen_img_buf   = fullscreen_buf;
@@ -2057,28 +2057,28 @@ void show_highscore_screen(void)
         patch_image_palette(dgroup_pal_patch_71e);
     }
     play_iris_wipe_transition();
-    d = render_descriptor_ptr;
-    *(u16 __far *)(d + 0x02) = fullscreen_img_buf + 99;
-    *(u16 __far *)(d + 0x04) = highscore_bg_buf_seg;
-    *(u16 __far *)(d + 0x06) = 0;
-    *(u16 __far *)(d + 0x08) = 0;
-    *(u16 __far *)(d + 0x0a) = 0x14;
-    *(u16 __far *)(d + 0x0c) = 0x19;
-    *(u16 __far *)(d + 0x0e) = 1;
-    *(u16 __far *)(d + 0x14) = 0;
-    *(u16 __far *)(d + 0x16) = 0;
-    *(u16 __far *)(d + 0x1c) = 0;
-    *(u16 __far *)(d + 0x1e) = 0x14;
-    *(u16 __far *)(d + 0x20) = 0x19;
+    d = (screen_view_desc __far *)render_descriptor_ptr;
+    d->image_off = fullscreen_img_buf + 99;
+    d->image_seg = highscore_bg_buf_seg;
+    d->src_x = 0;
+    d->src_y = 0;
+    d->width = 0x14;
+    d->height = 0x19;
+    d->flag = 1;
+    d->dest_x = 0;
+    d->dest_y = 0;
+    d->subhandler = 0;
+    d->clip_w = 0x14;
+    d->clip_h = 0x19;
     restore_bg_view(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
     fun_7b93_present_blank(fullscreen_buf, fullscreen_buf_seg, 0);
     fun_7bca_flip(0);
     present_frame(1);
     wait_vretrace_thunk();
-    d = render_descriptor_ptr;
-    *(u16 __far *)(d + 0x0e) = 0;
-    *(u16 __far *)(d + 0x1e) = 1;
-    *(u16 __far *)(d + 0x20) = 2;
+    d = (screen_view_desc __far *)render_descriptor_ptr;
+    d->flag = 0;
+    d->clip_w = 1;
+    d->clip_h = 2;
     render_highscore_table();
     return;
 }
@@ -2322,7 +2322,7 @@ void level_intro_screen(void)
     u32 bytes_read;
     u8  palette_idx;
     char done_flag;
-    u8 __far *d;
+    screen_view_desc __far *d;
     u8 __far *img;
     u8 __far *pal;
 
@@ -2362,19 +2362,19 @@ void level_intro_screen(void)
 #else
     play_iris_wipe_transition();
 #endif
-    d = render_descriptor_ptr;
-    *(u16 __far *)(d + 0x02) = fullscreen_buf + 99;
-    *(u16 __far *)(d + 0x04) = fullscreen_buf_seg;
-    *(u16 __far *)(d + 0x06) = 0;
-    *(u16 __far *)(d + 0x08) = 0;
-    *(u16 __far *)(d + 0x0a) = 0x14;
-    *(u16 __far *)(d + 0x0c) = 0x19;
-    *(u16 __far *)(d + 0x0e) = 1;
-    *(u16 __far *)(d + 0x14) = 0;
-    *(u16 __far *)(d + 0x16) = 0;
-    *(u16 __far *)(d + 0x1c) = 0;
-    *(u16 __far *)(d + 0x1e) = 0x14;
-    *(u16 __far *)(d + 0x20) = 0x19;
+    d = (screen_view_desc __far *)render_descriptor_ptr;
+    d->image_off = fullscreen_buf + 99;
+    d->image_seg = fullscreen_buf_seg;
+    d->src_x = 0;
+    d->src_y = 0;
+    d->width = 0x14;
+    d->height = 0x19;
+    d->flag = 1;
+    d->dest_x = 0;
+    d->dest_y = 0;
+    d->subhandler = 0;
+    d->clip_w = 0x14;
+    d->clip_h = 0x19;
     restore_bg_view(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
     draw_number(score_lo, score_hi, '\a', 1, 8);
     draw_icon_row();

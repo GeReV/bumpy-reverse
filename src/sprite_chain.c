@@ -8,8 +8,6 @@
 static s16 rd_s16(const u8 __far *p) { return (s16)(p[0] | (p[1] << 8)); }
 static u16 rd_u16(const u8 __far *p) { return (u16)(p[0] | (p[1] << 8)); }
 
-static void wr16(u8 *d, u16 v) { d[0] = (u8)v; d[1] = (u8)(v >> 8); }
-
 /* Intermediate state that mirrors the DGROUP globals used by _clip and _setup.
    In the original engine these are ds-relative word/byte RAM cells; here they are
    locals threaded through the three reconstructed functions.
@@ -116,8 +114,9 @@ static int sprite_blit_clip(const u8 __far *obj, const sprite_view *view,
    sprite_chain.h).
    unaff_DI in the original = the object pointer passed here explicitly. */
 static void sprite_blit_setup(const u8 __far *obj, const sprite_view *view,
-                               blit_state *st, u8 *desc)
+                               blit_state *st, u8 *desc_bytes)
 {
+    blit_desc_t *desc = (blit_desc_t *)desc_bytes;   /* see blit_desc_t (sprite_chain.h) */
     u16 src_off_add; /* iRam00025a96 */
     s16 width  = (s16)rd_u16(obj + 0x10);
     s16 half_w = (s16)((u16)width >> 1);
@@ -130,28 +129,28 @@ static void sprite_blit_setup(const u8 __far *obj, const sprite_view *view,
     }
     src_off_add = (u16)(src_off_add + st->bcf * 4);
 
-    /* Fill the 0x18-byte descriptor (DGROUP block 0x26bd5):
-         iRam00026bd5 (src off)   -> desc[0x00]   uRam00026bd7 (src seg)  -> desc[0x02]
-         iRam00026bdd (dst off)   -> desc[0x08]   uRam00026bdf (dst seg)  -> desc[0x0a]
-         uRam00026be1 (cols full) -> desc[0x0c]   uRam00026be3 (stride)   -> desc[0x0e]
-         iRam00026be5 (vis cols)  -> desc[0x10]   uRam00026be7 (vis rows) -> desc[0x12]
-                                                  bRam00026bea (sel)      -> desc[0x15]
-                                                  bRam00026beb (shift)    -> desc[0x16]
-                                                  bRam00026bec (clip)     -> desc[0x17]  */
-    desc[0x00] = 0; desc[0x01] = 0;
-    wr16(desc + 0x00, (u16)(rd_u16(obj + 0x0c) + src_off_add));  /* src off */
-    wr16(desc + 0x02, rd_u16(obj + 0x0e));                       /* src seg */
-    desc[0x04] = 0; desc[0x05] = 0; desc[0x06] = 0; desc[0x07] = 0;
-    wr16(desc + 0x08, st->dst_off);                              /* dst off */
-    wr16(desc + 0x0a, view->data_seg);                           /* dst seg */
-    wr16(desc + 0x0c, (u16)((u16)half_w & 0xff));                /* full width cols */
-    wr16(desc + 0x0e, 0x28);                                     /* dst stride */
-    wr16(desc + 0x10, (u16)st->be5);                             /* cols drawn */
-    wr16(desc + 0x12, (u16)st->be7);                             /* rows drawn */
-    desc[0x14] = 0;
-    desc[0x15] = 0;                                              /* sel */
-    desc[0x16] = st->shift;                                      /* shift */
-    desc[0x17] = st->bec;                                        /* clip flags */
+    /* Fill the descriptor (DGROUP block 0x26bd5):
+         iRam00026bd5 (src off)   -> src_off    uRam00026bd7 (src seg)  -> src_seg
+         iRam00026bdd (dst off)   -> dst_off    uRam00026bdf (dst seg)  -> dst_seg
+         uRam00026be1 (cols full) -> full_w     uRam00026be3 (stride)   -> dst_stride
+         iRam00026be5 (vis cols)  -> cols       uRam00026be7 (vis rows) -> rows
+                                                bRam00026bea (sel)      -> sel
+                                                bRam00026beb (shift)    -> shift
+                                                bRam00026bec (clip)     -> clip_flags  */
+    desc->src_off    = (u16)(rd_u16(obj + 0x0c) + src_off_add);
+    desc->src_seg    = rd_u16(obj + 0x0e);
+    desc->_rsvd_04   = 0;
+    desc->_rsvd_06   = 0;
+    desc->dst_off    = st->dst_off;
+    desc->dst_seg    = view->data_seg;
+    desc->full_w     = (u16)((u16)half_w & 0xff);
+    desc->dst_stride = 0x28;
+    desc->cols       = (u16)st->be5;
+    desc->rows       = (u16)st->be7;
+    desc->_rsvd_14   = 0;
+    desc->sel        = 0;
+    desc->shift      = st->shift;
+    desc->clip_flags = st->bec;
     /* Original: sprite_blit_planar_vga(); — called by composite separately */
 }
 

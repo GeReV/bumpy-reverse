@@ -76,14 +76,10 @@
 #define DG_POSC_Y_BASE  0x0276u   /* posC Y: dg[0x276 + cell*4]           */
 #define DG_POSB_X_BASE  0x03f4u   /* posB X: dg[0x3f4 + cell*4]           */
 #define DG_POSB_Y_BASE  0x03f6u   /* posB Y: dg[0x3f6 + cell*4]           */
-#define DG_P1_OBJ       0x792eu   /* p1_sprite struct (0x18 bytes)         */
-#define DG_P2_OBJ       0x795au   /* p2_sprite struct (0x18 bytes)         */
+#define DG_P1_OBJ       0x792eu   /* p1_sprite obj — sprite_obj_t (entity.h) */
+#define DG_P2_OBJ       0x795au   /* p2_sprite obj — sprite_obj_t (entity.h) */
 #define DG_P2_CELL      0x8571u   /* p2_cell (s8): -1 = P2 absent          */
 #define DG_P2_FRAME_BASE 0xa0deu  /* p2_frame_base (u16)                   */
-
-/* Sprite obj field offsets within the 0x18-byte struct */
-#define OBJ_FTBL_OFF    0x06u     /* frametable far ptr: offset half       */
-#define OBJ_FTBL_SEG    0x08u     /* frametable far ptr: segment half      */
 
 /* ── Engine globals ──────────────────────────────────────────────────────────
    Declared here; defined in level.c.  These mirror the engine's DGROUP globals

@@ -495,12 +495,21 @@ static u8 s_p2_su_valid = 0u;
    is page-independent (both a000/a200 pages hold identical bg + spawn statics via the
    init_fullscreen_view_desc mode-11 copy), so the footprint origin is stored PAGE-
    RELATIVE (voff & 0x1fff) and re-based onto the current draw page at restore. */
-static u8  s_animb_su[HR_ANIMB_CH][4u * HR_ANIMB_PLANE];
-static u16 s_animb_toff[HR_ANIMB_CH];           /* footprint origin, page-relative */
-static u8  s_animb_w[HR_ANIMB_CH];              /* footprint width  (bytes)        */
-static u8  s_animb_h[HR_ANIMB_CH];              /* footprint height (rows)         */
-static u8  s_animb_stride[HR_ANIMB_CH];         /* dst row stride (bytes)          */
-static u8  s_animb_valid[HR_ANIMB_CH];
+/* host_animb_slot_t — one channel-B save-under record.  The 5 fields below were
+   previously 5 parallel arrays (s_animb_su/toff/w/h/stride/valid[HR_ANIMB_CH]),
+   always written together in host_animb_capture and read together in
+   host_animb_restore — a textbook struct-of-arrays that reads better as an
+   array-of-structs. */
+typedef struct {
+    u8  su[4u * HR_ANIMB_PLANE];
+    u16 toff;    /* footprint origin, page-relative */
+    u8  w;       /* footprint width  (bytes) */
+    u8  h;       /* footprint height (rows) */
+    u8  stride;  /* dst row stride (bytes) */
+    u8  valid;
+} host_animb_slot_t;
+
+static host_animb_slot_t s_animb[HR_ANIMB_CH];
 static s8  s_animb_cap_ch = -1;                 /* active capture channel, -1=off  */
 
 /* Called by draw_anim_channels_b BEFORE anim_blit_sprite_leaf: arm the footprint
@@ -541,17 +550,17 @@ void host_animb_capture(u16 voff, u16 cols, u16 rows, u16 stride)
         for (c = 0u; c < (u8)w; c++) {
             u16 off = (u16)(voff + (u16)r * stride + c);
             u16 bi  = (u16)((u16)r * w + c);
-            host_vga_read4(off, &s_animb_su[ch][bi],
-                           &s_animb_su[ch][HR_ANIMB_PLANE + bi],
-                           &s_animb_su[ch][2u*HR_ANIMB_PLANE + bi],
-                           &s_animb_su[ch][3u*HR_ANIMB_PLANE + bi]);
+            host_vga_read4(off, &s_animb[ch].su[bi],
+                           &s_animb[ch].su[HR_ANIMB_PLANE + bi],
+                           &s_animb[ch].su[2u*HR_ANIMB_PLANE + bi],
+                           &s_animb[ch].su[3u*HR_ANIMB_PLANE + bi]);
         }
     }
-    s_animb_toff[ch]   = toff;
-    s_animb_w[ch]      = (u8)w;
-    s_animb_h[ch]      = (u8)h;
-    s_animb_stride[ch] = (u8)stride;
-    s_animb_valid[ch]  = 1u;
+    s_animb[ch].toff   = toff;
+    s_animb[ch].w      = (u8)w;
+    s_animb[ch].h      = (u8)h;
+    s_animb[ch].stride = (u8)stride;
+    s_animb[ch].valid  = 1u;
 }
 
 /* Called by draw_anim_channels_b BEFORE the blit (and before begin_capture): restore
@@ -561,21 +570,21 @@ void host_animb_restore(u8 ch)
 {
     u8  r, c;
     u16 base, w, h, stride;
-    if (ch >= HR_ANIMB_CH || s_animb_valid[ch] == 0u || hr_in_spawn != 0u) {
+    if (ch >= HR_ANIMB_CH || s_animb[ch].valid == 0u || hr_in_spawn != 0u) {
         return;   /* gameplay-only (see host_animb_capture) */
     }
-    base   = (u16)(host_draw_page_off() + s_animb_toff[ch]);  /* re-base to draw page */
-    w      = s_animb_w[ch];
-    h      = s_animb_h[ch];
-    stride = s_animb_stride[ch];
+    base   = (u16)(host_draw_page_off() + s_animb[ch].toff);  /* re-base to draw page */
+    w      = s_animb[ch].w;
+    h      = s_animb[ch].h;
+    stride = s_animb[ch].stride;
     for (r = 0u; r < (u8)h; r++) {
         for (c = 0u; c < (u8)w; c++) {
             u16 off = (u16)(base + (u16)r * stride + c);
             u16 bi  = (u16)((u16)r * w + c);
-            host_vga_put4(off, s_animb_su[ch][bi],
-                          s_animb_su[ch][HR_ANIMB_PLANE + bi],
-                          s_animb_su[ch][2u*HR_ANIMB_PLANE + bi],
-                          s_animb_su[ch][3u*HR_ANIMB_PLANE + bi]);
+            host_vga_put4(off, s_animb[ch].su[bi],
+                          s_animb[ch].su[HR_ANIMB_PLANE + bi],
+                          s_animb[ch].su[2u*HR_ANIMB_PLANE + bi],
+                          s_animb[ch].su[3u*HR_ANIMB_PLANE + bi]);
         }
     }
     host_vga_blit_end();

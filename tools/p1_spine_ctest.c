@@ -260,7 +260,7 @@ static void seed_globals(const snap_t *s)
     p1_grid_x = s->gx;   p1_grid_y = s->gy;
     p1_grid_x_prev = s->gxp; p1_grid_y_prev = s->gyp;
     p1_scroll_x = s->sx; p1_scroll_y = s->sy;
-    pvp_p1_x0 = s->bl; pvp_p1_x1 = s->br; pvp_p1_y0 = s->bt; pvp_p1_y1 = s->bb;
+    pvp_p1_bbox.x0 = s->bl; pvp_p1_bbox.x1 = s->br; pvp_p1_bbox.y0 = s->bt; pvp_p1_bbox.y1 = s->bb;
     pending_erase_x = s->pex; pending_erase_y = s->pey;
     p1_move_anim = s->anim;
     physics_frozen = s->frozen;
@@ -290,10 +290,10 @@ static int cmp_adv(const snap_t *e, const char **bad, long *got, long *want)
 }
 static int cmp_bbox(const snap_t *e, const char **bad, long *got, long *want)
 {
-    FLD("bl", pvp_p1_x0, e->bl);
-    FLD("br", pvp_p1_x1, e->br);
-    FLD("bt", pvp_p1_y0, e->bt);
-    FLD("bb", pvp_p1_y1, e->bb);
+    FLD("bl", pvp_p1_bbox.x0, e->bl);
+    FLD("br", pvp_p1_bbox.x1, e->br);
+    FLD("bt", pvp_p1_bbox.y0, e->bt);
+    FLD("bb", pvp_p1_bbox.y1, e->bb);
     return 0;
 }
 

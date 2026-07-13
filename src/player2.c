@@ -124,14 +124,8 @@ u8  p2_dir_blocked_3;    /* DGROUP 0xa1b2 */
 
 /* ── P1/P2 pvp-collision globals — OWNED here ─────────────────────────────────── */
 u8  pvp_collision_flag;  /* DGROUP 0xa1aa (Ghidra players_colliding) */
-s16 pvp_p1_x0;           /* DGROUP 0x084c (Ghidra p1_bbox_left)   */
-s16 pvp_p1_x1;           /* DGROUP 0x084e (Ghidra p1_bbox_right)  */
-s16 pvp_p1_y0;           /* DGROUP 0x0850 (Ghidra p1_bbox_top)    */
-s16 pvp_p1_y1;           /* DGROUP 0x0852 (Ghidra p1_bbox_bottom) */
-s16 pvp_p2_x0;           /* DGROUP 0x0854 (Ghidra p2_bbox_left)   */
-s16 pvp_p2_x1;           /* DGROUP 0x0856 (Ghidra p2_bbox_right)  */
-s16 pvp_p2_y0;           /* DGROUP 0x0858 (Ghidra p2_bbox_top)    */
-s16 pvp_p2_y1;           /* DGROUP 0x085a (Ghidra p2_bbox_bottom) */
+pvp_bbox_t pvp_p1_bbox;  /* DGROUP 0x084c..0x0852 (Ghidra p1_bbox_left/right/top/bottom)  */
+pvp_bbox_t pvp_p2_bbox;  /* DGROUP 0x0854..0x085a (Ghidra p2_bbox_left/right/top/bottom)  */
 
 /* ── P2 render/view globals — OWNED here (Phase-4 T5; no other TU names them) ──── */
 s16 p2_scroll_x;         /* DGROUP 0x9d34 — P2 view scroll X (render/erase view) */
@@ -902,10 +896,10 @@ void erase_p2_view(void)
 void update_p2_bbox(void)
 {
     if (physics_frozen == 0) {
-        pvp_p2_x0 = (s16)(p2_pixel_x - 5);   /* left   0x854 */
-        pvp_p2_x1 = (s16)(p2_pixel_x + 6);   /* right  0x856 */
-        pvp_p2_y0 = (s16)(p2_pixel_y - 5);   /* top    0x858 */
-        pvp_p2_y1 = (s16)(p2_pixel_y + 5);   /* bottom 0x85a */
+        pvp_p2_bbox.x0 = (s16)(p2_pixel_x - 5);   /* left   0x854 */
+        pvp_p2_bbox.x1 = (s16)(p2_pixel_x + 6);   /* right  0x856 */
+        pvp_p2_bbox.y0 = (s16)(p2_pixel_y - 5);   /* top    0x858 */
+        pvp_p2_bbox.y1 = (s16)(p2_pixel_y + 5);   /* bottom 0x85a */
     }
     return;
 }
@@ -927,10 +921,10 @@ void update_p2_bbox(void)
 void update_p1_bbox(void)
 {
     if (physics_frozen == 0) {
-        pvp_p1_x0 = (s16)(p1_pixel_x - 5);   /* left   0x84c */
-        pvp_p1_x1 = (s16)(p1_pixel_x + 6);   /* right  0x84e */
-        pvp_p1_y0 = (s16)(p1_pixel_y - 5);   /* top    0x850 */
-        pvp_p1_y1 = (s16)(p1_pixel_y + 5);   /* bottom 0x852 */
+        pvp_p1_bbox.x0 = (s16)(p1_pixel_x - 5);   /* left   0x84c */
+        pvp_p1_bbox.x1 = (s16)(p1_pixel_x + 6);   /* right  0x84e */
+        pvp_p1_bbox.y0 = (s16)(p1_pixel_y - 5);   /* top    0x850 */
+        pvp_p1_bbox.y1 = (s16)(p1_pixel_y + 5);   /* bottom 0x852 */
     }
     return;
 }
@@ -961,13 +955,13 @@ void check_pvp_collision(void)
 
     if (p2_cell != (s8)0xff && physics_frozen == 0 &&
         session_continue_flag == 0 && game_mode != 0x30) {
-        if (pvp_p1_x1 < pvp_p2_x0) {              /* p1_right < p2_left */
+        if (pvp_p1_bbox.x1 < pvp_p2_bbox.x0) {              /* p1_right < p2_left */
             pvp_collision_flag = 0;
-        } else if (pvp_p2_x1 < pvp_p1_x0) {       /* p2_right < p1_left */
+        } else if (pvp_p2_bbox.x1 < pvp_p1_bbox.x0) {       /* p2_right < p1_left */
             pvp_collision_flag = 0;
-        } else if (pvp_p1_y1 < pvp_p2_y0) {       /* p1_bottom < p2_top */
+        } else if (pvp_p1_bbox.y1 < pvp_p2_bbox.y0) {       /* p1_bottom < p2_top */
             pvp_collision_flag = 0;
-        } else if (pvp_p2_y1 < pvp_p1_y0) {       /* p2_bottom < p1_top */
+        } else if (pvp_p2_bbox.y1 < pvp_p1_bbox.y0) {       /* p2_bottom < p1_top */
             pvp_collision_flag = 0;
         } else {
             pvp_collision_flag = 1;

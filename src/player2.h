@@ -100,14 +100,21 @@ extern u8  p2_dir_blocked_3;  /* DGROUP 0xa1b2 — AI dispatch dir-blocked flag 
 
 /* ── P1/P2 pvp-collision globals — OWNED BY player2.c ────────────────────────── */
 extern u8  pvp_collision_flag;/* DGROUP 0xa1aa — set 0/1 by check_pvp_collision   */
-extern s16 pvp_p1_x0;         /* DGROUP 0x084c — P1 AABB x0                        */
-extern s16 pvp_p1_x1;         /* DGROUP 0x084e — P1 AABB x1                        */
-extern s16 pvp_p1_y0;         /* DGROUP 0x0850 — P1 AABB y0                        */
-extern s16 pvp_p1_y1;         /* DGROUP 0x0852 — P1 AABB y1                        */
-extern s16 pvp_p2_x0;         /* DGROUP 0x0854 — P2 AABB x0                        */
-extern s16 pvp_p2_x1;         /* DGROUP 0x0856 — P2 AABB x1                        */
-extern s16 pvp_p2_y0;         /* DGROUP 0x0858 — P2 AABB y0                        */
-extern s16 pvp_p2_y1;         /* DGROUP 0x085a — P2 AABB y1                        */
+
+/* pvp_bbox_t — the P1/P2 AABB record.  DGROUP 0x084c..0x085a is one unbroken
+   16-byte run: the P1 box (0x84c/0x84e/0x850/0x852 = x0/x1/y0/y1) immediately
+   followed by the P2 box (0x854/0x856/0x858/0x85a) — two back-to-back instances
+   of the same 8-byte record (Ghidra: p1_bbox_left/right/top/bottom,
+   p2_bbox_left/right/top/bottom). */
+typedef struct {
+    s16 x0;  /* left   */
+    s16 x1;  /* right  */
+    s16 y0;  /* top    */
+    s16 y1;  /* bottom */
+} pvp_bbox_t;
+
+extern pvp_bbox_t pvp_p1_bbox; /* DGROUP 0x084c..0x0852 — P1 AABB */
+extern pvp_bbox_t pvp_p2_bbox; /* DGROUP 0x0854..0x085a — P2 AABB */
 
 /* ── globals OWNED ELSEWHERE (extern — must NOT be redefined in player2.c) ───── */
 extern u8  p2_move_state;     /* game.c   0x8562 — P2 move-state                  */

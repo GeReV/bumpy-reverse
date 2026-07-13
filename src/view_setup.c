@@ -21,8 +21,8 @@ extern void p2_cell_move_up(void);
 extern void p2_cell_move_down(void);
 extern void p2_cell_move_left(void);
 extern void p2_cell_move_right(void);
-#include "level.h"            /* level_get_entity_dg, DG_P1_OBJ, DG_P2_OBJ,
-                                  OBJ_FTBL_OFF, OBJ_FTBL_SEG */
+#include "level.h"            /* level_get_entity_dg, DG_P1_OBJ, DG_P2_OBJ */
+#include "entity.h"           /* sprite_obj_t */
 #include "input.h"            /* get_key_state */
 #include "game.h"             /* present_frame, set_display_page, draw_number */
 /* NOTE: player2.h and game.h declare p2_step_scripted_move with inconsistent
@@ -289,23 +289,23 @@ void init_sprite_structs(void)
  * ──────────────────────────────────────────────────────────────────────────── */
 void init_fullscreen_view_desc(u8 mode, u8 flag)
 {
-    u8 __far *d;
+    screen_view_desc __far *d;
 
     if (render_descriptor_ptr == (u8 __far *)0) {
         return;    /* descriptor not yet allocated — NOP */
     }
-    d = render_descriptor_ptr;
+    d = (screen_view_desc __far *)render_descriptor_ptr;
 
     /* 1:1 field-writes from the Ghidra decomp. */
-    *(u16 __far *)(d + 0x00) = (u16)mode;   /* sprite_id / source page index */
-    *(u16 __far *)(d + 0x06) = 0;
-    *(u16 __far *)(d + 0x08) = 0;
-    *(u16 __far *)(d + 0x0e) = (u16)flag;   /* field7 / NOP guard */
-    *(u16 __far *)(d + 0x14) = 0;
-    *(u16 __far *)(d + 0x16) = 0;
-    *(u16 __far *)(d + 0x1c) = 0;
-    *(u16 __far *)(d + 0x1e) = 0x14;
-    *(u16 __far *)(d + 0x20) = 0x19;
+    d->mode = (u16)mode;   /* sprite_id / source page index */
+    d->src_x = 0;
+    d->src_y = 0;
+    d->flag = (u16)flag;   /* field7 / NOP guard */
+    d->dest_x = 0;
+    d->dest_y = 0;
+    d->subhandler = 0;
+    d->clip_w = 0x14;
+    d->clip_h = 0x19;
 
     /* Engine: gfx_set_mode_11_thunk(off, seg) — the FULL-SCREEN PAGE SYNC: copy
      * page[word00=mode] → page[word0e=flag] (e.g. (1,0) copies the just-composed
@@ -384,7 +384,7 @@ void init_fullscreen_view_desc(u8 mode, u8 flag)
  * ──────────────────────────────────────────────────────────────────────────── */
 void setup_fullscreen_view(void)
 {
-    u8 __far *d;
+    screen_view_desc __far *d;
     const gfx_view_desc __far *view;
 
     /* Step 1: rebuild background tile runs (1:1 engine call). */
@@ -393,21 +393,21 @@ void setup_fullscreen_view(void)
     if (render_descriptor_ptr == (u8 __far *)0) {
         return;
     }
-    d = render_descriptor_ptr;
+    d = (screen_view_desc __far *)render_descriptor_ptr;
 
     /* Step 2: build the fullscreen view descriptor 1:1 with the engine decomp. */
-    *(u16 __far *)(d + 0x00) = 1;                /* source page-index 1 = a000 (page-0) */
-    *(u16 __far *)(d + 0x06) = 0;
-    *(u16 __far *)(d + 0x08) = 0;
-    *(u16 __far *)(d + 0x10) = fullscreen_buf;   /* dest far ptr offset */
-    *(u16 __far *)(d + 0x12) = fullscreen_buf_seg;
-    *(u16 __far *)(d + 0x14) = 0;
-    *(u16 __far *)(d + 0x16) = 0;
-    *(u16 __far *)(d + 0x18) = 0x14;
-    *(u16 __far *)(d + 0x1a) = 0x19;
-    *(u16 __far *)(d + 0x1c) = 0;               /* sub-handler 0 = full 4-plane copy */
-    *(u16 __far *)(d + 0x1e) = 0x14;
-    *(u16 __far *)(d + 0x20) = 0x19;
+    d->mode = 1;                /* source page-index 1 = a000 (page-0) */
+    d->src_x = 0;
+    d->src_y = 0;
+    d->blit_off = fullscreen_buf;   /* dest far ptr offset */
+    d->blit_seg = fullscreen_buf_seg;
+    d->dest_x = 0;
+    d->dest_y = 0;
+    d->sub_w = 0x14;
+    d->sub_h = 0x19;
+    d->subhandler = 0;               /* sub-handler 0 = full 4-plane copy */
+    d->clip_w = 0x14;
+    d->clip_h = 0x19;
 
     /* Step 3: clean-background capture (RECONSTRUCTION FIDELITY note §1).
      * Engine calls render_player_view(off, seg) which copies VGA a000 → fullscreen_buf.
@@ -483,7 +483,6 @@ static const char __far *hv_text_ptr_11ae = hv_text_str_1327;
 
 void show_text_screen(void)
 {
-    u16 __far *p;
     u8   char_idx;
     u8   col_pos;
     u8   ch;
@@ -534,17 +533,17 @@ void show_text_screen(void)
     wait_vretrace_thunk();   /* vsync wait (1000:9864); formerly mis-named upload_vga_dac_palette */
 
     /* Render 9 sprite glyphs at row 0x60 starting at col 6.
-     * p1_sprite word[1] = y = 0x60; per char: x = col * 16, frame = ch + 0x175.
+     * p1_sprite.y = 0x60; per char: x = col * 16, frame = ch + 0x175.
      * Skip spaces (ch == 0x20).  text_buf = the DGROUP 0x11ae far ptr copied to a
      * stack-local in the engine; here read through hv_text_ptr_11ae ("GAME OVER"). */
     col_pos = 6;
     if (p1_sprite != (u8 __far *)0) {
-        p = (u16 __far *)p1_sprite;
-        p[1] = 0x60;                          /* y = 0x60 (obj word at +0x02) */
+        sprite_obj_t __far *so = (sprite_obj_t __far *)p1_sprite;
+        so->y = 0x60;
         for (char_idx = 0; char_idx < 9; char_idx = char_idx + 1) {
             ch = (u8)hv_text_ptr_11ae[char_idx];
-            p[2] = (u16)(ch + 0x175u);        /* frame */
-            p[0] = (u16)((u16)col_pos << 4);  /* x = col * 16 */
+            so->frame = (u16)(ch + 0x175u);
+            so->x     = (s16)((u16)col_pos << 4);
             if (ch != 0x20) {
                 /* blit_sprite(0x792e, DS) — engine stamps the static DGROUP 0x203b;
                  * pass the loaded image's real DGROUP (host_dgroup_seg convention). */
@@ -588,7 +587,7 @@ void show_pause_screen(void)
 {
     u8  key_state;
     char quit_pressed;
-    u8 __far *d;
+    screen_view_desc __far *d;
     u16 pg;
     u8  r;
     u8  c;
@@ -596,23 +595,23 @@ void show_pause_screen(void)
     if (render_descriptor_ptr == (u8 __far *)0) {
         return;
     }
-    d = render_descriptor_ptr;
+    d = (screen_view_desc __far *)render_descriptor_ptr;
 
     /* Build the pause-overlay source-copy descriptor (1:1 from decomp):
      * word[0]=0 (source page-1 = a200), dest=0x9694:0x203b, 0x14 × 1 rect,
      * sub-handler=0 (full copy). */
-    *(u16 __far *)(d + 0x00) = 0;
-    *(u16 __far *)(d + 0x06) = 0;
-    *(u16 __far *)(d + 0x08) = 0;
-    *(u16 __far *)(d + 0x10) = 0x9694u;
-    *(u16 __far *)(d + 0x12) = 0x203bu;
-    *(u16 __far *)(d + 0x14) = 0;
-    *(u16 __far *)(d + 0x16) = 0;
-    *(u16 __far *)(d + 0x18) = 0x14u;
-    *(u16 __far *)(d + 0x1a) = 1;
-    *(u16 __far *)(d + 0x1c) = 0;
-    *(u16 __far *)(d + 0x1e) = 0x14u;
-    *(u16 __far *)(d + 0x20) = 1;
+    d->mode = 0;
+    d->src_x = 0;
+    d->src_y = 0;
+    d->blit_off = 0x9694u;
+    d->blit_seg = 0x203bu;
+    d->dest_x = 0;
+    d->dest_y = 0;
+    d->sub_w = 0x14u;
+    d->sub_h = 1;
+    d->subhandler = 0;
+    d->clip_w = 0x14u;
+    d->clip_h = 1;
 
     /* SAVE (engine: render_player_view with the descriptor above, word00=0 →
      * source page[table[0]]): read the 0x14×1-tile strip at (0,0) — 40 bytes ×
@@ -672,15 +671,15 @@ void show_pause_screen(void)
 
     /* Build the restore-view descriptor (1:1 from decomp): source=0x9694:0x203b,
      * word0e=0 (restore to page a200), 0x14 × 1 rect. */
-    *(u16 __far *)(d + 0x02) = 0x9694u;
-    *(u16 __far *)(d + 0x04) = 0x203bu;
-    *(u16 __far *)(d + 0x06) = 0;
-    *(u16 __far *)(d + 0x08) = 0;
-    *(u16 __far *)(d + 0x0a) = 0x14u;
-    *(u16 __far *)(d + 0x0c) = 1;
-    *(u16 __far *)(d + 0x0e) = 0;           /* word0e = 0 → restore to a200 page */
-    *(u16 __far *)(d + 0x14) = 0;
-    *(u16 __far *)(d + 0x16) = 0;
+    d->image_off = 0x9694u;
+    d->image_seg = 0x203bu;
+    d->src_x = 0;
+    d->src_y = 0;
+    d->width = 0x14u;
+    d->height = 1;
+    d->flag = 0;           /* word0e = 0 → restore to a200 page */
+    d->dest_x = 0;
+    d->dest_y = 0;
 
     /* RESTORE (engine: restore_bg_view with the descriptor above, word0e=0 →
      * dest page[table[0]], source the 0x9694 strip buffer): write hv_pause_strip's

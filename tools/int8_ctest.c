@@ -374,10 +374,10 @@ static void seed_from_init(const struct int8_init *in)
     p1_grid_y_prev     = s->p1_grid_y_prev;
     p1_scroll_x        = s->p1_scroll_x;
     p1_scroll_y        = s->p1_scroll_y;
-    pvp_p1_x0          = s->pvp_p1_x0;
-    pvp_p1_x1          = s->pvp_p1_x1;
-    pvp_p1_y0          = s->pvp_p1_y0;
-    pvp_p1_y1          = s->pvp_p1_y1;
+    pvp_p1_bbox.x0     = s->pvp_p1_x0;
+    pvp_p1_bbox.x1     = s->pvp_p1_x1;
+    pvp_p1_bbox.y0     = s->pvp_p1_y0;
+    pvp_p1_bbox.y1     = s->pvp_p1_y1;
     pending_erase_x    = s->pending_erase_x;
     pending_erase_y    = s->pending_erase_y;
     pending_erase_count= s->pending_erase_count;
@@ -445,6 +445,14 @@ static int g_perturb;
             *got = (long)(field); *want = (long)(f->state.field); return #field; } \
     } while (0)
 
+/* Like CMP1, but for live-side expressions whose name no longer matches the
+   f->state trace field 1:1 (e.g. a struct field access) — takes the trace
+   field name explicitly. */
+#define CMP2(live, tracefield)  do { \
+        if ((long)(live) != (long)(f->state.tracefield)) { \
+            *got = (long)(live); *want = (long)(f->state.tracefield); return #tracefield; } \
+    } while (0)
+
 static const char *cmp_frame(const struct int8_frame *f, long *got, long *want)
 {
     /* [phys] cmp_exit / [spine] cmp_grid + cmp_adv + cmp_bbox */
@@ -456,10 +464,10 @@ static const char *cmp_frame(const struct int8_frame *f, long *got, long *want)
     CMP1(p1_grid_y);
     CMP1(p1_grid_x_prev);
     CMP1(p1_grid_y_prev);
-    CMP1(pvp_p1_x0);
-    CMP1(pvp_p1_x1);
-    CMP1(pvp_p1_y0);
-    CMP1(pvp_p1_y1);
+    CMP2(pvp_p1_bbox.x0, pvp_p1_x0);
+    CMP2(pvp_p1_bbox.x1, pvp_p1_x1);
+    CMP2(pvp_p1_bbox.y0, pvp_p1_y0);
+    CMP2(pvp_p1_bbox.y1, pvp_p1_y1);
     /* p1_pixel_y_dup — items' separate p1_pixel_y compare (explicit alias) */
     if ((long)p1_pixel_y != (long)f->state.p1_pixel_y_dup) {
         *got = (long)p1_pixel_y; *want = (long)f->state.p1_pixel_y_dup;
@@ -633,8 +641,8 @@ static void snapshot_state(struct int8_frame_state *st)
     st->p1_grid_x_new = p1_grid_x_new; st->p1_grid_y_new = p1_grid_y_new;
     st->p1_grid_x = p1_grid_x; st->p1_grid_y = p1_grid_y;
     st->p1_grid_x_prev = p1_grid_x_prev; st->p1_grid_y_prev = p1_grid_y_prev;
-    st->pvp_p1_x0 = pvp_p1_x0; st->pvp_p1_x1 = pvp_p1_x1;
-    st->pvp_p1_y0 = pvp_p1_y0; st->pvp_p1_y1 = pvp_p1_y1;
+    st->pvp_p1_x0 = pvp_p1_bbox.x0; st->pvp_p1_x1 = pvp_p1_bbox.x1;
+    st->pvp_p1_y0 = pvp_p1_bbox.y0; st->pvp_p1_y1 = pvp_p1_bbox.y1;
     st->p1_pixel_y_dup = p1_pixel_y;
     st->score_lo = score_lo; st->score_hi = score_hi;
     st->p1_move_anim = p1_move_anim; st->game_mode = game_mode;

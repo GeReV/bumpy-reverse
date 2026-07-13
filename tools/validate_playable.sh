@@ -140,8 +140,19 @@ if [ -f "$DEF_EXE" ]; then
     # Re-bumped 2026-07-13 (MT-32 SFX): snd_opl_sample_table (sound.c, DGROUP 0x27ae) was a
     # zeroed placeholder that silenced all MT-32 sound effects (emit sent note-on velocity 0);
     # now populated 1:1 from the binary (0x30 real {note,vel} entries) so bounce/land SFX sound.
-    [ "$DEF_MD5" = "aebc5c018186c00ad3e3d59ee4c3a9f8" ] \
-        || echo "   WARNING: default BUMPY.EXE md5 changed (expected aebc5c01...)"
+    # Re-bumped 2026-07-13 (struct introduction pass, Tier 1): pvp_bbox_t (player2.c),
+    # sprite_obj_t (entity.c/level.c), blit_desc_t (sprite_chain.c), and screen_view_desc
+    # (screens.c) replace flat scalars / raw offset arithmetic with named structs over the
+    # SAME bytes — no behavior change (chain_ctest 17/17, blit_ctest 24/24, validate_p2 74/74,
+    # validate_screens 5/5 pixel-exact, validate_int8 150-tick replay all unchanged) — but
+    # collapsing N separate DGROUP globals into fewer struct instances shifts the Open Watcom
+    # linker's internal variable layout (this build's own DGROUP was never byte-matched to the
+    # original engine's addresses anyway, see level.h's DG_* shadow-buffer note), hence the hash
+    # moves even though no logic changed.  snd_opl_sample_table's struct-array conversion and
+    # snd_tone_param_frame's macro-overlay (sound.c) did NOT move the hash (same variable count/
+    # position, verified by direct rebuild comparison).
+    [ "$DEF_MD5" = "4b78a7fa5a6312cdee2e53a4d80b923e" ] \
+        || echo "   WARNING: default BUMPY.EXE md5 changed (expected 4b78a7fa...)"
 fi
 
 # ── 4. Capture helper ─────────────────────────────────────────────────────────

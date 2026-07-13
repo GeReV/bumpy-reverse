@@ -38,10 +38,51 @@
  *  dispatch read is a word; the low byte is the mode). */
 extern u16 palette_mode;                  /* DGROUP 0x541d */
 
+/* screen_view_desc — the 0x26-byte view/blit descriptor render_descriptor_ptr
+ *  points at (a 0x22-byte core + 4 iris-status bytes).  Built by
+ *  draw_hud_composite / show_title_background / show_title_and_init /
+ *  run_main_menu / show_highscore_screen / level_intro_screen /
+ *  play_iris_wipe_transition (screens.c) and their host counterparts
+ *  (view_setup.c); consumed by anim_render_leaf_80ac / fun_7b4a_view_blit /
+ *  fun_7b93_present_blank.  Every field below is write-only in this codebase
+ *  (no read-back site exists), so field roles come from the constructors.
+ *
+ *  Two fields carry more than one role depending on which underlying blit
+ *  primitive consumes the descriptor (documented here, not guessed away):
+ *    - blit_off/blit_seg (+0x10/+0x12): a "tile source" far ptr for the
+ *      sprite-tile HUD blit (draw_hud_composite), but view_setup.c's own
+ *      comment calls the identical field a "dest far ptr" for the
+ *      fullscreen-image writer — same bytes, different consumer.
+ *    - subhandler (+0x1c): named to match gfx_view_desc's identical-offset
+ *      dispatch-selector field; one screens.c comment calls it "clip x"
+ *      instead — a pre-existing inconsistency in the ported comments, not a
+ *      genuinely different field. */
+typedef struct {
+    u16 mode;         /* +0x00 mode/page-index selector (view_setup.c only; never
+                          written by the default-build screens.c functions) */
+    u16 image_off;    /* +0x02 source image far ptr: offset half */
+    u16 image_seg;    /* +0x04 source image far ptr: segment half */
+    u16 src_x;        /* +0x06 source X within the image */
+    u16 src_y;        /* +0x08 source Y within the image */
+    u16 width;        /* +0x0a width */
+    u16 height;       /* +0x0c height */
+    u16 flag;         /* +0x0e 0/1 flag ("field7" / NOP guard per view_setup.c) */
+    u16 blit_off;     /* +0x10 second far ptr: offset half (role varies, see above) */
+    u16 blit_seg;     /* +0x12 second far ptr: segment half */
+    u16 dest_x;       /* +0x14 dest X */
+    u16 dest_y;       /* +0x16 dest Y */
+    u16 sub_w;        /* +0x18 sub-extent width */
+    u16 sub_h;        /* +0x1a sub-extent height */
+    u16 subhandler;   /* +0x1c dispatch selector (see above) */
+    u16 clip_w;       /* +0x1e clip width */
+    u16 clip_h;       /* +0x20 clip height */
+    u8  status[4];    /* +0x22..+0x25 iris-wipe status bytes (render_descriptor_ptr only) */
+} screen_view_desc;
+
 /* render_descriptor_ptr (far ptr @ DGROUP 0x0574/0x0576, `DAT_0574`): points at the
- *  0x22-byte view struct the screen builders fill (image far ptr, src/dst x/y, w/h,
- *  flags, clip rect).  Split off/seg per the project's deliberate _off/_seg far-pointer
- *  convention; here modelled as a single `__far` pointer (matches the engine's LES read). */
+ *  screen_view_desc the screen builders fill.  Split off/seg per the project's
+ *  deliberate _off/_seg far-pointer convention; here modelled as a single `__far`
+ *  pointer (matches the engine's LES read). */
 extern u8 __far *render_descriptor_ptr;   /* DGROUP 0x0574/0x0576 */
 
 /* fullscreen_buf (off DGROUP 0x7926 / seg DGROUP 0x7928): the engine's post-vec_decode

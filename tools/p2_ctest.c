@@ -345,12 +345,12 @@ static void seed_sprite_obj(void)
  *  (the flag output is the validated gate). */
 static void seed_pvp_bboxes(const char *scname)
 {
-    pvp_p1_x0 = 50; pvp_p1_x1 = 70; pvp_p1_y0 = 50; pvp_p1_y1 = 70;
+    pvp_p1_bbox.x0 = 50; pvp_p1_bbox.x1 = 70; pvp_p1_bbox.y0 = 50; pvp_p1_bbox.y1 = 70;
     if (strcmp(scname, "pvp_disjoint") == 0) {
-        pvp_p2_x0 = 200; pvp_p2_x1 = 220; pvp_p2_y0 = 200; pvp_p2_y1 = 220;
+        pvp_p2_bbox.x0 = 200; pvp_p2_bbox.x1 = 220; pvp_p2_bbox.y0 = 200; pvp_p2_bbox.y1 = 220;
     } else {
         /* pvp_overlap (and any other pvp record) -> overlapping geometry */
-        pvp_p2_x0 = 60; pvp_p2_x1 = 80; pvp_p2_y0 = 60; pvp_p2_y1 = 80;
+        pvp_p2_bbox.x0 = 60; pvp_p2_bbox.x1 = 80; pvp_p2_bbox.y0 = 60; pvp_p2_bbox.y1 = 80;
     }
 }
 
