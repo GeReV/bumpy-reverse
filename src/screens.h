@@ -137,6 +137,10 @@ void init_ega_palette_patch_tables(void);
 #define FORMATTED_NUMBER_LEN   16
 extern char formatted_number_buf[FORMATTED_NUMBER_LEN];
 
+/* GLYPH_FRAME_BIAS: char code -> sprite-glyph frame index (frame = ch + 0x175).
+ * Bare (unsuffixed, signed-int) literal — matches every original site exactly. */
+#define GLYPH_FRAME_BIAS 0x175
+
 /* ── EXTERN — owned elsewhere (grep evidence in screens.c ownership block) ─────────
  *  current_level          level.c:106  `u8 current_level = 1u;`        (0x79b2)
  *  input_state            input.c:46   `u8 input_state;`               (0x8244)

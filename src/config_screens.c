@@ -59,6 +59,11 @@
 #define HC_F7 0x41u       /* sound: -> sound_device_state = 1      (AdLib)   */
 #define HC_F8 0x42u       /* sound: -> sound_device_state = 4      (MT-32)   */
 
+/* Menu cursor position (row 10, col 33) — shared by gfx_driver_init and
+ * sound_device_select_screen. */
+#define HC_MENU_ROW 0x0Au
+#define HC_MENU_COL 0x21u
+
 /* DGROUP 0x689c — set by the sound-select screen, consumed by sound_select_device
  * (1000:6de3): 0x8000 == force-muted, else a device id fed to snddrv_init's mask. */
 extern s16 sound_device_state;
@@ -132,10 +137,10 @@ void gfx_driver_init(void)
 
     /* 1ab9:02ef  loop the 6 adapter-table entries, printing present ones at col 33,
      *            rows starting at 10 (dx=0a21h), one row down per printed line. */
-    row = 0x0Au;
+    row = HC_MENU_ROW;
     for (i = 0u; i < 6u; i = i + 1u) {
         if (hc_adapter_present[i] == 1u) {
-            hc_set_cursor(row, 0x21u);
+            hc_set_cursor(row, HC_MENU_COL);
             hc_dos_print(hc_lines[i]);
             row = row + 1u;                /* 1ab9:030e  inc dh */
         }
@@ -177,10 +182,10 @@ void sound_device_select_screen(void)
     hc_dos_print(hc_snd_header);           /* 202c:001b  int 21h AH=09h @ 6840 */
 
     /* 202c:0021  print present devices at col 33, rows from 10 (dx=0a21h). */
-    row = 0x0Au;
+    row = HC_MENU_ROW;
     for (i = 0u; i < 4u; i = i + 1u) {
         if (hc_snd_present[i] == 1u) {
-            hc_set_cursor(row, 0x21u);
+            hc_set_cursor(row, HC_MENU_COL);
             hc_dos_print(hc_snd_lines[i]);
             row = row + 1u;                /* 202c:0040  inc dh */
         }

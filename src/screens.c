@@ -1322,7 +1322,7 @@ void show_menu_select_screen(void)
     /* RECONSTRUCTION FIDELITY — menu-select text rows.  The engine fmemcpy's three
      * loader-relocated far pointers (DGROUP 0x11a2/0x11a6/0x11aa → the strings at
      * DGROUP 0x12f5/0x1309/0x1318) into SS-locals, then draws each char as a sprite
-     * glyph (frame = char + 0x175).  The reconstruction keeps the row buffers as module
+     * glyph (frame = char + GLYPH_FRAME_BIAS).  The reconstruction keeps the row buffers as module
      * globals and fills them here from the SAME DGROUP string literals — the relocated
      * far pointers can't be statically embedded (same rationale as
      * init_highscore_default_table).  Without this row1 stayed zero-filled and drew 19×
@@ -1369,7 +1369,7 @@ void show_menu_select_screen(void)
     p[1] = 0x10;
     for (char_idx = 0; char_idx < 0x13; char_idx = char_idx + 1) {
         bVar1 = menu_select_row1[char_idx];
-        ((u16 __far *)p1_sprite)[2] = (u16)bVar1 + 0x175;
+        ((u16 __far *)p1_sprite)[2] = (u16)bVar1 + GLYPH_FRAME_BIAS;
         *(u16 __far *)p1_sprite = (u16)col_pos << 4;
         if (bVar1 != 0x20) {
             anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
@@ -1401,7 +1401,7 @@ void show_menu_select_screen(void)
     ((u16 __far *)p1_sprite)[1] = 0x60;
     for (char_idx = 0; char_idx < 0x0e; char_idx = char_idx + 1) {
         bVar1 = third_row[char_idx];
-        ((u16 __far *)p1_sprite)[2] = (u16)bVar1 + 0x175;
+        ((u16 __far *)p1_sprite)[2] = (u16)bVar1 + GLYPH_FRAME_BIAS;
         *(u16 __far *)p1_sprite = (u16)col_pos << 4;
         if (bVar1 != 0x20) {
             anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
@@ -1890,14 +1890,14 @@ void highscore_enter_name(u8 row)
                         if (letter_code == 0x1d0) {
                             letter_code = 0x1a3;
                         }
-                        letter_code = letter_code - 0x175;
+                        letter_code = letter_code - GLYPH_FRAME_BIAS;
                         name[char_idx] = (u8)letter_code;
                         char_idx = char_idx + 1;
                         letter_code = (u16)name[char_idx];
                         if (letter_code == 0x2e) {
                             letter_code = 0x5b;
                         }
-                        letter_code = letter_code + 0x175;
+                        letter_code = letter_code + GLYPH_FRAME_BIAS;
                         anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
                         draw_name_entry_cursor((u8)(row * 0x10 + 'A'), char_idx,
                                                letter_code, 0);
@@ -1906,14 +1906,14 @@ void highscore_enter_name(u8 row)
                     if (letter_code == 0x1d0) {
                         letter_code = 0x1a3;
                     }
-                    letter_code = letter_code - 0x175;
+                    letter_code = letter_code - GLYPH_FRAME_BIAS;
                     name[char_idx] = (u8)letter_code;
                     char_idx = char_idx - 1;
                     letter_code = (u16)name[char_idx];
                     if (letter_code == 0x2e) {
                         letter_code = 0x5b;
                     }
-                    letter_code = letter_code + 0x175;
+                    letter_code = letter_code + GLYPH_FRAME_BIAS;
                     anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
                     draw_name_entry_cursor((u8)(row * 0x10 + 'A'), char_idx,
                                            letter_code, 0);
@@ -1923,12 +1923,12 @@ void highscore_enter_name(u8 row)
                 if (letter_code == 0x1d0) {
                     letter_code = 0x1a3;
                 }
-                letter_code = letter_code - 0x175;
+                letter_code = letter_code - GLYPH_FRAME_BIAS;
                 name[char_idx] = (u8)letter_code;
                 if (letter_code == 0x2e) {
                     letter_code = 0x5b;
                 }
-                letter_code = letter_code + 0x175;
+                letter_code = letter_code + GLYPH_FRAME_BIAS;
                 draw_name_entry_cursor((u8)(row * 0x10 + 'A'), char_idx,
                                        letter_code, 1);
             }
@@ -1937,12 +1937,12 @@ void highscore_enter_name(u8 row)
             if (letter_code == 0x1d0) {
                 letter_code = 0x1a3;
             }
-            letter_code = letter_code - 0x175;
+            letter_code = letter_code - GLYPH_FRAME_BIAS;
             name[char_idx] = (u8)letter_code;
             if (letter_code == 0x2e) {
                 letter_code = 0x5b;
             }
-            letter_code = letter_code + 0x175;
+            letter_code = letter_code + GLYPH_FRAME_BIAS;
             draw_name_entry_cursor((u8)(row * 0x10 + 'A'), char_idx,
                                    letter_code, 1);
         }
@@ -2014,7 +2014,7 @@ void render_highscore_table(void)
                     name_char = 0x5b;
                 }
             }
-            p[2] = (u16)name_char + 0x175;
+            p[2] = (u16)name_char + GLYPH_FRAME_BIAS;
             *p = (u16)char_col << 4;
             if (name_char != 0x20) {
                 anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
@@ -2145,7 +2145,7 @@ u8 enter_password(u8 col, u8 row)
                         if (cur_letter == 0x1d0) {
                             cur_letter = 0x1a3;
                         }
-                        cur_letter = cur_letter - 0x175;
+                        cur_letter = cur_letter - GLYPH_FRAME_BIAS;
                         name_buf[cursor_pos] = (u8)cur_letter;
                         cursor_pos = cursor_pos + 1;
                         row = row + 1;
@@ -2153,7 +2153,7 @@ u8 enter_password(u8 col, u8 row)
                         if (cur_letter == 0x2e) {
                             cur_letter = 0x5b;
                         }
-                        cur_letter = cur_letter + 0x175;
+                        cur_letter = cur_letter + GLYPH_FRAME_BIAS;
                         anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
                         draw_name_entry_cursor((u8)(col << 4), row, cur_letter, 0);
                     }
@@ -2161,7 +2161,7 @@ u8 enter_password(u8 col, u8 row)
                     if (cur_letter == 0x1d0) {
                         cur_letter = 0x1a3;
                     }
-                    cur_letter = cur_letter - 0x175;
+                    cur_letter = cur_letter - GLYPH_FRAME_BIAS;
                     name_buf[cursor_pos] = (u8)cur_letter;
                     cursor_pos = cursor_pos - 1;
                     row = row - 1;
@@ -2169,7 +2169,7 @@ u8 enter_password(u8 col, u8 row)
                     if (cur_letter == 0x2e) {
                         cur_letter = 0x5b;
                     }
-                    cur_letter = cur_letter + 0x175;
+                    cur_letter = cur_letter + GLYPH_FRAME_BIAS;
                     anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
                     draw_name_entry_cursor((u8)(col << 4), row, cur_letter, 0);
                 }
@@ -2178,12 +2178,12 @@ u8 enter_password(u8 col, u8 row)
                 if (cur_letter == 0x1d0) {
                     cur_letter = 0x1a3;
                 }
-                cur_letter = cur_letter - 0x175;
+                cur_letter = cur_letter - GLYPH_FRAME_BIAS;
                 name_buf[cursor_pos] = (u8)cur_letter;
                 if (cur_letter == 0x2e) {
                     cur_letter = 0x5b;
                 }
-                cur_letter = cur_letter + 0x175;
+                cur_letter = cur_letter + GLYPH_FRAME_BIAS;
                 draw_name_entry_cursor((u8)(col << 4), row, cur_letter, 1);
             }
         } else {                                              /* 1 = left (prev letter) */
@@ -2191,12 +2191,12 @@ u8 enter_password(u8 col, u8 row)
             if (cur_letter == 0x1d0) {
                 cur_letter = 0x1a3;
             }
-            cur_letter = cur_letter - 0x175;
+            cur_letter = cur_letter - GLYPH_FRAME_BIAS;
             name_buf[cursor_pos] = (u8)cur_letter;
             if (cur_letter == 0x2e) {
                 cur_letter = 0x5b;
             }
-            cur_letter = cur_letter + 0x175;
+            cur_letter = cur_letter + GLYPH_FRAME_BIAS;
             draw_name_entry_cursor((u8)(col << 4), row, cur_letter, 1);
         }
     }
@@ -2266,7 +2266,7 @@ void show_level_intro_screen(void)
     for (char_idx = 0; char_idx < 0xd; char_idx = char_idx + 1) {
         p = (u16 __far *)p1_sprite;
         glyph_ch = intro_name_row[char_idx];
-        p[2] = (u16)glyph_ch + 0x175;
+        p[2] = (u16)glyph_ch + GLYPH_FRAME_BIAS;
         *p = (u16)col_pos << 4;
         if (glyph_ch != 0x20) {
             anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
@@ -2280,7 +2280,7 @@ void show_level_intro_screen(void)
     ((u16 __far *)p1_sprite)[1] = 0x70;
     for (char_idx = 0; char_idx < 6; char_idx = char_idx + 1) {
         p = (u16 __far *)p1_sprite;
-        p[2] = (u16)level_name[char_idx] + 0x175;
+        p[2] = (u16)level_name[char_idx] + GLYPH_FRAME_BIAS;
         *p = (u16)col_pos << 4;
         anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
         col_pos = col_pos + 1;
