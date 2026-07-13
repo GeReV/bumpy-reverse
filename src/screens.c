@@ -82,6 +82,7 @@
 #include "screens.h"
 #ifdef BUMPY_PLAYABLE
 #include "host/host_gfx.h"   /* host_gfx_stage_image_palette / host_gfx_upload_palette_to_dac */
+#include <malloc.h>          /* _ffree — release the intro SMF buffer (play_intro_animation_loop) */
 #endif
 
 /* ── screen-state scalars ───────────────────────────────────────────────────────── */
@@ -673,7 +674,134 @@ void fun_9410_set_sprite_table(u16 arg)
 #else
 void fun_9410_set_sprite_table(u16 arg) { (void)arg; }
 #endif
-void play_intro_animation_loop(void) { }   /* PENDING: decompile 1000:... */
+/* ── play_intro_animation_loop (1000:30dd) — title-screen music + wait-for-FIRE ─────
+ *  Called by show_title_background (after it presents resource 2, the title image).  Loads
+ *  the two intro-music resources — with the TITLE resource table active (init_title_graphics
+ *  set_resource_table(0x928)): resource 4 = BUMPY.BNK (AdLib instrument bank) into
+ *  fullscreen_buf, resource 5 = BUMPY.MID (the SMF song) into the screen-sprite buffer
+ *  (DGROUP 0xa0c6/0xa0c8) — then, with the title image still on screen:
+ *    - sound OFF (sound_device_state == 0x8000): idle-poll until ANY key (input_state != 0);
+ *    - sound ON: (re)start the sequence via midi_play_sequence(song=SMF, aux=BNK, flag=1) and
+ *      spin midi_get_track_count() (nonzero while the song plays; the tempo ISR advances it)
+ *      polling read_input_action for FIRE (bit 0x10); when the song ends (count 0) replay it;
+ *      on FIRE tear the sequencer down (midi_sound_init) and, in PC-speaker mode
+ *      (sound_device_state == 0), reset timer slot 0 + strobe the speaker.
+ *  copyprot_seed_src (DGROUP 0x119c) += 7 each poll — the intro's input-wait time stirs the
+ *  copy-protection PRNG seed.  asm 1000:30dd verbatim.
+ *
+ *  NAME/CONVENTION NOTE: the screen-sprite buffer (DGROUP 0xa0c6/0xa0c8) is a far-pointer
+ *  cell the reconstruction does not model; per the established init_title_graphics convention
+ *  (screens.c above; host_resource.c) it is passed as the LITERAL DGROUP offsets 0xa0c6/0xa0c8
+ *  (the real asm reads their CONTENTS).  0x7e18 (set_timer_slot_stack) is the stack-arg entry
+ *  alias of set_timer_slot_reg (0x7e1f) — the same body; the C set_timer_slot_reg already
+ *  models the stack-arg convention, so set_timer_slot_reg(1) is the faithful call. */
+void play_intro_animation_loop(void)
+{
+    extern s16  sound_device_state;         /* player.c   DGROUP 0x689c (-0x8000 == no sound) */
+    extern u8   input_state;                /* input.c    DGROUP 0x8244 */
+    extern u16  copyprot_seed_src;          /* level.c    DGROUP 0x119c (copy-prot PRNG seed) */
+    extern u16  read_input_action(u16 handler_idx);           /* input.c    1000:75a2 */
+    extern int  midi_play_sequence(void *song, void *aux, u16 flag);  /* midi.c 1000:8977 */
+    extern s16  midi_get_track_count(void);                   /* midi.c     1000:8999 */
+    extern void midi_sound_init(void);                        /* midi.c     1000:89a8 */
+    extern int  set_timer_slot_reg(int channel);              /* sound.c    1000:7e1f (7e18 alias) */
+    extern void record_status_and_strobe_speaker(void);       /* sound.c    1000:946e */
+#ifdef BUMPY_PLAYABLE
+    extern u8 __far *host_intro_smf_fp;     /* host_resource.c — loaded BUMPY.MID (0 if absent/OOM) */
+#endif
+
+    u8  fire = 0;                                              /* 30ec [BP-1] */
+    int file_handle;
+    u16 action;
+
+    file_handle = open_resource(4, 4);                        /* 30f0..30f5 open_resource(4,4) = BUMPY.BNK */
+    read_chunked(file_handle, fullscreen_buf, fullscreen_buf_seg, 0x0956, 0x0958);  /* 30fd..3111 */
+    c_close(file_handle);                                      /* 3117..3118 */
+
+    file_handle = open_resource(5, 4);                        /* 311d..3125 open_resource(5,4) = BUMPY.MID */
+    read_chunked(file_handle, 0xa0c6, 0xa0c8, 0x0960, 0x0962);  /* 312d..3141 (literal screen_sprite_buf) */
+    c_close(file_handle);                                      /* 3147..3148 */
+
+    if (sound_device_state == -0x8000) {                      /* 314d CMP [0x689c],0x8000; JZ 31bd */
+        input_state = 0;                                       /* 31bd */
+        while (input_state == 0) {                             /* 31d0..31d7 */
+            poll_input();                                       /* 31c4 */
+            copyprot_seed_src = (u16)(copyprot_seed_src + 7);  /* 31c7..31cd */
+        }
+    } else {                                                   /* 3155 JMP 319c (sound on) */
+        /* song = resource 5 (BUMPY.MID / SMF), aux = resource 4 (BUMPY.BNK / instrument bank).
+         *  Faithful: song = the literal screen_sprite_buf far ptr (0xa0c8:0xa0c6, asm 3163/3167).
+         *  Playable: that literal is VGA memory, so use the host's real SMF buffer (host_resource.c
+         *  loads BUMPY.MID there); if the load failed, host_intro_smf_fp is 0 and the no-hang guard
+         *  below keeps input responsive.  aux = fullscreen_buf (asm 315b/315f) holds the BNK. */
+        void *aux = (void *)MK_FP(fullscreen_buf_seg, fullscreen_buf);
+        void *song;
+#ifdef BUMPY_PLAYABLE
+        song = (host_intro_smf_fp != (u8 __far *)0)
+             ? (void *)host_intro_smf_fp
+             : (void *)MK_FP(0xa0c8u, 0xa0c6u);
+#else
+        song = (void *)MK_FP(0xa0c8u, 0xa0c6u);
+#endif
+        while (fire == 0) {                                    /* 319c outer: replay until FIRE */
+            midi_play_sequence(song, aux, 1u);                 /* 3157..316b flag = 1 (play once) */
+#ifdef BUMPY_PLAYABLE
+            /* Playable no-hang guard (documented deviation): if the sequence failed to load
+             *  (count stays 0 — SMF absent / OOM / device off), the faithful inner loop never
+             *  runs and this outer loop would tight-spin without polling input.  Poll once here
+             *  so FIRE/Enter still exits.  Harmless when music loaded (count>0 → inner loop runs). */
+            if (midi_get_track_count() == 0) {
+                copyprot_seed_src = (u16)(copyprot_seed_src + 7);
+                if ((read_input_action((u16)(copyprot_seed_src & 0xff00u)) & 0x10) != 0) {
+                    fire = 1;
+                }
+            }
+#endif
+            while (midi_get_track_count() != 0 && fire == 0) {  /* 318c..319a inner: poll while playing */
+                copyprot_seed_src = (u16)(copyprot_seed_src + 7);          /* 3173..3179 */
+                action = read_input_action((u16)(copyprot_seed_src & 0xff00u));  /* 317c..317f (AL=0) */
+                if ((action & 0x10) != 0) {                    /* 3184 TEST AL,0x10 */
+                    fire = 1;                                   /* 3188 FIRE pressed */
+                }
+            }
+        }
+        midi_sound_init();                                     /* 31a5 */
+        if (sound_device_state == 0) {                         /* 31a8 CMP [0x689c],0; JNZ 31d9 */
+            set_timer_slot_reg(1);                             /* 31af..31b3 CALL 7e18 (stack-entry alias) */
+            record_status_and_strobe_speaker();                /* 31b8 */
+        }
+    }
+#ifdef BUMPY_PLAYABLE
+    /* RECONSTRUCTION FIDELITY — intro-SMF buffer lifetime (host memory constraint, 2026-07-13).
+     *  The engine reads BUMPY.MID into screen_sprite_buf (0xa0c6/0xa0c8) — a SHARED session
+     *  buffer that alloc_level_buffers (1000:0492) allocates ONCE (malloc 0x5c70) and gameplay
+     *  REUSES for each level's sprite bank; release_level_buffers (1000:05ad) frees it only at
+     *  exit.  So the SMF is transient scratch: overwritten by the first level's sprite load, never
+     *  resident during play — the engine pays NO dedicated MIDI memory.
+     *
+     *  The playable host does not model screen_sprite_buf (its sprite-bank reads drain to VGA /
+     *  discard — process_sprites is a NOP), so play_intro's SMF was staged in a PRIVATE _fmalloc
+     *  (host_resource.c).  Holding that 36 KB for the whole run — on TOP of the host-only
+     *  hv_saveunder_buf (32 KB) the engine never allocates — overflowed the reduced 640 KB far
+     *  heap: at level load hv_saveunder_buf's _fmalloc(32000) then returned NULL (verified: with
+     *  the SMF held a 32000-byte _fmalloc fails; the SMF's own 36 KB block allocates), which NULLed
+     *  host_clean_bg() and disabled the clean-bg erase/save-under paths (layer-A platform erase +
+     *  deferred item erase in anim_restore_bg_view_leaf both early-return on clean==NULL, and
+     *  hr_restore_under's top-row flag page-coherence guard is skipped) → platform trails, items
+     *  not erased on pickup, and the EGA top-strip flag flicker returned.
+     *
+     *  The intro is the SMF's only reader and midi_sound_init() above has torn the sequencer down
+     *  (the tempo timer slot is removed, so the INT8 slot-sweep no longer dereferences it), so we
+     *  free it here.  This mirrors the engine's observable behaviour (the SMF is not resident past
+     *  the intro) while respecting the host's tighter heap — the host carries neither the sprite
+     *  buffer nor a persistent SMF buffer.  Lazily re-allocated by read_chunked if the intro
+     *  replays.  docs/reconstruction-fidelity.md ("playable host: intro-SMF buffer"). */
+    if (host_intro_smf_fp != (u8 __far *)0) {
+        _ffree(host_intro_smf_fp);
+        host_intro_smf_fp = (u8 __far *)0;
+    }
+#endif
+}
 /* wait_50_frames (1000:...): idle 50 (0x32) frame ticks via run_n_frames. */
 void wait_50_frames(void) { run_n_frames(0x32u); }
 

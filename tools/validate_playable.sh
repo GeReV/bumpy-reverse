@@ -126,11 +126,22 @@ DEF_EXE="local/build/src/BUMPY.EXE"
 if [ -f "$DEF_EXE" ]; then
     DEF_MD5=$(md5sum "$DEF_EXE" | cut -d' ' -f1)
     echo "   default reconstruction BUMPY.EXE md5 = $DEF_MD5"
-    # Baseline updated 2026-07-11 (EGA-path Task 6): the faithful gfx_palette.obj
-    # is now linked into the default build, shifting the image from the prior
-    # cac9ff23... baseline.
-    [ "$DEF_MD5" = "e8957fa0e38daa3fb27b360933cebbe4" ] \
-        || echo "   WARNING: default BUMPY.EXE md5 changed (expected e8957fa0...)"
+    # Baseline updated 2026-07-13 (audio subsystem): the tempo-ISR sequence-advance
+    # midi_tempo_tick (midi.c 0x864c), its snd_timer_slot_sweep dispatch (sound.c), the
+    # faithful play_intro_animation_loop body (screens.c 0x30dd) and its copyprot_seed_src
+    # global (globals.c) are now reconstructed into the default build.  Re-bumped 2026-07-13
+    # (silent-intro fix): snddrv_init (sound.c 0x88e5) now accumulates the real device-
+    # detection bitmask (|4 MPU, |1 OPL) from its two sub-calls' return-ZF instead of the
+    # hard-coded status=0 that Ghidra's fake dead-substep_ok decompile implied — shifting the
+    # image from 55b362c6... (itself from the prior e8957fa0/EGA-path baseline).
+    # Re-bumped 2026-07-13 (PC-speaker music + MT-32): mpu401_present/midi_seq_step_active
+    # static init = 1 (image), snd_busy_delay MPU raw-forward, + the pcspk_music_render
+    # (0x9136) reconstruction & freq table land in the default build too.
+    # Re-bumped 2026-07-13 (MT-32 SFX): snd_opl_sample_table (sound.c, DGROUP 0x27ae) was a
+    # zeroed placeholder that silenced all MT-32 sound effects (emit sent note-on velocity 0);
+    # now populated 1:1 from the binary (0x30 real {note,vel} entries) so bounce/land SFX sound.
+    [ "$DEF_MD5" = "aebc5c018186c00ad3e3d59ee4c3a9f8" ] \
+        || echo "   WARNING: default BUMPY.EXE md5 changed (expected aebc5c01...)"
 fi
 
 # ── 4. Capture helper ─────────────────────────────────────────────────────────

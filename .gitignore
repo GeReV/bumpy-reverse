@@ -12,6 +12,8 @@ __pycache__/
 *.o
 *.lst
 /src/play/
+# worktree-local build output (Makefile BUMPY_OUTDIR override; default lands in /local/)
+/src/out/
 
 # Root dotfiles (sandbox-mounted shell/editor/agent config — not part of the repo)
 /.*

@@ -23,7 +23,27 @@ CC      = wcc
 CFLAGS  = -ml -bt=dos -zq -wx
 LINK    = wcl
 LFLAGS  = -ml -bt=dos -zq
+
+# OUTDIR — where the linked EXEs/maps land.  The DEFAULT ../local/build/src is the
+# repo-standard path the tools/ harness scripts (validate_playable / validate_ega /
+# run_bumpy / shot.sh / cap_w2.sh, ...) read the built EXEs from, so it is kept as the
+# default and the primary checkout is unaffected.
+#
+# OVERRIDE it to build a linked git WORKTREE without clobbering the primary checkout's
+# artifacts: a worktree reaches the (gitignored) toolchain + data through a `local`
+# symlink into the main checkout, so the default OUTDIR would send build output back
+# into the main tree.  Point it elsewhere via either (precedence high→low):
+#   wmake OUTDIR=<dir> ...          # command line
+#   BUMPY_OUTDIR=<dir> wmake ...    # environment variable
+# e.g. from the worktree's src/:  BUMPY_OUTDIR=out ../local/toolchain/open-watcom/binl64/wmake play
+# → builds into <worktree>/src/out/ instead of the shared ../local/build/src.
+!ifndef OUTDIR
+!ifdef %BUMPY_OUTDIR
+OUTDIR  = $(%BUMPY_OUTDIR)
+!else
 OUTDIR  = ../local/build/src
+!endif
+!endif
 TARGET  = $(OUTDIR)/BVEC.EXE
 SPRITE  = $(OUTDIR)/BSPRITE.EXE
 BUMPY   = $(OUTDIR)/BUMPY.EXE

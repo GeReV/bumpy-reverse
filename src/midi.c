@@ -119,6 +119,19 @@ u8  midi_tempo_hi;        /* CODE 0x85a7 */
 u16 midi_track_ptr_table[MIDI_MAX_TRACKS][2];    /* CODE 0x81cc..0x820c */
 u16 midi_track_time_table[MIDI_MAX_TRACKS][2];   /* CODE 0x820c..0x824c */
 
+/* ── per-track default-channel table — CS:[BX+0x80] in the original (0x824c.., byte at
+ *  stride 4 per the 4-byte table entries; the oracle captures it as track_tables[128..191],
+ *  see tools/midi_ctest.c g_track_default_chan_shadow).  The FF-20 (MIDI Channel Prefix) meta
+ *  stores each TRACK's channel here, and the mode0/1/4 dispatchers OR it into a channel-0
+ *  status byte.  Modelled per-track (indexed by midi_current_track, the ambient BX/track index
+ *  the asm carries in a register) instead of the earlier single-global snd_seq_default_chan
+ *  simplification, so interleaved tracks no longer clobber one another's channel prefix.
+ *  RECONSTRUCTION FIDELITY: snd_seq_default_chan (sound.c) stays the value the dispatchers read
+ *  — it is refreshed from this table per-track by the two midi_process_event callers below and
+ *  mirrored back here by the FF-20 handler, so the validated dispatchers are untouched. */
+u8  midi_track_chan_table[MIDI_MAX_TRACKS];      /* CODE 0x824c.. — per-track channel prefix */
+u16 midi_current_track;                          /* ambient BX/track index for the active event */
+
 /* ── seq_set_channel_param's per-channel byte table (Task D2; see midi.h) ────────── */
 u8 chan_param_table[MIDI_CHAN_PARAM_LEN];        /* CODE 0x8473..0x8483 */
 
@@ -724,6 +737,8 @@ void midi_init_track_table(void)
 
         val = midi_read_varlen();                                   /* 87ad CALL 8891 */
         if (val == 0) {                                              /* 87b0 JNZ (ZF set -> fall through) */
+            midi_current_track = idx;                                /* BX = this track's entry (ambient) */
+            snd_seq_default_chan = midi_track_chan_table[idx];       /* the dispatchers' CS:[BX+0x80] */
             val = midi_process_event();                               /* 87b2 CALL 873c (Task E2) */
         }
 
@@ -910,10 +925,12 @@ int midi_parse_file(void)
  *          skipping the shared tail entirely — no midi_read_varlen call, no
  *          seq_normalize_far_ptr).
  *        type==0x20, MIDI Channel Prefix (FF 20 01 cc): store the channel byte into
- *          CS:[BX+0x80] — asm 8788/8789.  Modelled as `snd_seq_default_chan`, the
- *          SAME flat-global convention the 9 already-PORTED snddrv_dispatch_b/c/d
- *          modeX backends already use to READ this exact byte (sound.c) — BX itself
- *          stays unmodelled ambient state, per that precedent.
+ *          CS:[BX+0x80] — asm 8788/8789.  Stored into the ACTIVE track's slot,
+ *          midi_track_chan_table[midi_current_track] (BX/track index is now modelled — see the
+ *          midi_track_chan_table note above), and mirrored into `snd_seq_default_chan` (the
+ *          flat-global the 9 snddrv_dispatch_b/c/d modeX backends READ, sound.c).  The two
+ *          midi_process_event callers refresh snd_seq_default_chan from this per-track table
+ *          before each call, so interleaved tracks keep their own channel prefix.
  *        otherwise: skip `len` (AH, zero-extended — CH was cleared at 8745) bytes —
  *          asm 8790/8792.
  *    Shared tail (asm label 8796, reached by every branch EXCEPT End-of-Track):
@@ -979,8 +996,11 @@ u32 midi_process_event(void)
                 midi_track_count--;
                 return 0xffffffffUL;
             } else if (meta_type == 0x20) {
-                /* MIDI Channel Prefix (FF 20 01 cc) -- asm 8788/8789 */
+                /* MIDI Channel Prefix (FF 20 01 cc) -- asm 8788/8789: store into CS:[BX+0x80],
+                   i.e. the ACTIVE track's slot.  Keep snd_seq_default_chan (what the dispatchers
+                   read) in sync, and record it per-track so other tracks don't clobber it. */
                 snd_seq_default_chan = *snd_seq_cursor;  snd_seq_cursor++;
+                midi_track_chan_table[midi_current_track] = snd_seq_default_chan;
             } else {
                 /* unhandled meta event: skip its `len` data bytes -- asm 8790/8792 */
                 snd_seq_cursor += meta_len;
@@ -1147,4 +1167,94 @@ void midi_install_tempo_timer(void)
     quotient = (u16)(product / divisor);                       /* 8704/8706 */
 
     set_timer_slot_raw(0, (int)quotient, 0x864c, 0x1000);       /* 8708..8719 */
+}
+
+/* ── midi_tempo_tick (1000:864c) — per-tempo-tick SMF sequence advance ──────────────
+ *  The far-pointer callback midi_install_tempo_timer installs into 0x549c timer SLOT 0
+ *  (cb_off=0x864c); the L5 mux (snd_timer_slot_sweep, sound.c) far-calls it each time slot
+ *  0's accumulator passes the 500-tick period.  It advances every active MTrk one tick and,
+ *  for tracks whose 32-bit delta countdown reaches 0, dispatches the due event via
+ *  midi_process_event (the OPL/MPU note emit that makes music audible).
+ *
+ *  count = midi_track_count [0x85a1].  If count <= 0 (no active sequence) run the reload
+ *  PRESCALER over midi_data_seg [0x8483] (== the `flag` midi_load_sequence stored — a play
+ *  count): decrement it; when it hits 0, stop timer slot 0 (set_timer_slot_reg(0)) and
+ *  return; otherwise re-point the cursor at the aux far ptr [0x8485], re-parse/re-arm
+ *  (midi_parse_file + snddrv_dispatch_a) and reload count.  Then walk the tracks: bx (idx)
+ *  advances over EVERY track, but the loop's own counter (cx = active-track count) is
+ *  decremented ONLY for active tracks — an End-of-Track'd track (time hi == 0xffff) is
+ *  skipped for free (asm 86ac: INC BX x4; JMP 869f — bypasses the LOOP at 86e0).  The
+ *  invariant that makes this terminate without over-running the 16-entry table: EoT drops
+ *  midi_process_event's own midi_track_count decrement, so midi_track_count always equals
+ *  the number of still-active tracks in the table.  For an active track, decrement its
+ *  32-bit countdown (time {lo@+0x40, hi@+0x42}); when it reaches exactly 0 (lo underflows to
+ *  0 with hi==0) the event is DUE: point snd_seq_cursor at the track's saved cursor
+ *  (midi_track_ptr_table), call midi_process_event — which dispatches the due event(s),
+ *  advances the cursor, and returns the NEXT delta-time (0xffffffff, plus a midi_track_count
+ *  decrement, on EoT) — adopt that as the new countdown and write the advanced cursor back.
+ *
+ *  RECONSTRUCTION FIDELITY — CARVE-OUT LIFTED (2026-07-13): this is the tempo-ISR tick
+ *  (midi_install_tempo_timer's "deeper per-PIT-tick PLAYBACK LOOP" carve-out / fidelity
+ *  deviation (w)), previously documented as not host-replayable and left un-reconstructed,
+ *  so MIDI music was silent.  Reconstructed now — every callee (midi_parse_file 8809,
+ *  snddrv_dispatch_a 85b5, midi_process_event 873c, set_timer_slot_reg 7e1f) and table
+ *  (midi_track_count 0x85a1, midi_track_ptr_table 0x81cc, midi_track_time_table 0x820c,
+ *  midi_data_seg 0x8483, midi_aux_ptr_off/_seg 0x8485/0x8487) was already reconstructed — so
+ *  the playable build's host INT8 ISR can drive audible MIDI via snd_timer_slot_sweep's
+ *  0x864c dispatch.  Runs in ISR context: int-8 entry clears IF, so the asm's own
+ *  push-regs / pushf;cli ... popf;pop-regs bracket around the parse call and the DS=0x103b
+ *  fixup are ambient ISR scaffolding, modelled as direct calls per this file's convention.
+ *  The asm main walk is a real x86 LOOP over cx; count>0 holds on every path that reaches it
+ *  (entry jns, or the reload — midi_parse_file's 0<count<=0x10 guard), so the `while
+ *  (count != 0)` is equivalent.  asm 1000:864c verbatim below. */
+void midi_tempo_tick(void)
+{
+    s16 count;
+    u16 idx;
+
+    count = midi_track_count;                                    /* 8652 MOV CX,CS:[0x85a1] */
+    if (count <= 0) {                                             /* 8659..865e CMP CX,0; JE/JNS */
+        midi_data_seg = (u16)(midi_data_seg - 1);                /* 8660 DEC CS:[0x8483] (prescaler) */
+        if (midi_data_seg == 0) {                                /* 8665 JE 868c */
+            set_timer_slot_reg(0);                               /* 8693/8696 MOV AX,0; CALL 7e1f — stop slot 0 */
+            return;                                               /* 869a JMP exit */
+        }
+        /* 8667 LDS SI,CS:[0x8485] — cursor := aux far ptr; re-parse + re-arm the sequence */
+        snd_seq_cursor = (u8 *)MK_FP(midi_aux_ptr_seg, midi_aux_ptr_off);
+        midi_parse_file();                                        /* 8676 CALL 8809 */
+        snddrv_dispatch_a();                                       /* 8679 CALL 85b5 */
+        count = midi_track_count;                                  /* 8685 reload CX */
+    }
+
+    idx = 0;                                                       /* 869c BX = 0x81cc (track 0) */
+    while (count != 0) {                                           /* 86e0 LOOP (cx dec on active tracks only) */
+        u16 lo = midi_track_time_table[idx][0];                  /* 869f AX = CS:[BX+0x40] (delta lo) */
+        u16 hi = midi_track_time_table[idx][1];                  /* 86a3 DX = CS:[BX+0x42] (delta hi) */
+
+        if (hi == 0xffff) {                                       /* 86a7 CMP DX,-1; JNE 86b2 */
+            idx++;                                                 /* 86ac INC BX x4 — skip EoT'd track */
+            continue;                                              /* 86b0 JMP 869f (does NOT decrement count) */
+        }
+        lo = (u16)(lo - 1);                                       /* 86b2 DEC AX */
+        if (lo == 0) {                                            /* 86b3 CMP AX,0; JE 86c0 */
+            if (hi == 0) {                                        /* 86c0 CMP DX,0; JNE 86d4 — DUE this tick */
+                u32 delta;
+                snd_seq_cursor = (u8 *)MK_FP(midi_track_ptr_table[idx][1],
+                                             midi_track_ptr_table[idx][0]);  /* 86c5 LDS SI,CS:[BX] */
+                midi_current_track = idx;                         /* BX = this track's entry (ambient) */
+                snd_seq_default_chan = midi_track_chan_table[idx]; /* the dispatchers' CS:[BX+0x80] */
+                delta = midi_process_event();                     /* 86c8 CALL 873c -> next delta in DX:AX */
+                midi_track_ptr_table[idx][0] = FP_OFF(snd_seq_cursor);       /* 86cb MOV CS:[BX],SI */
+                midi_track_ptr_table[idx][1] = FP_SEG(snd_seq_cursor);       /* 86ce/86d0 MOV AX,DS; MOV CS:[BX+2],AX */
+                lo = (u16)(delta & 0xffffu);                      /* new countdown lo = returned delta */
+                hi = (u16)(delta >> 16);                          /* new countdown hi */
+            }
+        } else if (lo == 0xffff) {                                /* 86b8 CMP AX,0xffff; JNE 86d4 */
+            hi = (u16)(hi - 1);                                   /* 86bd DEC DX — 32-bit borrow */
+        }
+        midi_track_time_table[idx][0] = lo;                      /* 86d4 MOV CS:[BX+0x40],AX */
+        midi_track_time_table[idx][1] = hi;                      /* 86d8 MOV CS:[BX+0x42],DX */
+        idx++;                                                     /* 86dc INC BX x4 */
+        count--;                                                   /* 86e0 LOOP — decrement active-track counter */
+    }
 }

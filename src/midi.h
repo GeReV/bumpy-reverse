@@ -182,6 +182,7 @@ int  midi_parse_file(void);                                         /* 1000:8809
 void midi_init_track_table(void);                                   /* 1000:87a2 — RECONSTRUCTED (Task E1); PORTED (Task E2, check_tbl=1; 2 records) */
 void midi_start_playback(void);                                     /* 1000:8722 — RECONSTRUCTED (Task E2); PORTED (2 records) */
 void midi_install_tempo_timer(void);                                /* 1000:86e9 — RECONSTRUCTED (Task E2); tempo-ISR carve-out — UNPORTED-for-validation (see fidelity note at its definition + docs/reconstruction-fidelity.md) */
+void midi_tempo_tick(void);                                         /* 1000:864c — RECONSTRUCTED (2026-07-13); the tempo-ISR per-tick SMF sequence advance midi_install_tempo_timer installs into 0x549c slot 0; far-called by snd_timer_slot_sweep (sound.c). Carve-out (w) lifted. */
 s16  midi_get_track_count(void);                                    /* 1000:8999 — RECONSTRUCTED (Task E1); PORTED, register-return checked */
 int  midi_play_sequence(void *song, void *aux_ptr, u16 flag);        /* 1000:8977 — RECONSTRUCTED (Task E2); device-gated; falls through (real tail JMP) to midi_load_sequence; PORTED but genuinely 0 records in the Task C2 capture (its OWN function-boundary hook is orphaned by the JMP — see tools/midi_ctest.c) */
 void midi_sound_init(void);                                          /* 1000:89a8 — RECONSTRUCTED (Task E2); PORTED (1 record) */

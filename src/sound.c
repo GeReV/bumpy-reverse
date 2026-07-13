@@ -192,12 +192,27 @@ int set_timer_slot_raw(int channel, int value, u16 cb_off, u16 cb_seg);
  *  PUSHF carry; we default it clear. */
 static u8 snd_sched_carry_in = 0;
 
-/* The OPL raw-sample param table the effect_id==(device 4) path indexes (CODE 0x27ae,
- *  2 bytes per effect).  Reconstructed only as far as the dispatch needs it; the actual
- *  table data + the snd_emit_raw_sample emit land with the L4/L5 sample port (T5).  Kept as a
- *  zero table so the dispatch indexes a defined object on the host; the device-4 path is
- *  not exercised by the validated semantic-state records (which assert the param frame). */
-static const u8 snd_opl_sample_table[0x200];   /* CODE 0x27ae */
+/* The MT-32/MPU raw-sample param table the device-4 (MT-32, F8) effect path indexes
+ *  (DGROUP 0x27ae, file 0x13bee; 2 bytes per effect = a MIDI note-on: {note, velocity},
+ *  emitted on percussion channel 10 via snd_emit_raw_sample -> 0x99,note,vel).  The real
+ *  table holds 0x30 entries (effect ids 0x00-0x2f): entry 0 is the (0,0) silent slot,
+ *  the rest are {note, 0x7f}.  0x2f is the highest id any caller uses (land_sound_tbl_*
+ *  top out at 0x2f; direct calls at 0x2a/0x28/0x26).  Copied VERBATIM from the binary.
+ *  Kept at [0x200] (effect_id is u8; the emit reads effect_id*2) so any id indexes a
+ *  defined slot; bytes past 0x60 are the adjacent DGROUP object in the original, never
+ *  indexed by a real id, left zero here.
+ *  RECONSTRUCTION FIDELITY: was a zeroed placeholder (the device-4 SFX path was not
+ *  exercised by the validated semantic-state records) — that silenced EVERY MT-32 sound
+ *  effect, because the emit then sent note-on velocity 0 = a silent note-off.  Now
+ *  populated 1:1 from DGROUP 0x27ae so MT-32 SFX (e.g. the platform-bounce snare) sound. */
+static const u8 snd_opl_sample_table[0x200] = {   /* DGROUP 0x27ae (file 0x13bee) */
+    0x00,0x00,0x23,0x7f,0x41,0x7f,0x28,0x7f,0x26,0x7f,0x40,0x7f,0x3f,0x7f,0x3e,0x7f,
+    0x27,0x7f,0x54,0x7f,0x43,0x7f,0x47,0x7f,0x41,0x7f,0x4d,0x7f,0x3d,0x7f,0x29,0x7f,
+    0x2a,0x7f,0x5b,0x7f,0x2e,0x7f,0x25,0x7f,0x38,0x7f,0x4f,0x7f,0x28,0x7f,0x26,0x7f,
+    0x40,0x7f,0x3f,0x7f,0x3e,0x7f,0x46,0x7f,0x60,0x7f,0x44,0x7f,0x47,0x7f,0x31,0x7f,
+    0x38,0x7f,0x42,0x7f,0x3d,0x7f,0x29,0x7f,0x2c,0x7f,0x2e,0x7f,0x4e,0x7f,0x49,0x7f,
+    0x53,0x7f,0x55,0x7f,0x58,0x7f,0x62,0x7f,0x5a,0x7f,0x63,0x7f,0x63,0x7f,0x45,0x7f,
+};
 
 /* ── play_sound (1000:6e11) — L1 entry guard ─────────────────────────────────────
  *  Trivial device guard: dispatch to play_sound_effect unless the device is muted
@@ -616,7 +631,7 @@ int mpu401_reset_to_uart(void)
  *  detected", matching the snd_sched_carry_in modelled-flag convention) — the REAL
  *  maybe_opl2_detect_chip body (below) SETS this flag from the verdict it actually
  *  computes, so this already-validated ZF-branch keeps its exact existing contract. */
-u16 midi_seq_step_active;             /* DGROUP 0x557e */
+u16 midi_seq_step_active = 1;         /* DGROUP 0x557e — static image init = 0x0001 */
 static u8 snd_opl_detect_zf = 1;      /* modelled ZF from maybe_opl2_detect_chip (1=not detected) */
 
 u16 snddrv_init_substep(void)
@@ -849,18 +864,18 @@ void snddrv_dispatch_c_mode1(void)
 }
 
 /* ── snddrv_dispatch_b_mode4 (1000:8af6) — MIDI 0xF7 busy-wait (mode 4) ──
- *  OPL/mode-4 handling of the 0xF7 event: reads TWO stream bytes (len, then a second
- *  byte that is read but never used) and busy-waits snd_busy_delay(len-1). asm 1000:8af6
- *  verbatim: LODSB (CL=len); LODSB (discard); DEC CL; CALL 0x872e. The real CX's high
- *  byte (CH) is whatever the (unreconstructed) MIDI player's own CX held at the time —
- *  not modelled (never exercised; see the note above) — treated as 0. */
+ *  OPL/mode-4 handling of the 0xF7 event: reads TWO stream bytes (len, then the first data
+ *  byte which stays in AL as snd_busy_delay's initial forwarded byte) and forwards
+ *  snd_busy_delay(len-1) more to the MPU. asm 1000:8af6 verbatim: LODSB (CL=len); LODSB
+ *  (AL=1st data byte); DEC CL; CALL 0x872e. The real CX's high byte (CH) is whatever the
+ *  MIDI player's own CX held at the time — treated as 0. */
 void snddrv_dispatch_b_mode4(void)
 {
     u8 len;
 
     len = *snd_seq_cursor;
     snd_seq_cursor++;
-    (void)*snd_seq_cursor;         /* LODSB — consumed, value unused */
+    snd_seq_event_al = *snd_seq_cursor;   /* LODSB — AL = 2nd byte; snd_busy_delay forwards it */
     snd_seq_cursor++;
     snd_busy_delay((u16)(u8)(len - 1));
 }
@@ -894,6 +909,8 @@ void snddrv_dispatch_d_mode4(void)
     if ((u8)(al & 0xf0) == 0xc0) {
         cx = 1;
     }
+    snd_seq_event_al = al;              /* AL still holds the (channel-merged) status byte at
+                                        *  the CALL — snd_busy_delay forwards it to the MPU first */
     snd_busy_delay(cx);
 }
 
@@ -1224,37 +1241,51 @@ void sound_select_device(void)
 /* ── snddrv_init (1000:88e5) ──────────────────────────────────────────────────────
  *  One-time driver init (guard sound_init_state 0x557a==0): set state=1, run the MPU
  *  reset + snddrv_init_substep, set snddrv_mode=1 + sound_active_device_mask=1, return
- *  a status bitmask (0=ok; |4 / |1 on a sub-step failure).  The decomp's `substep_ok`
- *  is a LOCAL flag the ORIGINAL never actually reassigns from either callee's return
- *  (both are called for effect, their results discarded) — it stays true, so the
- *  failure ORs never fire; the decomp's dead `if(!substep_ok)` arms are preserved 1:1.
- *  mpu401_reset_to_uart + snddrv_init_substep are PORTED (Task A3): mpu401_reset_to_uart
- *  is gated on mpu401_present (defaults 0 — early-return no-op here); snddrv_init_substep
- *  only touches midi_seq_step_active (not in the SND_SNAP) — so wiring in their real
- *  bodies does not perturb this fn's already-validated device_init semantic-state
- *  record. */
+ *  a status bitmask of the DETECTED devices (0=none; |4 = MPU-401 present; |1 = OPL2/
+ *  AdLib present).  sound_select_device ANDs this mask against the user-requested
+ *  device (sound_device_state), so a device selects only when it was BOTH requested and
+ *  detected.
+ *
+ *  RECONSTRUCTION FIDELITY (Ghidra `substep_ok` was a decompiler fiction — CORRECTED):
+ *  the raw asm at 1000:88e5 tests the ZERO FLAG left by each sub-call's RETURN, not any
+ *  local flag.  Each callee ends `MOV AX,[flag]; AND AX,AX; RET`, and the caller's POP/MOV
+ *  between the CALL and the JZ leave ZF untouched:
+ *      XOR CX,CX               ; status = 0
+ *      CALL mpu401_reset_to_uart ; returns mpu401_present (0x557c)
+ *      JZ  +; OR CX,4          ; status |= 4  iff it returned NONZERO (MPU detected)
+ *      CALL snddrv_init_substep  ; returns midi_seq_step_active (0x557e)
+ *      JZ  +; OR CX,1          ; status |= 1  iff it returned NONZERO (OPL detected)
+ *  Ghidra could not model "branch on the callee's ZF" and invented a never-reassigned
+ *  `substep_ok` (left `true`), making the two OR arms look dead — they are NOT.  An
+ *  earlier reconstruction copied that fiction and hard-coded status=0, which zeroed the
+ *  device mask for EVERY device (`req & 0 == 0`) → AdLib never reached snddrv_mode=1
+ *  (OPL emit) → the title/intro MIDI was silent.  This body restores the real ZF-based
+ *  accumulation: `if (callee() != 0) status |= bit` is exactly `AND AX,AX; JZ skip;
+ *  OR CX,bit`.
+ *
+ *  Host sound gate unaffected: on the sound_ctest host, mpu401_present defaults 0
+ *  (mpu401_reset_to_uart returns 0 → no |4) and host_in gives no OPL-timer pattern so
+ *  maybe_opl2_detect_chip reports not-detected (snddrv_init_substep returns 0 → no |1)
+ *  → status still 0; the captured device_init entry sound_device_state is 0, so the mask
+ *  is 0 regardless.  On dosbox-x the emulated OPL2 answers the timer probe → |1 → an
+ *  AdLib (bit-0) request survives the AND → snddrv_mode = 1<<0 = 1 (OPL backend). */
 u16 snddrv_init(void)
 {
     u16 status;
-    u8  substep_ok;
 
     status = 0xffff;
     if (sound_init_state == 0) {
         sound_init_state = 1;
-        substep_ok = 1;
-        snd_init_substep_5584 = 1;        /* DAT_203b_5584 = 1 */
-        mpu401_reset_to_uart();
-        status = 0;
-        if (!substep_ok) {
-            status = 4;
-            substep_ok = 0;
+        status = 0;                        /* XOR CX,CX */
+        snd_init_substep_5584 = 1;        /* MOV [0x5584],AX (AX=1) */
+        if (mpu401_reset_to_uart() != 0) { /* JZ tests the CALL's return ZF; OR CX,4 on nonzero */
+            status = status | 4;
         }
-        snddrv_init_substep();
-        if (!substep_ok) {
+        if (snddrv_init_substep() != 0) {  /* likewise: OR CX,1 when OPL detected */
             status = status | 1;
         }
-        snddrv_mode = 1;
-        sound_active_device_mask = 1;
+        snddrv_mode = 1;                   /* MOV CS:[0x85b3],AX (AX=1) */
+        sound_active_device_mask = 1;      /* MOV [0x5586],AX */
     }
     return status;
 }
@@ -1361,11 +1392,26 @@ void snddrv_dispatch_d(void)
  *  register-args asm routine; see report. */
 void snd_busy_delay(u16 count)
 {
-    mpu401_write_data_polled();            /* AH=AL; CALL 0x89e2 (first iteration) */
+    /* Despite the name this is the MPU-401 raw-MIDI FORWARDER, not a delay: it sends the
+     *  ambient status byte (AL) then LODSB-forwards `count` more stream bytes to the MPU data
+     *  port (0x330) via mpu401_write_data_polled.  asm 1000:872e verbatim: MOV AH,AL; CALL
+     *  89e2; [loop: LODSB; MOV AH,AL; CALL 89e2].  mpu401_write_data_polled writes AH
+     *  (snd_mpu_byte_89e2), so each byte is staged there first.  Fixed 2026-07-13: the prior
+     *  reconstruction called mpu401_write_data_polled without staging the byte or advancing
+     *  snd_seq_cursor — so mode-4 (MT-32/MPU) forwarded stale bytes AND left the MIDI cursor
+     *  misaligned for midi_process_event.  Now advances the real cursor (LODSB) so the MPU
+     *  receives the live MIDI event bytes.  Host gate: snd_seq_cursor points at the zero
+     *  scratch stream (no captured MIDI) and count stays < 256, so the LODSBs stay in-bounds
+     *  and neither snd_mpu_byte_89e2 nor snd_seq_cursor is in the SND_SNAP. */
+    snd_mpu_byte_89e2 = snd_seq_event_al;  /* MOV AH,AL (stage the status byte) */
+    mpu401_write_data_polled();            /* CALL 0x89e2 (send AH) */
     do {
-        mpu401_write_data_polled();        /* LODSB; MOV AH,AL; CALL 0x89e2 */
+        snd_seq_event_al = *snd_seq_cursor;    /* LODSB — AL = *SI */
+        snd_seq_cursor++;                       /*         SI++     */
+        snd_mpu_byte_89e2 = snd_seq_event_al;  /* MOV AH,AL */
+        mpu401_write_data_polled();            /* CALL 0x89e2 */
         count = count - 1;
-    } while (count != 0);
+    } while (count != 0);                       /* LOOP */
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -1614,11 +1660,16 @@ u8 snd_mpu_byte_89e2 = 0x99;       /* the byte mpu401_write_data_polled writes t
 u8 snd_isr_state_979a[5];          /* CODE 0x979a..0x979e — ISR tick counter + PRNG state */
 
 /* MPU-401 poll residual / presence (DGROUP DAT_1000_85a1 / DAT_203b_557c).
-   mpu401_write_data_polled writes both on a DSR poll TIMEOUT.  Not read in the
-   reconstruction (the L5 MPU init that gates on mpu401_present is carved out), modelled
-   for write-side fidelity. */
+   mpu401_write_data_polled writes both on a DSR poll TIMEOUT.
+   mpu401_present is STATICALLY INITIALISED to 1 in the image (DGROUP 0x557c = 0x0001):
+   the engine assumes an MPU-401 is present at boot, then mpu401_reset_to_uart's handshake
+   clears it to 0 only if the chip fails to answer.  An earlier reconstruction left it BSS-0
+   (its comment "defaults 0 — no reconstructed code sets it nonzero" missed the static image
+   value), which made mpu401_reset_to_uart early-return 0 → snddrv_init never set the MPU
+   status bit (|4) → an MT-32 (mask 4) request never selected snddrv_mode=4 (MPU backend) →
+   MT-32 was silent.  Faithful value = 1 (verified vs the unpacked image DGROUP). */
 s16 midi_track_count;
-s16 mpu401_present;
+s16 mpu401_present = 1;                 /* DGROUP 0x557c static init = 0x0001 */
 
 /* ── mpu401_write_data_polled (1000:89e2) — MPU-401 byte-out primitive ────────────────
  *  Poll status port 0x331 until DSR (bit 0x40) is CLEAR (CX from 0 -> up to 0x10000
@@ -1965,6 +2016,140 @@ void pc_speaker_silence(void)
     outp(0x61, port61);                            /* OUT 0x61,AL */
 }
 
+/* ════════════════════════════════════════════════════════════════════════════
+ *  PC-SPEAKER MUSIC RENDERER (device mode 0) — pcspk_music_render (1000:9136).
+ *
+ *  When no OPL/MPU device is selected (snddrv_mode==0, i.e. the PC BASE menu choice),
+ *  select_sound_device_from_mask installs THIS callback into 0x549c timer slot channel 1
+ *  (set_timer_slot_raw(1, 0x64, 0x9136, 0x1000)); the int-8 mux fires it every ~64 ticks.
+ *  It renders the MIDI notes that snddrv_dispatch_d_mode0 stashes into snd_voice_table
+ *  (CODE 0x83cc, one byte per MIDI channel) onto the PC speaker (PIT ch2 + gate 0x61) as a
+ *  2-voice round-robin: each firing it flips pcspk_rr_index 0<->1, picks voice (index+1)
+ *  = MIDI channel 1 or 2, and plays that channel's current note.  Reached in the original
+ *  ONLY via the installed far pointer (no Ghidra function boundary — like the tempo tick
+ *  and the tone callbacks), so it is reconstructed from the raw disassembly (1000:9136).
+ *  Reconstructed 2026-07-13 to fix "PC BASE plays no music" — the callback WAS installed
+ *  (select_sound_device_from_mask) but never reconstructed, so the sweep dispatched nothing. */
+
+/* chan_param_table (CODE 0x8473, midi.c) — per-MIDI-channel program byte, set by
+ *  seq_set_channel_param on a 0xC0 program-change; the renderer reads channels 1/2. */
+extern u8 chan_param_table[16];
+
+/* pcspk_rr_index (CODE 0x83ec) — 2-voice round-robin selector (0<->1). */
+u16 pcspk_rr_index;
+
+/* pcspk_transpose_map (CODE 0x83f1) — program(byte) -> freq-index transpose offset.  All
+ *  zero in the unpacked image (every program -> 0), so the transpose is always 0.
+ *  RECONSTRUCTION FIDELITY: the original addresses it as CS:[0x83f1 + program] immediately
+ *  below pcspk_freq_table (0x8489); this reconstruction models it as a separate zero array,
+ *  so a program byte > 0x97 (which in the image would read into the freq table) is not
+ *  bit-exact — immaterial here (the data is zero and BUMPY.MID's channel-1/2 programs stay
+ *  in range). */
+static const u8 pcspk_transpose_map[0x100] = { 0 };
+
+/* pcspk_freq_table (CODE 0x8489) — note -> PIT ch2 divisor, little-endian words indexed by
+ *  (note*2 + 0x30 + transpose) as a BYTE offset.  Dumped verbatim from the unpacked image
+ *  (0x130 bytes covers every MIDI note 0..127: max byte index 127*2+0x30 = 0x12e).  Notes
+ *  below ~14 map to 0x0001 (near-inaudible); the tail past the real table (idx>=0x116) is
+ *  the image's adjacent bytes, which the original reads identically for out-of-range notes. */
+static const u8 pcspk_freq_table[0x130] = {
+    0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00,
+    0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00,
+    0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00,
+    0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00,
+    0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00,
+    0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00,
+    0x01, 0x00, 0x01, 0x00, 0xcc, 0xfd, 0x8d, 0xef, 0x1b, 0xe2, 0x6a, 0xd5,
+    0x70, 0xc9, 0x22, 0xbe, 0x76, 0xb3, 0x63, 0xa9, 0xe1, 0x9f, 0xe8, 0x96,
+    0x70, 0x8e, 0x71, 0x86, 0xe6, 0x7e, 0xc6, 0x77, 0x0d, 0x71, 0xb5, 0x6a,
+    0xb8, 0x64, 0x11, 0x5f, 0xbb, 0x59, 0xb1, 0x54, 0xf0, 0x4f, 0x74, 0x4b,
+    0x38, 0x47, 0x38, 0x43, 0x73, 0x3f, 0xe3, 0x3b, 0x86, 0x38, 0x5a, 0x35,
+    0x5c, 0x32, 0x88, 0x2f, 0xdd, 0x2c, 0x58, 0x2a, 0xf8, 0x27, 0xba, 0x25,
+    0x9c, 0x23, 0x9c, 0x21, 0xb9, 0x1f, 0xf1, 0x1d, 0x43, 0x1c, 0xad, 0x1a,
+    0x2e, 0x19, 0xc4, 0x17, 0x6e, 0x16, 0x2c, 0x15, 0xfc, 0x13, 0xdd, 0x12,
+    0xce, 0x11, 0xce, 0x10, 0xdc, 0x0f, 0xf8, 0x0e, 0x21, 0x0e, 0x56, 0x0d,
+    0x97, 0x0c, 0xe2, 0x0b, 0x37, 0x0b, 0x96, 0x0a, 0xfe, 0x09, 0x6e, 0x09,
+    0xe7, 0x08, 0x67, 0x08, 0xee, 0x07, 0x7c, 0x07, 0x10, 0x07, 0xab, 0x06,
+    0x4b, 0x06, 0xf1, 0x05, 0x9b, 0x05, 0x4b, 0x05, 0xff, 0x04, 0xb7, 0x04,
+    0x73, 0x04, 0x33, 0x04, 0xf7, 0x03, 0xbe, 0x03, 0x88, 0x03, 0x55, 0x03,
+    0x25, 0x03, 0xf8, 0x02, 0xcd, 0x02, 0xa5, 0x02, 0x7f, 0x02, 0x5b, 0x02,
+    0x39, 0x02, 0x19, 0x02, 0xfb, 0x01, 0xdf, 0x01, 0xc4, 0x01, 0xaa, 0x01,
+    0x92, 0x01, 0x7c, 0x01, 0x66, 0x01, 0x52, 0x01, 0x3f, 0x01, 0x2d, 0x01,
+    0x1c, 0x01, 0x0c, 0x01, 0xfd, 0x00, 0xef, 0x00, 0xe2, 0x00, 0xd5, 0x00,
+    0xc9, 0x00, 0xbe, 0x00, 0x00, 0x00, 0xc0, 0x00, 0x40, 0x42, 0x0f, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0x00, 0x00,
+    0x53, 0x2e, 0x8b, 0x1e,
+};
+
+/* ── pcspk_io_settle (1000:8a3b) — tiny I/O settle delay (LOOP CX=4) between PIT writes. */
+static void pcspk_io_settle(void)
+{
+    volatile u16 cx = 4;                          /* MOV CX,4; LOOP $ */
+    while (cx != 0) {
+        cx = (u16)(cx - 1);
+    }
+}
+
+/* ── pcspk_set_pit_ch2 (1000:91b9) — program PIT channel 2 with a 16-bit divisor ────
+ *  OUT 0x43,0xB6 (ch2, mode 3, lo/hi byte, binary); then divisor lo then hi to 0x42, each
+ *  followed by an I/O settle.  asm 1000:91b9 verbatim. */
+static void pcspk_set_pit_ch2(u16 divisor)
+{
+    outp(0x43, 0xb6);                             /* MOV AL,0xB6; OUT 0x43,AL */
+    pcspk_io_settle();                            /* CALL 0x8a3b */
+    outp(0x42, (u8)divisor);                       /* OUT 0x42,AL (lo) */
+    pcspk_io_settle();
+    outp(0x42, (u8)(divisor >> 8));                /* MOV AL,AH; OUT 0x42,AL (hi) */
+    pcspk_io_settle();
+}
+
+/* ── pcspk_music_render (1000:9136) — PC-speaker music voice tick (installed timer cb) ─
+ *  asm 1000:9136 verbatim (see the block header above). */
+void pcspk_music_render(void)
+{
+    u16 voice;          /* AX — 1..2 after the round-robin */
+    u8  transpose;      /* CL -> CX (freq-index offset; always 0 here) */
+    u8  note;
+    u16 divisor;
+    u8  port61;
+
+    voice = (u16)(pcspk_rr_index + 1);            /* 913b..913f: rr_index+1 */
+    if (voice >= 2) {                              /* 9140 CMP AX,2; JB */
+        voice = 0;                                 /* 9145 XOR AX,AX (wrap) */
+    }
+    pcspk_rr_index = voice;                        /* 9147 store rr_index (0 or 1) */
+    voice = (u16)(voice + 1);                      /* 914b INC AX -> voice 1 or 2 */
+
+    /* transpose = pcspk_transpose_map[chan_param_table[voice]]  (both zero -> 0) */
+    transpose = pcspk_transpose_map[chan_param_table[voice]];   /* 914c..915f */
+
+    note = snd_voice_table[voice];                 /* 9161..9166: voice_table[voice] */
+    if (note < 0x0a) {                              /* 9169 CMP AL,0xA; JAE */
+        note = 0;                                  /* 916d XOR AL,AL */
+    }
+    voice = (u16)((u16)note * 2);                  /* 916f..9171: note*2 */
+    if (voice == 0) {                               /* 9175 JE silence (91a9) */
+        snd_select_scratch_83ee = 0;               /* 91a9..91ab: speaker-on flag = 0 */
+        snd_select_scratch_83ef = 0;               /* 91af: last divisor = 0 */
+        port61 = (u8)(inp(0x61) & 0xfc);           /* 91b3..91b5: gate off */
+        outp(0x61, port61);                        /* 91a6 OUT 0x61,AL */
+        return;                                    /* 91a8 RETF */
+    }
+    voice = (u16)(voice + 0x30 + transpose);       /* 9177..917a: note*2 + 0x30 + transpose */
+    divisor = (u16)(pcspk_freq_table[voice] |      /* 917c..9181: word @ freq_table + index */
+                    ((u16)pcspk_freq_table[voice + 1] << 8));
+    if (divisor != snd_select_scratch_83ef) {      /* 9184 CMP AX,[0x83ef]; JE */
+        pcspk_set_pit_ch2(divisor);                /* 918c CALL 0x91b9 */
+    }
+    snd_select_scratch_83ef = divisor;             /* 9190: last divisor = divisor */
+    if (snd_select_scratch_83ee == 0) {            /* 9194..919a: speaker already on? */
+        snd_select_scratch_83ee = 1;               /* 919c..919e: mark on */
+        port61 = (u8)(inp(0x61) | 3);              /* 91a2..91a4: gate + enable */
+        outp(0x61, port61);                        /* 91a6 OUT 0x61,AL */
+    }
+    /* 91a8 RETF */
+}
+
 /* ── speaker_gate_reset (1000:9440) — PC-speaker gate reset ──────────────────────────
  *  If sound_mode (DGROUP 0x683e) == 0: IN 0x61; OR 0x3; OUT 0x61 (raise gate+enable).
  *  Else: falls into speaker_gate_strobe (IN 0x61; AND 0xfc; OUT 0x61).  asm 1000:9440:
@@ -2253,6 +2438,11 @@ void tone_seq_callback_95b5(void)
  *  trampoline / register-save / re-entry-counter(0x54d5) plumbing is ambient ISR scaffolding,
  *  modelled as a direct call.  Dispatch is by cb_off (the reconstructed callbacks are near C
  *  fns; cb_seg is the load-base CODE segment). */
+/* Cross-module: the MIDI tempo/sequence-advance callback (src/midi.c 1000:864c), installed
+ *  into 0x549c timer slot 0 by midi_install_tempo_timer.  Scoped extern (not a midi.h include)
+ *  to keep sound.c free of midi.h's global surface — same convention as the other leaf externs. */
+extern void midi_tempo_tick(void);
+
 void snd_timer_slot_sweep(void)
 {
     u16 fired_off[6];
@@ -2282,12 +2472,19 @@ void snd_timer_slot_sweep(void)
                 tone_seq_callback_96c4();
             } else if (cb_off == 0x95b5) {
                 tone_seq_callback_95b5();
+            } else if (cb_off == 0x864c) {
+                /* MIDI tempo/sequence advance (slot 0), installed by midi_install_tempo_timer.
+                 *  Reconstructed 2026-07-13 (src/midi.c) — dispatching it here is what drives
+                 *  audible MIDI: each tick advances the SMF and emits the due OPL/MPU events. */
+                midi_tempo_tick();
+            } else if (cb_off == 0x9136) {
+                /* PC-speaker music voice tick (slot channel 1), installed by
+                 *  select_sound_device_from_mask when snddrv_mode==0 (PC BASE).  Renders the
+                 *  MIDI notes in snd_voice_table onto PIT ch2 + the speaker gate. */
+                pcspk_music_render();
             }
-            /* cb_off 0x864c (MIDI tempo/sequence advance) is a documented follow-on: that
-             *  callback is not yet reconstructed, so music stays SILENT (no notes are keyed
-             *  on — they are emitted inside it per tick), which is correct-until-done, not the
-             *  noise bug.  Slots 0/1 (BIOS chain 0x7e7a / 0x7e80 sub-sweep) are not installed
-             *  by the playable host, so their cb_off never appears here. */
+            /* Slots 0(BIOS chain 0x7e7a) / 1(0x7e80 sub-sweep) callback offsets are not
+             *  installed by the playable host, so their cb_off never appears here. */
         }
     }
 }

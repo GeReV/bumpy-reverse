@@ -477,6 +477,8 @@ void opl_event_note_on(void)      {}
 void FUN_1000_6183(void)         {}
 void pit_set_counter0(void)       {}
 void p1_try_trigger_pending_action(void) {}   /* 1000:654e — player.c (host no-op) */
+void midi_tempo_tick(void)        {}   /* 1000:864c — midi.c (the sweep's 0x864c dispatch; host no-op here) */
+u8   chan_param_table[16];             /* CODE 0x8473 — midi.c; host backing for pcspk_music_render */
 
 /* ════════════════════════════════════════════════════════════════════════════
  *  Phase-6 T3 — CALL-ARGUMENT RECOVERY for the effect→frame pipeline.

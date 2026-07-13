@@ -107,6 +107,26 @@ extern u16 menu_opt2_img_seg[3];
 #define HR_SPRITE_BUF_SEG_MARK 0xa0c8u   /* the literal buf_seg the sprite read passes */
 static u8 __far hr_discard[0x1000];      /* 4 KB: drains the unused sprite-bank read */
 
+/* ── intro-music SMF (BUMPY.MID) host buffer ────────────────────────────────────────
+ * play_intro_animation_loop (screens.c) ALSO reads through the 0xa0c8 screen-sprite target,
+ * but its resource — resource 5 = BUMPY.MID, the 35 KB SMF — must actually LOAD and stay
+ * resident FOR THE INTRO: midi_parse_file builds per-track cursors that point INTO it and the
+ * tempo ISR (midi_tempo_tick) reads events from it across the whole intro.  So the two 0xa0c8
+ * reads are told apart by resource identity — only the SMF (absolute hr_full_files index 5,
+ * "BUMPY.MID", the same index under either table base) is loaded; the sprite bank still drains.
+ * The SMF buffer is lazily _fmalloc'd once and, CRUCIALLY, FREED again when the intro ends
+ * (play_intro_animation_loop, screens.c) — see the fidelity note there.  The engine stages the
+ * SMF in screen_sprite_buf, a shared session buffer gameplay reuses (so the SMF is transient
+ * scratch, never resident during play); the host has no modelled screen_sprite_buf, so holding
+ * this private 36 KB for the whole run starved the reduced far heap and NULLed hv_saveunder_buf's
+ * level-load _fmalloc → the clean-bg save-under/erase regressions.  host_intro_smf_fp is the far
+ * pointer play_intro hands midi_play_sequence as the `song` arg (screen_sprite_buf is an
+ * un-modelled literal in the reconstruction). */
+#define HR_ABS_IDX_SMF   5u          /* hr_full_files[5] == "BUMPY.MID" (both table bases) */
+#define HR_SMF_BUF_BYTES 0x9000u     /* 36864 >= BUMPY.MID (35141); fits a single u16 read count */
+u8 __far *host_intro_smf_fp = (u8 __far *)0;  /* -> loaded SMF; 0 until the intro loads it (or OOM) */
+static int hr_cur_is_smf = 0;        /* set by open_resource: is the open handle the SMF? */
+
 /* ── host_load_menu_strips ──────────────────────────────────────────────────────
  * Populate run_main_menu's option-2 difficulty-label strips (EASY / MEDIUM / HARD).
  *
@@ -242,6 +262,7 @@ int open_resource(u16 res_idx, u16 mode)
     u16 idx = (u16)(hr_base_idx + res_idx);
 
     (void)mode;
+    hr_cur_is_smf = (idx == HR_ABS_IDX_SMF);   /* the intro SMF (BUMPY.MID) must load, not drain */
     if (idx < 19u && hr_full_files[idx] != (const char *)0) {
         return dosio_open_read(hr_full_files[idx]);
     }
@@ -258,10 +279,36 @@ u32 read_chunked(int handle, u16 buf_off, u16 buf_seg, u16 len_lo, u16 len_hi)
 
     (void)len_lo; (void)len_hi;   /* engine length cap — host reads to EOF */
 
-    /* Sprite-bank read (init_title_graphics): the literal seg 0xa0c8 target is VGA
-     * memory and process_sprites is a NOP, so drain the file to EOF into the small
-     * discard buffer (no advance) rather than writing it anywhere live. */
+    /* Reads through the 0xa0c8 screen-sprite target: the intro SMF (BUMPY.MID) must LOAD into
+     * a resident buffer; the (unused, process_sprites-NOP) sprite bank still DRAINS to EOF. */
     if (buf_seg == HR_SPRITE_BUF_SEG_MARK) {
+        if (hr_cur_is_smf) {
+            u8 __far *dst;
+            if (host_intro_smf_fp == (u8 __far *)0) {
+                host_intro_smf_fp = (u8 __far *)_fmalloc(HR_SMF_BUF_BYTES);  /* lazy, once */
+            }
+            dst = host_intro_smf_fp;
+            if (dst != (u8 __far *)0) {
+                for (;;) {
+                    u16 room = (total < (u32)HR_SMF_BUF_BYTES)
+                             ? (u16)((u32)HR_SMF_BUF_BYTES - total) : 0u;
+                    if (room == 0u) {
+                        break;                                  /* buffer full (SMF < buffer, so unreached) */
+                    }
+                    n = dosio_read(handle, dst + total, room);
+                    if (n <= 0) {
+                        break;
+                    }
+                    total += (u32)n;
+                    if (n < (int)room) {
+                        break;                                  /* short read == EOF */
+                    }
+                }
+                return total;
+            }
+            /* OOM: fall through to the drain below so the read still consumes the file;
+             * host_intro_smf_fp stays 0 and play_intro's no-hang guard handles count==0. */
+        }
         for (;;) {
             n = dosio_read(handle, (u8 __far *)hr_discard, (u16)sizeof(hr_discard));
             if (n <= 0) {
