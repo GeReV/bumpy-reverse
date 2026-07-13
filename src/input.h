@@ -1,6 +1,18 @@
 #ifndef INPUT_H_INCLUDED
 #define INPUT_H_INCLUDED
 
+/* BIOS Data Area (segment 0x0040) keyboard-buffer fields flush_keyboard_buffer
+ * resets, and the joystick/PIT ports read_joystick_axes/poll_joystick_state
+ * poll.  Bare (unsuffixed, signed-int) literals — matches the original
+ * exactly. */
+#define BIOS_DATA_SEG     0x0040
+#define BIOS_KBD_HEAD_OFF 0x001a
+#define BIOS_KBD_TAIL_OFF 0x001c
+#define BIOS_KBD_BUF_OFF  0x0080
+#define GAME_PORT          0x201
+#define PIT_COUNTER0_PORT  0x40
+#define PIT_CMD_PORT       0x43
+
 /*
  * input.h — keyboard input layer declarations.
  *

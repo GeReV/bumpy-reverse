@@ -86,9 +86,9 @@ u16 flush_keyboard_buffer(void)
 {
 #ifndef BUMPY_CTEST
     /* BIOS data area at segment 0x0040. */
-    u16 __far *kbd_head  = (u16 __far *)MK_FP(0x0040, 0x001a);
-    u16 __far *kbd_tail  = (u16 __far *)MK_FP(0x0040, 0x001c);
-    u16 __far *buf_start = (u16 __far *)MK_FP(0x0040, 0x0080);
+    u16 __far *kbd_head  = (u16 __far *)MK_FP(BIOS_DATA_SEG, BIOS_KBD_HEAD_OFF);
+    u16 __far *kbd_tail  = (u16 __far *)MK_FP(BIOS_DATA_SEG, BIOS_KBD_TAIL_OFF);
+    u16 __far *buf_start = (u16 __far *)MK_FP(BIOS_DATA_SEG, BIOS_KBD_BUF_OFF);
 
     *kbd_head = *buf_start;
     *kbd_tail = *buf_start;
@@ -235,7 +235,7 @@ u16 read_joystick_axes(u16 player_sel)   /* in_AL: bit0 selects P1(0)/P2(1) */
             if (g_p1_joystick_present != 0) {
                 return 0xffff;                    /* 0xff -> no joystick */
             }
-            port_val = (u8)inp(0x201);            /* untested: probe once */
+            port_val = (u8)inp(GAME_PORT);            /* untested: probe once */
             if ((port_val & 3) != 0) {
                 return 0xffff;
             }
@@ -249,7 +249,7 @@ u16 read_joystick_axes(u16 player_sel)   /* in_AL: bit0 selects P1(0)/P2(1) */
             if (g_p2_joystick_present != 0) {
                 return 0xffff;
             }
-            port_val = (u8)inp(0x201);
+            port_val = (u8)inp(GAME_PORT);
             if ((port_val & 0xc) != 0) {
                 return 0xffff;
             }
@@ -264,7 +264,7 @@ u16 read_joystick_axes(u16 player_sel)   /* in_AL: bit0 selects P1(0)/P2(1) */
     do {
         do {
             prev_timeout = timeout;
-            port_val = (u8)inp(0x201);
+            port_val = (u8)inp(GAME_PORT);
             timeout = prev_timeout + -1;
         } while (timeout != 0 && ((u8)axis_mask & port_val) != 0);
         y_mask = (u8)(axis_mask >> 8);
@@ -274,33 +274,33 @@ u16 read_joystick_axes(u16 player_sel)   /* in_AL: bit0 selects P1(0)/P2(1) */
             retry_count != 0 && (y_mask & port_val) != 0));
 
     if (retry_count != 0) {
-        outp(0x201, port_val);                    /* strobe: re-trigger one-shots */
-        port_val = (u8)inp(0x201);
+        outp(GAME_PORT, port_val);                /* strobe: re-trigger one-shots */
+        port_val = (u8)inp(GAME_PORT);
         if (((y_mask & port_val) == 0) && (((u8)axis_mask & port_val) == 0)) {
             /* Program PIT ch0 (latch mode 0x06) and align to a fresh tick edge. */
-            outp(0x43, 6);
+            outp(PIT_CMD_PORT, 6);
             timeout = 100;
             do {
                 timeout = timeout + -1;
             } while (timeout != 0);
             do {
-                port_val = (u8)inp(0x40);
-                (void)inp(0x40);
+                port_val = (u8)inp(PIT_COUNTER0_PORT);
+                (void)inp(PIT_COUNTER0_PORT);
             } while ((port_val & 0x10) == 0);
             do {
-                port_val = (u8)inp(0x40);
-                (void)inp(0x40);
+                port_val = (u8)inp(PIT_COUNTER0_PORT);
+                (void)inp(PIT_COUNTER0_PORT);
             } while ((port_val & 0x10) != 0);
         }
         g_joy_pit_counter = 0;
         timeout = 1000;
         do {
             do {
-                port_val = (u8)inp(0x40);
-                (void)inp(0x40);
+                port_val = (u8)inp(PIT_COUNTER0_PORT);
+                (void)inp(PIT_COUNTER0_PORT);
             } while ((port_val & 0x10) == 0);
             g_joy_pit_counter = g_joy_pit_counter + 1;
-            y_mask    = (u8)inp(0x201);
+            y_mask    = (u8)inp(GAME_PORT);
             port_val  = (u8)axis_mask;             /* low mask byte (BL=0x02 → port bit1 = Y line) */
             high_mask = (u8)(axis_mask >> 8);      /* high mask byte (BH=0x01 → port bit0 = X line) */
             if (port_val == 0) {
@@ -336,8 +336,8 @@ joined_r0x0001792a:
                 }
             }
             do {
-                port_val = (u8)inp(0x40);
-                (void)inp(0x40);
+                port_val = (u8)inp(PIT_COUNTER0_PORT);
+                (void)inp(PIT_COUNTER0_PORT);
             } while ((port_val & 0x10) != 0);
             timeout = timeout + -1;
         } while (timeout != 0);
@@ -372,7 +372,7 @@ joined_r0x0001792a:
  *    loop to OR into its accumulator.  That CH output is modelled by g_joystick_phase_out
  *    (the same static read_input_action already consumes); it mirrors the value stored to
  *    g_p{1,2}_joystick_state, and stays 0 when read_joystick_axes returns -1 (dir_bits=0).
- *  - port read uses inp(0x201) (see the conio.h guard at the top of the file).
+ *  - port read uses inp(GAME_PORT) (see the conio.h guard at the top of the file).
  *
  * Stack-check prologue omitted (non-semantic Borland CRT guard, per the module note).
  * The threshold globals (203b:4d36..4d3d) are calibrated by calibrate_joystick
@@ -410,7 +410,7 @@ void poll_joystick_state(void)
             else if (g_p1_joy_x_max_thresh <= x_or_buttons) {
                 dir_bits = dir_bits | 2;      /* down (Y axis high)  */
             }
-            x_or_buttons = (u8)inp(0x201);    /* game-port: bit4=P1 btn1, bit5=P1 btn2 */
+            x_or_buttons = (u8)inp(GAME_PORT);    /* game-port: bit4=P1 btn1, bit5=P1 btn2 */
             if ((~x_or_buttons & 0x10) != 0) {
                 dir_bits = dir_bits | 0x10;
             }
@@ -434,7 +434,7 @@ void poll_joystick_state(void)
             else if (g_p2_joy_x_max_thresh <= x_or_buttons) {
                 dir_bits = dir_bits | 2;      /* down (Y axis high)  */
             }
-            x_or_buttons = (u8)inp(0x201);    /* game-port: bit6=P2 btn1, bit7=P2 btn2 */
+            x_or_buttons = (u8)inp(GAME_PORT);    /* game-port: bit6=P2 btn1, bit7=P2 btn2 */
             if ((~x_or_buttons & 0x40) != 0) {
                 dir_bits = dir_bits | 0x10;
             }
