@@ -48,6 +48,7 @@
 #include "bumpy.h"
 #include "player2.h"
 #include "gfx_overlay.h"  /* player_view_geom_t */
+#include "entity.h"       /* sprite_obj_t */
 
 /* ── P2-render globals — OWNED here (see ownership note above) ────────────────── */
 s16 p2_pixel_x;          /* DGROUP 0x79ba */
@@ -291,8 +292,8 @@ u8 p2_step_scripted_move(void)
 void p2_update_grid_cell(void)
 {
     if (p2_cell != (s8)0xff) {
-        s16 ox = *(s16 __far *)(p2_sprite + 0x14);        /* sprite origin x */
-        s16 oy = *(s16 __far *)(p2_sprite + 0x16);        /* sprite origin y */
+        s16 ox = ((sprite_obj_t __far *)p2_sprite)->anchor_x;        /* sprite origin x */
+        s16 oy = ((sprite_obj_t __far *)p2_sprite)->anchor_y;        /* sprite origin y */
 
         p2_grid_col = (s16)(((p2_pixel_x - ox) >> 4) - 1);
         p2_grid_row = (s16)((p2_pixel_y - oy) >> 3);
@@ -813,9 +814,10 @@ void draw_p2_sprite(void)
 
     obj = p2_sprite;
     if (p2_cell != (s8)0xff) {
-        *(u16 __far *)(obj + 4) = (u16)(p2_frame_base + p2_move_anim); /* frame */
-        *(u16 __far *)(obj + 0) = (u16)p2_pixel_x;                     /* x     */
-        *(u16 __far *)(obj + 2) = (u16)p2_pixel_y;                     /* y     */
+        sprite_obj_t __far *so = (sprite_obj_t __far *)obj;
+        so->frame = (u16)(p2_frame_base + p2_move_anim); /* frame */
+        so->x     = (s16)p2_pixel_x;                     /* x     */
+        so->y     = (s16)p2_pixel_y;                     /* y     */
         p2_blit_sprite_leaf(0x795a, 0x203b);                          /* present leaf */
     }
     return;

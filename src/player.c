@@ -33,6 +33,7 @@
 #include "items.h"   /* check_exit_tile_vert (6372), move_step_read_item (6627) */
 #include "input.h"   /* input_state_clear (65d2) */
 #include "gfx_overlay.h"  /* player_view_geom_t */
+#include "entity.h"       /* sprite_obj_t */
 #ifdef BUMPY_PLAYABLE
 #include "dosio.h"   /* dosio_save — OOB-mode diagnostic log (playable only) */
 #endif
@@ -3202,8 +3203,8 @@ void p1_blit_sprite_leaf(u16 obj_off, u16 obj_seg); /* blit_sprite 1000:942a —
  */
 void p1_update_grid_cell(void)
 {
-    s16 ox = *(s16 __far *)(p1_sprite + 0x14);        /* sprite origin x */
-    s16 oy = *(s16 __far *)(p1_sprite + 0x16);        /* sprite origin y */
+    s16 ox = ((sprite_obj_t __far *)p1_sprite)->anchor_x;        /* sprite origin x */
+    s16 oy = ((sprite_obj_t __far *)p1_sprite)->anchor_y;        /* sprite origin y */
 
     p1_grid_x_new = (s16)(((p1_pixel_x - ox) >> 4) - 1);
     p1_grid_y_new = (s16)((p1_pixel_y - oy) >> 3);
@@ -3373,10 +3374,12 @@ void draw_p1_sprite(void)
     u8 __far *obj;
 
     if (p1_move_anim != 100) {
+        sprite_obj_t __far *so;
         obj = p1_sprite;
-        *(u16 __far *)(obj + 4) = (u16)p1_move_anim;                  /* frame */
-        *(u16 __far *)(obj + 0) = (u16)p1_pixel_x;                    /* x     */
-        *(u16 __far *)(obj + 2) = (u16)p1_pixel_y;                    /* y     */
+        so = (sprite_obj_t __far *)obj;
+        so->frame = (u16)p1_move_anim;                                /* frame */
+        so->x     = (s16)p1_pixel_x;                                  /* x     */
+        so->y     = (s16)p1_pixel_y;                                  /* y     */
         p1_blit_sprite_leaf(0x792e, 0x203b);                         /* present leaf */
     }
     return;
