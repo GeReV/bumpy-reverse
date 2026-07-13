@@ -72,7 +72,7 @@
 # Final line: "validate_ega: PASS" / "validate_ega: FAIL" / "validate_ega: ENV-BLOCKED".
 #
 # ── HOW TO RUN THIS ONCE THE ORIGINAL-SIDE CAPTURE IS UNBLOCKED ─────────────
-#   cd /home/amirg/fable5-retro-greenfield
+#   cd <repo-root>
 #   tools/validate_ega.sh --screens title,menu
 #   tools/validate_ega.sh --screens title,menu,world1,world2,world3,world9
 #
