@@ -963,15 +963,15 @@ u32 midi_process_event(void)
             /* not a real status byte -- no running-status support; eat one more
                byte and fall through to the shared tail (asm 8742/8743). */
             (void)*snd_seq_cursor;  snd_seq_cursor++;
-        } else if (al < 0xf0) {
+        } else if (al < MIDI_STATUS_SYSEX) {
             /* channel-voice message (0x80..0xEF) -- asm 875b */
             snd_seq_event_al = al;
             snddrv_dispatch_d();
-        } else if (al == 0xf0) {
+        } else if (al == MIDI_STATUS_SYSEX) {
             /* SysEx -- asm 8756 */
             snd_seq_event_al = al;
             snddrv_dispatch_c();
-        } else if (al == 0xf7) {
+        } else if (al == MIDI_STATUS_SYSEX_CONT) {
             /* SysEx continuation -- asm 8751 */
             snd_seq_event_al = al;
             snddrv_dispatch_b();
@@ -983,19 +983,19 @@ u32 midi_process_event(void)
             meta_type = (u8)(type_len & 0xffu);
             meta_len  = (u8)(type_len >> 8);
 
-            if (meta_type == 0x51) {
+            if (meta_type == MIDI_META_SET_TEMPO) {
                 /* Set Tempo (FF 51 03 tt tt tt) -- asm 8765..876d */
                 midi_tempo_hi = *snd_seq_cursor;  snd_seq_cursor++;
                 midi_tempo_lo = midi_bswap16(midi_rd16_raw(snd_seq_cursor));
                 snd_seq_cursor += 2;
-            } else if (meta_type == 0x2f) {
+            } else if (meta_type == MIDI_META_END_OF_TRACK) {
                 /* End of Track (FF 2F 00) -- asm 8777..8782: consume 2 more bytes
                    (discarded), decrement the track count, RETURN IMMEDIATELY -- no
                    midi_read_varlen call, no seq_normalize_far_ptr. */
                 snd_seq_cursor += 2;
                 midi_track_count--;
                 return 0xffffffffUL;
-            } else if (meta_type == 0x20) {
+            } else if (meta_type == MIDI_META_CHANNEL_PREFIX) {
                 /* MIDI Channel Prefix (FF 20 01 cc) -- asm 8788/8789: store into CS:[BX+0x80],
                    i.e. the ACTIVE track's slot.  Keep snd_seq_default_chan (what the dispatchers
                    read) in sync, and record it per-track so other tracks don't clobber it. */

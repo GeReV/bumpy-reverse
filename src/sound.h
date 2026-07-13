@@ -3,6 +3,22 @@
 
 #include "bumpy.h"
 
+/* ── L4 hardware ports — MPU-401 (0x330/0x331), OPL2/AdLib (0x388/0x389),
+ * PC-speaker gate (0x61), PIT channel-2 tone (0x42 data / 0x43 command), 8259
+ * PIC EOI (0x20).  Bare (unsuffixed, signed-int) literals — matches every
+ * original outp()/inp() call site exactly. */
+#define MPU401_DATA_PORT   0x330
+#define MPU401_STATUS_PORT 0x331
+#define OPL_ADDR_PORT      0x388   /* also status on IN */
+#define OPL_DATA_PORT      0x389
+#define PC_SPEAKER_PORT    0x61
+/* SND_ prefix: host_timer.c (different PIT channel/purpose) already defines
+ * its own PIT_CMD_PORT/PIT_DATA_PORT for channel 0; these are channel-2 tone
+ * generation ports, kept distinctly named to avoid the macro collision. */
+#define SND_PIT_DATA_PORT  0x42
+#define SND_PIT_CMD_PORT   0x43
+#define PIC_EOI_PORT       0x20
+
 /* ────────────────────────────────────────────────────────────────────────────
  *  sound.h — sound subsystem (Phase-6 reconstruction).
  *

@@ -3,6 +3,14 @@
 
 #include "bumpy.h"
 
+/* ── MIDI status/meta-event bytes.  Bare (unsuffixed, signed-int) literals —
+ * matches every original comparison site exactly. */
+#define MIDI_STATUS_SYSEX        0xf0
+#define MIDI_STATUS_SYSEX_CONT   0xf7
+#define MIDI_META_SET_TEMPO      0x51
+#define MIDI_META_END_OF_TRACK   0x2f
+#define MIDI_META_CHANNEL_PREFIX 0x20
+
 /* ────────────────────────────────────────────────────────────────────────────
  *  midi.h — MIDI/SMF sequencer + MIDI-to-OPL voice dispatch (Phase-D/E reconstruction).
  *

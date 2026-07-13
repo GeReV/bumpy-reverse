@@ -609,26 +609,26 @@ int mpu401_reset_to_uart(void)
     if (mpu401_present != 0) {
         cx = 0x1388;                                  /* poll DSR (0x40) CLEAR */
         do {
-            al = (u8)inp(0x331);
+            al = (u8)inp(MPU401_STATUS_PORT);
             cx--;
         } while (cx != 0 && (al & 0x40) != 0);
         if ((al & 0x40) == 0) {
-            outp(0x331, 0xff);                         /* MOV AL,0xff; OUT DX,AL */
+            outp(MPU401_STATUS_PORT, 0xff);            /* MOV AL,0xff; OUT DX,AL */
             retry = 3;
             for (;;) {
                 cx = 0x1388;                            /* poll ACK-ready (0x80) CLEAR */
                 do {
-                    al = (u8)inp(0x331);
+                    al = (u8)inp(MPU401_STATUS_PORT);
                     cx--;
                 } while (cx != 0 && (al & 0x80) != 0);
-                if ((al & 0x80) == 0 && (u8)inp(0x330) == 0xfe) {
+                if ((al & 0x80) == 0 && (u8)inp(MPU401_DATA_PORT) == 0xfe) {
                     cx = 0x1388;                        /* poll DSR (0x40) CLEAR again */
                     do {
-                        al = (u8)inp(0x331);
+                        al = (u8)inp(MPU401_STATUS_PORT);
                         cx--;
                     } while (cx != 0 && (al & 0x40) != 0);
                     if ((al & 0x40) == 0) {
-                        outp(0x331, 0x3f);               /* enter UART mode */
+                        outp(MPU401_STATUS_PORT, 0x3f);  /* enter UART mode */
                         return mpu401_present;
                     }
                     break;                              /* timeout — no retry, straight to fail */
@@ -1716,7 +1716,7 @@ void mpu401_write_data_polled(void)
 
     cx = 0;
     do {
-        status = (u8)inp(0x331);
+        status = (u8)inp(MPU401_STATUS_PORT);
         cx = (u16)(cx - 1);              /* LOOPNZ: CX-- */
     } while (cx != 0 && (status & 0x40) != 0);
     if ((status & 0x40) != 0) {
@@ -1727,7 +1727,7 @@ void mpu401_write_data_polled(void)
         mpu401_present = (s16)cx;
         return;
     }
-    outp(0x330, snd_mpu_byte_89e2);      /* MOV AL,AH; OUT 0x330,AL */
+    outp(MPU401_DATA_PORT, snd_mpu_byte_89e2);      /* MOV AL,AH; OUT 0x330,AL */
 }
 
 /* ── snd_emit_raw_sample (1000:8a07) — MPU-401 raw 2-byte sample emit ────────────────
@@ -1791,13 +1791,13 @@ void opl_write_reg(u8 reg, u8 val)
     int i;
 
     opl_reg_shadow_80cc[reg] = val;     /* MOV [0x80cc+AH],AL (CS shadow) */
-    outp(0x388, reg);                   /* OUT 0x388,AL (register select) */
+    outp(OPL_ADDR_PORT, reg);           /* OUT 0x388,AL (register select) */
     for (i = 0; i < 6; i++) {           /* addr-write settle: 6 status reads */
-        (void)inp(0x388);
+        (void)inp(OPL_ADDR_PORT);
     }
-    outp(0x389, val);                   /* OUT 0x389,AL (data) */
+    outp(OPL_DATA_PORT, val);           /* OUT 0x389,AL (data) */
     for (i = 0; i < 35; i++) {          /* data-write settle: 35 status reads */
-        (void)inp(0x388);
+        (void)inp(OPL_ADDR_PORT);
     }
 }
 
@@ -1873,7 +1873,7 @@ void opl2_all_notes_off(void)
  *  IN AL,0x388.  asm 1000:9056 verbatim: PUSH DX; MOV DX,0x388; IN AL,DX; POP DX; RET. */
 u8 opl_read_status(void)
 {
-    return (u8)inp(0x388);
+    return (u8)inp(OPL_ADDR_PORT);
 }
 
 /* ── opl2_reset_all_regs (1000:8eeb) — OPL2 full-register init sequence: PORTED (D1) ──
@@ -2042,9 +2042,9 @@ void pc_speaker_silence(void)
         snd_voice_table[i] = 0;
     }
     snd_select_scratch_83ee = 0;                  /* MOV CS:[0x83ee],0 */
-    port61 = (u8)inp(0x61);                        /* IN AL,0x61 */
+    port61 = (u8)inp(PC_SPEAKER_PORT);              /* IN AL,0x61 */
     port61 = (u8)(port61 & 0xfc);                  /* AND AL,0xfc */
-    outp(0x61, port61);                            /* OUT 0x61,AL */
+    outp(PC_SPEAKER_PORT, port61);                  /* OUT 0x61,AL */
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -2126,11 +2126,11 @@ static void pcspk_io_settle(void)
  *  followed by an I/O settle.  asm 1000:91b9 verbatim. */
 static void pcspk_set_pit_ch2(u16 divisor)
 {
-    outp(0x43, 0xb6);                             /* MOV AL,0xB6; OUT 0x43,AL */
+    outp(SND_PIT_CMD_PORT, 0xb6);                     /* MOV AL,0xB6; OUT 0x43,AL */
     pcspk_io_settle();                            /* CALL 0x8a3b */
-    outp(0x42, (u8)divisor);                       /* OUT 0x42,AL (lo) */
+    outp(SND_PIT_DATA_PORT, (u8)divisor);      /* OUT 0x42,AL (lo) */
     pcspk_io_settle();
-    outp(0x42, (u8)(divisor >> 8));                /* MOV AL,AH; OUT 0x42,AL (hi) */
+    outp(SND_PIT_DATA_PORT, (u8)(divisor >> 8)); /* MOV AL,AH; OUT 0x42,AL (hi) */
     pcspk_io_settle();
 }
 
@@ -2162,8 +2162,8 @@ void pcspk_music_render(void)
     if (voice == 0) {                               /* 9175 JE silence (91a9) */
         snd_select_scratch_83ee = 0;               /* 91a9..91ab: speaker-on flag = 0 */
         snd_select_scratch_83ef = 0;               /* 91af: last divisor = 0 */
-        port61 = (u8)(inp(0x61) & 0xfc);           /* 91b3..91b5: gate off */
-        outp(0x61, port61);                        /* 91a6 OUT 0x61,AL */
+        port61 = (u8)(inp(PC_SPEAKER_PORT) & 0xfc); /* 91b3..91b5: gate off */
+        outp(PC_SPEAKER_PORT, port61);              /* 91a6 OUT 0x61,AL */
         return;                                    /* 91a8 RETF */
     }
     voice = (u16)(voice + 0x30 + transpose);       /* 9177..917a: note*2 + 0x30 + transpose */
@@ -2175,8 +2175,8 @@ void pcspk_music_render(void)
     snd_select_scratch_83ef = divisor;             /* 9190: last divisor = divisor */
     if (snd_select_scratch_83ee == 0) {            /* 9194..919a: speaker already on? */
         snd_select_scratch_83ee = 1;               /* 919c..919e: mark on */
-        port61 = (u8)(inp(0x61) | 3);              /* 91a2..91a4: gate + enable */
-        outp(0x61, port61);                        /* 91a6 OUT 0x61,AL */
+        port61 = (u8)(inp(PC_SPEAKER_PORT) | 3);   /* 91a2..91a4: gate + enable */
+        outp(PC_SPEAKER_PORT, port61);              /* 91a6 OUT 0x61,AL */
     }
     /* 91a8 RETF */
 }
@@ -2195,9 +2195,9 @@ void speaker_gate_reset(void)
         speaker_gate_strobe();          /* JNZ 0x9451 (the AND-0xfc strobe path) */
         return;
     }
-    port61 = (u8)inp(0x61);             /* IN AL,0x61 */
+    port61 = (u8)inp(PC_SPEAKER_PORT);  /* IN AL,0x61 */
     port61 = (u8)(port61 | 0x3);        /* OR AL,0x3 */
-    outp(0x61, port61);                 /* OUT 0x61,AL */
+    outp(PC_SPEAKER_PORT, port61);      /* OUT 0x61,AL */
 }
 
 /* ── speaker_gate_strobe (1000:9451) — strobe/ack the PC-speaker gate ────────────────
@@ -2208,9 +2208,9 @@ void speaker_gate_strobe(void)
 {
     u8 port61;
 
-    port61 = (u8)inp(0x61);             /* IN AL,0x61 */
+    port61 = (u8)inp(PC_SPEAKER_PORT);  /* IN AL,0x61 */
     port61 = (u8)(port61 & 0xfc);       /* AND AL,0xfc */
-    outp(0x61, port61);                 /* OUT 0x61,AL */
+    outp(PC_SPEAKER_PORT, port61);      /* OUT 0x61,AL */
 }
 
 /* ── record_status_and_strobe_speaker (1000:946e) — latch status, maybe strobe ──────
@@ -2329,12 +2329,12 @@ void tone_seq_callback_9631(void)
     }
     SND_PF->step_current = SND_PF->step_reload;      /* [0x9796] = [0x978c] */
     SND_PF->pitch_reload += SND_PF->pitch_increment; /* [0x978a] += [0x978e] */
-    outp(0x43, 0xb6);                          /* MOV AL,0xb6; OUT 0x43,AL */
+    outp(SND_PIT_CMD_PORT, 0xb6);                  /* MOV AL,0xb6; OUT 0x43,AL */
     (void)0;                                   /* CALL 0x9434 (noop thunk chain) */
-    outp(0x42, (u8)SND_PF->pitch_reload);      /* MOV AX,[0x978a]; OUT 0x42,AL (lo) */
+    outp(SND_PIT_DATA_PORT, (u8)SND_PF->pitch_reload); /* MOV AX,[0x978a]; OUT 0x42,AL (lo) */
     (void)0;                                   /* CALL 0x9434 */
     ax_hi_lo = (u8)(SND_PF->pitch_reload >> 8);  /* XCHG AH,AL */
-    outp(0x42, ax_hi_lo);                      /* OUT 0x42,AL (hi) */
+    outp(SND_PIT_DATA_PORT, ax_hi_lo);    /* OUT 0x42,AL (hi) */
 }
 
 /* ── tone_seq_callback_96c4 (1000:96c4) — noise/PRNG tone sequencer (schedule_b's cb) ──────
@@ -2366,11 +2366,11 @@ void tone_seq_callback_96c4(void)
         ax ^= *(u16 *)(snd_isr_state_979a + 2);   /* xor ax, cs:[0x979c] */
         *(u16 *)(snd_isr_state_979a + 3) = ax;    /* mov cs:[0x979d], ax */
         snd_isr_state_979a[0] = 0;                /* xor ax,ax; mov cs:[0x979a],al */
-        outp(0x43, 0xb4);                         /* MOV AL,0xb4; OUT 0x43,AL (mode 2) */
+        outp(SND_PIT_CMD_PORT, 0xb4);                 /* MOV AL,0xb4; OUT 0x43,AL (mode 2) */
         (void)0;                                  /* CALL 0x9434 */
-        outp(0x42, (u8)SND_PF->pitch_reload);       /* MOV AX,[0x978a]; OUT 0x42,AL (lo) */
+        outp(SND_PIT_DATA_PORT, (u8)SND_PF->pitch_reload); /* MOV AX,[0x978a]; OUT 0x42,AL (lo) */
         (void)0;                                  /* CALL 0x9434 */
-        outp(0x42, (u8)(SND_PF->pitch_reload >> 8));/* XCHG AH,AL; OUT 0x42,AL (hi) */
+        outp(SND_PIT_DATA_PORT, (u8)(SND_PF->pitch_reload >> 8)); /* XCHG AH,AL; OUT 0x42,AL (hi) */
     }
     SND_PF->subsweep_current -= 1;                    /* dec word cs:[0x9798] */
     if (SND_PF->subsweep_current == 0) {              /* jne 0x9766 */
@@ -2389,7 +2389,7 @@ void tone_seq_callback_96c4(void)
     *(u16 *)(snd_isr_state_979a + 1) =                          /* mov ax,[0x979b]; rol ax,1 */
         (u16)((*(u16 *)(snd_isr_state_979a + 1) << 1) |
               (*(u16 *)(snd_isr_state_979a + 1) >> 15));        /* mov [0x979b],ax */
-    port61 = (u8)inp(0x61);                     /* IN AL,0x61 */
+    port61 = (u8)inp(PC_SPEAKER_PORT);          /* IN AL,0x61 */
     /* AH = (AH & 2) | 1 then AL = (AL & 0xfd) | AH.  AH starts as the rol'd word's high byte;
      *  the engine reuses AX from the ROL — AH = (ax>>8).  The 0x61 bit dance toggles bit1
      *  (speaker data) / sets bit0 (gate) from the PRNG. */
@@ -2398,7 +2398,7 @@ void tone_seq_callback_96c4(void)
         ah = (u8)((ah & 2) | 1);               /* AND AH,2; OR AH,1 */
         port61 = (u8)((port61 & 0xfd) | ah);   /* AND AL,0xfd; OR AL,AH */
     }
-    outp(0x61, port61);                        /* OUT 0x61,AL */
+    outp(PC_SPEAKER_PORT, port61);              /* OUT 0x61,AL */
 }
 
 /* ── tone_seq_callback_95b5 (1000:95b5) — noise/PRNG tone sequencer (schedule_c's cb) ──────
@@ -2427,22 +2427,22 @@ void tone_seq_callback_95b5(void)
         ax ^= *(u16 *)(snd_isr_state_979a + 2);   /* xor ax, cs:[0x979c] */
         *(u16 *)(snd_isr_state_979a + 3) = ax;    /* mov cs:[0x979d], ax */
         snd_isr_state_979a[0] = 0;                /* xor ax,ax; mov cs:[0x979a],al */
-        outp(0x43, 0xb4);                         /* MOV AL,0xb4; OUT 0x43,AL (mode 2) */
+        outp(SND_PIT_CMD_PORT, 0xb4);                 /* MOV AL,0xb4; OUT 0x43,AL (mode 2) */
         (void)0;                                  /* CALL 0x9434 */
-        outp(0x42, (u8)SND_PF->pitch_reload);       /* MOV AX,[0x978a]; OUT 0x42,AL (lo) */
+        outp(SND_PIT_DATA_PORT, (u8)SND_PF->pitch_reload); /* MOV AX,[0x978a]; OUT 0x42,AL (lo) */
         (void)0;                                  /* CALL 0x9434 */
-        outp(0x42, (u8)(SND_PF->pitch_reload >> 8));/* XCHG AH,AL; OUT 0x42,AL (hi) */
+        outp(SND_PIT_DATA_PORT, (u8)(SND_PF->pitch_reload >> 8)); /* XCHG AH,AL; OUT 0x42,AL (hi) */
     }
     *(u16 *)(snd_isr_state_979a + 1) =                          /* mov ax,[0x979b]; rol ax,1 */
         (u16)((*(u16 *)(snd_isr_state_979a + 1) << 1) |
               (*(u16 *)(snd_isr_state_979a + 1) >> 15));        /* mov [0x979b],ax */
-    port61 = (u8)inp(0x61);                     /* IN AL,0x61 */
+    port61 = (u8)inp(PC_SPEAKER_PORT);          /* IN AL,0x61 */
     {
         u8 ah = (u8)(*(u16 *)(snd_isr_state_979a + 1) >> 8);   /* AH = rolled hi byte */
         ah = (u8)((ah & 2) | 1);               /* AND AH,2; OR AH,1 */
         port61 = (u8)((port61 & 0xfd) | ah);   /* AND AL,0xfd; OR AL,AH */
     }
-    outp(0x61, port61);                        /* OUT 0x61,AL */
+    outp(PC_SPEAKER_PORT, port61);              /* OUT 0x61,AL */
 }
 
 /* ── snd_timer_slot_sweep — the per-PIT-tick core of the int-8 mux (1000:7c02), NO EOI ─────
@@ -2528,5 +2528,5 @@ void snd_timer_slot_sweep(void)
 void pit_timer_isr_multiplexer(void)
 {
     snd_timer_slot_sweep();                                /* 6-slot walk + callback dispatch */
-    outp(0x20, 0x20);                                      /* OUT 0x20,AL — 8259 EOI */
+    outp(PIC_EOI_PORT, 0x20);                              /* OUT 0x20,AL — 8259 EOI */
 }
