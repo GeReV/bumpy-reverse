@@ -76,7 +76,7 @@ anim_chan_rec anim_b_records[ANIM_B_SLOTS];   /* 4 channel-B slots */
    slot 0); without it the unbounded scan would run off the table.  The 3 STEPPER
    loops only ever index slots 0..2 (bounded `< 3`), so this terminator is consumed
    solely by the allocator.  (Engine-verified vs BUMPY_unpacked.exe DGROUP 0x4c64.) */
-anim_chan_rec anim_a_terminator = { 0xff, 0, 0, 0, 0, 0, 0, 0 };
+anim_chan_rec anim_a_terminator = { ANIM_SLOT_TERMINATOR, 0, 0, 0, 0, 0, 0, 0 };
 
 /* The B slot-SCAN terminator record (the channel-B analogue of anim_a_terminator).
    In the unpacked EXE the B far-ptr table at 0x4cbc has FIVE entries: the 4 usable
@@ -88,7 +88,7 @@ anim_chan_rec anim_a_terminator = { 0xff, 0, 0, 0, 0, 0, 0, 0 };
    consumed solely by the allocator.  (Engine-verified vs BUMPY_unpacked.exe DGROUP
    0x4cb0.)  This 5th entry was unused while channel B had no allocator (Phase 5);
    apply_contact_action (Phase 9 T1) is its first consumer. */
-anim_chan_rec anim_b_terminator = { 0xff, 0, 0, 0, 0, 0, 0, 0 };
+anim_chan_rec anim_b_terminator = { ANIM_SLOT_TERMINATOR, 0, 0, 0, 0, 0, 0, 0 };
 
 /* ── slot tables (far ptrs into the records above) ──────────────────────────────
    DGROUP 0x4c70/0x4c72 (A: 3 slots + 0xFF terminator) and 0x4cbc/0x4cbe (B: 4 slots
@@ -112,8 +112,8 @@ anim_chan_rec __far *anim_channels_b_tbl[ANIM_B_SLOTS + 1];
    mode_script_tbl @0x2252) so an entry's far ptr is rebuilt at the use site with
    MK_FP(seg, off); they are level/engine data populated at load time (zero until
    the engine spawn/load path or the host harness seeds them).  Sized to 256
-   entries (256*4 = 1024 B) — action/cmd/frame bytes index the full 0..0xff range. */
-#define ANIM_FARPTR_TBL_LEN  (256 * 4)
+   entries (256*4 = 1024 B) — action/cmd/frame bytes index the full 0..0xff range.
+   ANIM_FARPTR_TBL_LEN is defined in anim.h (already #included above). */
 u8 anim_a_tiledef_tbl[ANIM_FARPTR_TBL_LEN];   /* DGROUP 0x2ede/0x2ee0 (action*4) */
 u8 anim_a_frame_tbl[ANIM_FARPTR_TBL_LEN];     /* DGROUP 0x3d6a/0x3d6c (cmd*4)    */
 u8 anim_b_frame_tbl[ANIM_FARPTR_TBL_LEN];     /* DGROUP 0x40a6/0x40a8 (frame*4)  */
@@ -185,8 +185,8 @@ void apply_cell_animation(u8 action_code)
 
     target_cell = anim_target_cell;
     /* tile_def far ptr = tiledef_tbl[action_code*4] (off @ +0, seg @ +2). */
-    tdef_off = *(u16 *)(anim_a_tiledef_tbl + (u16)action_code * 4 + 0);
-    tdef_seg = *(u16 *)(anim_a_tiledef_tbl + (u16)action_code * 4 + 2);
+    tdef_off = *(u16 *)(anim_a_tiledef_tbl + (u16)action_code * ANIM_FARPTR_STRIDE + 0);
+    tdef_seg = *(u16 *)(anim_a_tiledef_tbl + (u16)action_code * ANIM_FARPTR_STRIDE + 2);
     tile_def = (const u8 __far *)MK_FP(tdef_seg, tdef_off);
 
     /* ── Scan 1: skip active slots; act on the first non-active slot. ──────────────
@@ -199,7 +199,7 @@ void apply_cell_animation(u8 action_code)
             slot = anim_channels_a_tbl[slot_idx];
             slot_idx = slot_idx + 1;
         } while (slot->active == 0);
-        if (slot->active == 0xff) {           /* 0xFF terminator -> restart at 0    */
+        if (slot->active == ANIM_SLOT_TERMINATOR) { /* 0xFF terminator -> restart at 0 */
             slot_idx = 0;
             goto LAB_6a06;
         }
@@ -207,7 +207,7 @@ void apply_cell_animation(u8 action_code)
     goto LAB_6a4d;
 
     /* ── Scan 2 (LAB_6a06): from slot 0, find a FREE (0) slot, stop on 0xFF. ────── */
-    while (cmd != 0xff) {
+    while (cmd != ANIM_SLOT_TERMINATOR) {
 LAB_6a06:
         slot = anim_channels_a_tbl[slot_idx];
         cmd = slot->active;
@@ -264,11 +264,11 @@ void step_anim_channels_a(void)
             g_anim_cur_cmd_byte = cmd_byte;
             slot->stream_off = slot->stream_off + 1;
             slot->frame = cmd_byte;
-            if (g_anim_cur_cmd_byte == 0xff) {
+            if (g_anim_cur_cmd_byte == ANIM_SLOT_TERMINATOR) {
                 slot->active = '\0';
             } else if (g_anim_cur_cmd_byte != 0) {
-                fr_off = *(u16 *)(anim_a_frame_tbl + (u16)g_anim_cur_cmd_byte * 4 + 0);
-                fr_seg = *(u16 *)(anim_a_frame_tbl + (u16)g_anim_cur_cmd_byte * 4 + 2);
+                fr_off = *(u16 *)(anim_a_frame_tbl + (u16)g_anim_cur_cmd_byte * ANIM_FARPTR_STRIDE + 0);
+                fr_seg = *(u16 *)(anim_a_frame_tbl + (u16)g_anim_cur_cmd_byte * ANIM_FARPTR_STRIDE + 2);
                 frame_data = (const u8 __far *)MK_FP(fr_seg, fr_off);
                 slot->data_off = *(u16 __far *)(frame_data + 0);
                 slot->data_seg = *(u16 __far *)(frame_data + 2);
@@ -310,11 +310,11 @@ void step_anim_channels_b(void)
             anim_b_cur_frame_byte = frame_byte;
             slot->stream_off = slot->stream_off + 1;
             slot->frame = frame_byte;
-            if (anim_b_cur_frame_byte == 0xff) {
+            if (anim_b_cur_frame_byte == ANIM_SLOT_TERMINATOR) {
                 slot->active = '\0';
             } else if (anim_b_cur_frame_byte != 0) {
-                fr_off = *(u16 *)(anim_b_frame_tbl + (u16)anim_b_cur_frame_byte * 4 + 0);
-                fr_seg = *(u16 *)(anim_b_frame_tbl + (u16)anim_b_cur_frame_byte * 4 + 2);
+                fr_off = *(u16 *)(anim_b_frame_tbl + (u16)anim_b_cur_frame_byte * ANIM_FARPTR_STRIDE + 0);
+                fr_seg = *(u16 *)(anim_b_frame_tbl + (u16)anim_b_cur_frame_byte * ANIM_FARPTR_STRIDE + 2);
                 frame_data = (const u8 __far *)MK_FP(fr_seg, fr_off);
                 slot->data_off = *(u16 __far *)(frame_data + 0);
                 slot->data_seg = *(u16 __far *)(frame_data + 2);
@@ -413,10 +413,10 @@ void draw_anim_channels_a(void)
     do {
         slot = anim_channels_a_tbl[channel_idx];
         active = slot->active;
-        if ((active != '\0') && (active != 0xff)) {
+        if ((active != '\0') && (active != ANIM_SLOT_TERMINATOR)) {
             cell = slot->cell;
-            x = *(u16 __far *)(anim_a_grid_tbl + (u16)cell * 4 + 0);
-            y = *(u16 __far *)(anim_a_grid_tbl + (u16)cell * 4 + 2);
+            x = *(u16 __far *)(anim_a_grid_tbl + (u16)cell * ANIM_FARPTR_STRIDE + 0);
+            y = *(u16 __far *)(anim_a_grid_tbl + (u16)cell * ANIM_FARPTR_STRIDE + 2);
 
             /* ── ERASE view (0x8d4) ──────────────────────────────────────────── */
             view = anim_a_erase_view;
@@ -432,8 +432,8 @@ void draw_anim_channels_a(void)
             anim_restore_bg_view_leaf(anim_a_erase_view);
 
             /* ── p1_sprite blit descriptor (0x8884 far ptr -> 0x792e pointee) ──── */
-            posy = *(u16 __far *)(anim_posA_tbl + (u16)cell * 4 + 2);
-            *(u16 __far *)(p1_sprite + 0) = *(u16 __far *)(anim_posA_tbl + (u16)cell * 4 + 0);
+            posy = *(u16 __far *)(anim_posA_tbl + (u16)cell * ANIM_FARPTR_STRIDE + 2);
+            *(u16 __far *)(p1_sprite + 0) = *(u16 __far *)(anim_posA_tbl + (u16)cell * ANIM_FARPTR_STRIDE + 0);
             *(u16 __far *)(p1_sprite + 2) = (u16)(posy + slot->data_off);
             *(u16 __far *)(p1_sprite + 4) = slot->data_seg;
             if ((slot->data_seg & 0x200) == 0) {
@@ -453,7 +453,7 @@ void draw_anim_channels_a(void)
             anim_render_view_leaf(anim_a_draw_view);
         }
         channel_idx = channel_idx + 1;
-    } while (active != 0xff);
+    } while (active != ANIM_SLOT_TERMINATOR);
     return;
 }
 
@@ -488,10 +488,10 @@ void draw_anim_channels_b(void)
     do {
         slot = anim_channels_b_tbl[channel_idx];
         active = slot->active;
-        if ((active != '\0') && (active != 0xff)) {
+        if ((active != '\0') && (active != ANIM_SLOT_TERMINATOR)) {
             cell = slot->cell;
-            x = *(u16 __far *)(anim_b_grid_tbl + (u16)cell * 4 + 0);
-            y = *(u16 __far *)(anim_b_grid_tbl + (u16)cell * 4 + 2);
+            x = *(u16 __far *)(anim_b_grid_tbl + (u16)cell * ANIM_FARPTR_STRIDE + 0);
+            y = *(u16 __far *)(anim_b_grid_tbl + (u16)cell * ANIM_FARPTR_STRIDE + 2);
 
             /* ── view0 (0x8c8) pre-pass ───────────────────────────────────────── */
             view = anim_b_view0;
@@ -532,8 +532,8 @@ void draw_anim_channels_b(void)
             anim_restore_bg_view_leaf(anim_b_view1);
 
             /* ── p1_sprite blit descriptor (frame +0xf1 bias) ─────────────────── */
-            posy = *(u16 __far *)(anim_posB_tbl + (u16)cell * 4 + 2);
-            *(u16 __far *)(p1_sprite + 0) = *(u16 __far *)(anim_posB_tbl + (u16)cell * 4 + 0);
+            posy = *(u16 __far *)(anim_posB_tbl + (u16)cell * ANIM_FARPTR_STRIDE + 2);
+            *(u16 __far *)(p1_sprite + 0) = *(u16 __far *)(anim_posB_tbl + (u16)cell * ANIM_FARPTR_STRIDE + 0);
             *(u16 __far *)(p1_sprite + 2) = (u16)(posy + slot->data_off);
 #ifdef BUMPY_PLAYABLE
             /* Faithful layer-B masked erase (task B): restore the footprint this page
@@ -562,7 +562,7 @@ void draw_anim_channels_b(void)
             anim_render_view_leaf(anim_b_draw_view);
         }
         channel_idx = channel_idx + 1;
-    } while (active != 0xff);
+    } while (active != ANIM_SLOT_TERMINATOR);
     return;
 }
 
@@ -586,15 +586,15 @@ void erase_anim_channels_a(void)
     channel_idx = 0;
     do {
         active = anim_channels_a_tbl[channel_idx]->active;
-        if ((active != '\0') && (active != 0xff)) {
+        if ((active != '\0') && (active != ANIM_SLOT_TERMINATOR)) {
             cell = anim_channels_a_tbl[channel_idx]->cell;
             view = anim_a_clear_view;
             *(u16 __far *)(view + 2) = (u16)((u16)channel_idx * 0x180 + 0x79be);
             *(u16 __far *)(view + 4) = ANIM_DGROUP_RUNTIME_SEG;
             *(u16 __far *)(anim_a_clear_view + 0x14) =
-                *(u16 __far *)(anim_a_grid_tbl + (u16)cell * 4 + 0);
+                *(u16 __far *)(anim_a_grid_tbl + (u16)cell * ANIM_FARPTR_STRIDE + 0);
             *(u16 __far *)(anim_a_clear_view + 0x16) =
-                *(u16 __far *)(anim_a_grid_tbl + (u16)cell * 4 + 2);
+                *(u16 __far *)(anim_a_grid_tbl + (u16)cell * ANIM_FARPTR_STRIDE + 2);
             *(u16 __far *)(view + 0x1c) = 0;
             if ((cell & 1) != 0) {
                 *(u16 __far *)(view + 0x1c) = *(u16 __far *)(view + 0x1c) | 0x400;
@@ -602,7 +602,7 @@ void erase_anim_channels_a(void)
             anim_restore_bg_view_leaf(anim_a_clear_view);
         }
         channel_idx = channel_idx + 1;
-    } while (active != 0xff);
+    } while (active != ANIM_SLOT_TERMINATOR);
     return;
 }
 
@@ -626,18 +626,18 @@ void erase_anim_channels_b(void)
     channel_idx = 0;
     do {
         active = anim_channels_b_tbl[channel_idx]->active;
-        if ((active != '\0') && (active != 0xff)) {
+        if ((active != '\0') && (active != ANIM_SLOT_TERMINATOR)) {
             cell = anim_channels_b_tbl[channel_idx]->cell;
             view = anim_b_clear_view;
             *(u16 __far *)(view + 2) = (u16)((u16)channel_idx * 0x100 + 0x7e3e);
             *(u16 __far *)(view + 4) = ANIM_DGROUP_RUNTIME_SEG;
             *(u16 __far *)(anim_b_clear_view + 0x14) =
-                *(u16 __far *)(anim_b_grid_tbl + (u16)cell * 4 + 0);
+                *(u16 __far *)(anim_b_grid_tbl + (u16)cell * ANIM_FARPTR_STRIDE + 0);
             *(u16 __far *)(anim_b_clear_view + 0x16) =
-                *(u16 __far *)(anim_b_grid_tbl + (u16)cell * 4 + 2);
+                *(u16 __far *)(anim_b_grid_tbl + (u16)cell * ANIM_FARPTR_STRIDE + 2);
             anim_restore_bg_view_leaf(anim_b_clear_view);
         }
         channel_idx = channel_idx + 1;
-    } while (active != 0xff);
+    } while (active != ANIM_SLOT_TERMINATOR);
     return;
 }

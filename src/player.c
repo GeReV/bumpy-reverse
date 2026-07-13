@@ -769,7 +769,7 @@ void p1_begin_walk_right(void)
        what crashed movement (bug #3: INT 6 from the bad move-script). */
     p1_move_script = move_script_entries(0x140cu);
 #else
-    p1_move_script = (u16 __far *)MK_FP(0x203b, 0x140c);
+    p1_move_script = (u16 __far *)MK_FP(P1_MOVE_SCRIPT_STATIC_SEG, MOVE_SCRIPT_WALK_RIGHT_OFF);
 #endif
     p1_move_steps_left = 4;
     p1_facing_left = 9;
@@ -793,7 +793,7 @@ void p1_begin_walk_left(void)
 #ifdef BUMPY_PLAYABLE
     p1_move_script = move_script_entries(0x1460u);   /* relocated; see p1_begin_walk_right */
 #else
-    p1_move_script = (u16 __far *)MK_FP(0x203b, 0x1460);
+    p1_move_script = (u16 __far *)MK_FP(P1_MOVE_SCRIPT_STATIC_SEG, MOVE_SCRIPT_WALK_LEFT_OFF);
 #endif
     p1_move_steps_left = 4;
     p1_move_step_idx = 9;
@@ -1182,7 +1182,7 @@ u8 g_action_lut_bank[0x160] = {
  */
 void read_tile_layer_contact(u8 cell)
 {
-    p1_contact_code = tilemap[(u16)cell + 0x30];
+    p1_contact_code = tilemap[(u16)cell + TILE_CONTACT_LAYER_OFF];
     return;
 }
 
@@ -2240,7 +2240,7 @@ void reset_round_counters(void)
 #ifdef BUMPY_PLAYABLE
     p1_move_script = move_script_entries(0x1394u);
 #else
-    p1_move_script = (u16 __far *)MK_FP(0x203b, 0x1394);
+    p1_move_script = (u16 __far *)MK_FP(P1_MOVE_SCRIPT_STATIC_SEG, MOVE_SCRIPT_ROUND_ENTRY_OFF);
 #endif
     p1_move_steps_left = 0x0au;          /* 327b [0x824d] = 10 */
     p1_facing_left     = 4;              /* 3282 [0x9bae] = 4 */
@@ -2477,7 +2477,7 @@ void check_exit_tile_horiz(void)
     u8 sound_id;
 
     if ((p1_step_col_count != 0) &&
-        ((s8)tilemap[(u16)p1_cell + 0x2f] == '\f')) {
+        ((s8)tilemap[(u16)p1_cell + TILE_CONTACT_LAYER_OFF - 1] == '\f')) {
         p1_move_step_idx = 0;
         physics_frozen = 1;
         enter_game_mode(0x2e);
@@ -2815,7 +2815,7 @@ LAB_6b26:
 
 LAB_6b78:
     slot->cell = p1_cell_prev;
-    tilemap[(u16)cell_key + 0x30] = tile_def[0];
+    tilemap[(u16)cell_key + TILE_CONTACT_LAYER_OFF] = tile_def[0];
     slot->stream_off = *(u16 __far *)(tile_def + 2);
     slot->stream_seg = *(u16 __far *)(tile_def + 4);
     slot->active = 1;
@@ -3442,8 +3442,8 @@ s8 p1_cell_below_solid(u8 cell)
     s8 is_solid;
 
     is_solid = 0;
-    if (tilemap[(u16)cell + 0x30] != 0 &&
-        tilemap[(u16)cell + 0x30] != 0x13) {
+    if (tilemap[(u16)cell + TILE_CONTACT_LAYER_OFF] != 0 &&
+        tilemap[(u16)cell + TILE_CONTACT_LAYER_OFF] != 0x13) {
         is_solid = 1;
     }
     return is_solid;

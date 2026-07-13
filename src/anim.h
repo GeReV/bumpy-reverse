@@ -68,6 +68,8 @@
 #define ANIM_A_SLOTS     3
 #define ANIM_B_SLOTS     4
 #define ANIM_SLOT_REC_LEN 12
+/* Bare (unsuffixed, signed-int) literal — matches the original exactly. */
+#define ANIM_SLOT_TERMINATOR 0xff
 
 /* One 12-byte animation-channel record (slot).  The slot tables hold far ptrs to
    records of this layout; the steppers advance [2..5] (stream) and [6] (frame). */
@@ -99,7 +101,10 @@ extern anim_chan_rec anim_b_terminator;
    Tables of 4-byte FAR POINTERS (off-half @ N*4+0, seg-half @ N*4+2), indexed by
    action/cmd/frame byte; an entry's far ptr is rebuilt with MK_FP(seg, off) at the
    use site (same byte-blob representation as player.c's mode_script_tbl). */
-#define ANIM_FARPTR_TBL_LEN  (256 * 4)
+/* Bare (unsuffixed, signed-int) literal — matches every "* 4" far-ptr-table
+ * stride and grid/pos-coordinate-table {x,y} stride site exactly. */
+#define ANIM_FARPTR_STRIDE   4
+#define ANIM_FARPTR_TBL_LEN  (256 * ANIM_FARPTR_STRIDE)
 extern u8 anim_a_tiledef_tbl[ANIM_FARPTR_TBL_LEN]; /* DGROUP 0x2ede/0x2ee0 action*4 */
 extern u8 anim_a_frame_tbl[ANIM_FARPTR_TBL_LEN];   /* DGROUP 0x3d6a/0x3d6c cmd*4     */
 extern u8 anim_b_frame_tbl[ANIM_FARPTR_TBL_LEN];   /* DGROUP 0x40a6/0x40a8 frame*4   */

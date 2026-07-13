@@ -204,8 +204,8 @@ void spawn_and_draw_level_entities(void)
             if (cv != 0) {
                 type = spawn_a_type_tbl[cv];
                 descfar = (u16 __far *)MK_FP(
-                    *(u16 *)(anim_a_frame_tbl + (u16)type * 4 + 2),   /* 0x3d6c seg */
-                    *(u16 *)(anim_a_frame_tbl + (u16)type * 4 + 0));  /* 0x3d6a off */
+                    *(u16 *)(anim_a_frame_tbl + (u16)type * ANIM_FARPTR_STRIDE + 2),   /* 0x3d6c seg */
+                    *(u16 *)(anim_a_frame_tbl + (u16)type * ANIM_FARPTR_STRIDE + 0));  /* 0x3d6a off */
                 rec_a->cell     = cell_index;       /* puVar2[1] = cell_index          */
                 rec_a->data_off = descfar[0];       /* *(puVar2+8)  = descriptor[+0]    */
                 rec_a->data_seg = descfar[1];       /* *(puVar2+10) = descriptor[+2]    */
@@ -218,8 +218,8 @@ void spawn_and_draw_level_entities(void)
             if ((cv != 0) && (grid_col != 7)) {
                 type = spawn_b_type_tbl[cv];
                 descfar = (u16 __far *)MK_FP(
-                    *(u16 *)(anim_b_frame_tbl + (u16)type * 4 + 2),   /* 0x40a8 seg */
-                    *(u16 *)(anim_b_frame_tbl + (u16)type * 4 + 0));  /* 0x40a6 off */
+                    *(u16 *)(anim_b_frame_tbl + (u16)type * ANIM_FARPTR_STRIDE + 2),   /* 0x40a8 seg */
+                    *(u16 *)(anim_b_frame_tbl + (u16)type * ANIM_FARPTR_STRIDE + 0));  /* 0x40a6 off */
                 rec_b->cell     = cell_index;       /* puVar4[1] = cell_index          */
                 rec_b->data_off = descfar[0];       /* *(puVar4+8)  = descriptor[+0]    */
                 rec_b->data_seg = descfar[1];       /* *(puVar4+10) = descriptor[+2]    */

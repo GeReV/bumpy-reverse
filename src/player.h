@@ -178,6 +178,20 @@ extern s16 sound_device_state;  /* DGROUP 0x689c (ram0x00026c4c): -0x8000 == no 
    module naturally DEFINES it; level.c renders via its own buffers). Kept extern here. */
 extern u8 __far *tilemap;                  /* level tilemap far pointer (cross-module) */
 
+/* tilemap's second 0x30-byte band: the per-cell "contact"/layer-B byte (read by
+ * read_tile_layer_contact below).  tilemap[cell + TILE_CONTACT_LAYER_OFF - 1] is
+ * the one-column-back variant used by the horizontal exit-tile check.  Bare
+ * (unsuffixed, signed-int) literal — matches the original exactly. */
+#define TILE_CONTACT_LAYER_OFF 0x30
+
+/* Static DGROUP segment (Ghidra: DS=0x203b) the engine's move-script far
+ * pointers are hard-coded against in the non-playable (faithful default)
+ * build.  Bare (unsuffixed, signed-int) literal — matches the original. */
+#define P1_MOVE_SCRIPT_STATIC_SEG   0x203b
+#define MOVE_SCRIPT_WALK_RIGHT_OFF  0x140c
+#define MOVE_SCRIPT_WALK_LEFT_OFF   0x1460
+#define MOVE_SCRIPT_ROUND_ENTRY_OFF 0x1394
+
 /* The two raw tilemap reads (the actual "tile leaves"). */
 void read_tile_layer_contact(u8 cell);     /* 1000:6bd4 — p1_contact_code = tilemap[cell+0x30] */
 void read_tile_at_cell(u8 cell);           /* 1000:6bb5 — p1_current_tile = tilemap[cell] */

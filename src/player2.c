@@ -142,6 +142,11 @@ u8 __far *p2_erase_view; /* DGROUP 0x8e8/0x8ea — restore_bg_view descriptor   
 
 /* ── cross-module globals the P2 fns read (owned elsewhere; extern only) ──────── */
 extern u8 __far *tilemap;     /* game.c 0xa0d8/0xa0da — level tilemap far pointer */
+/* tilemap's contact/layer-B band offset (player.h's TILE_CONTACT_LAYER_OFF;
+ * duplicated locally — player2.c deliberately does not #include player.h, see
+ * the file header note on header collisions).  Bare (unsuffixed, signed-int)
+ * literal — matches the original exactly. */
+#define TILE_CONTACT_LAYER_OFF 0x30
 extern u8  rng_frame;         /* player.c 0x79b3 — the AI rng-decision input (the AI
                                  selectors branch on it; select_move_random overwrites
                                  it with rand()).  Owned by player.c (player.h);
@@ -345,13 +350,13 @@ void p2_tile_move_check(void)
             if (cell < 0x28 && tilemap[(u16)cell] == 0) {
                 p2_dir_blocked_1 = 0;
             }
-            if (p2_set_cell_col != 0 && tilemap[(u16)cell + 0x2f] == 0) {
+            if (p2_set_cell_col != 0 && tilemap[(u16)cell + TILE_CONTACT_LAYER_OFF - 1] == 0) {
                 p2_dir_blocked_2 = 0;
                 if (tilemap[(u16)cell - 1] == 0x0b) {
                     p2_dir_blocked_2 = 1;
                 }
             }
-            if (p2_set_cell_col != 7 && tilemap[(u16)cell + 0x30] == 0) {
+            if (p2_set_cell_col != 7 && tilemap[(u16)cell + TILE_CONTACT_LAYER_OFF] == 0) {
                 p2_dir_blocked_3 = 0;
                 if (tilemap[(u16)cell + 1] == 0x0b) {
                     p2_dir_blocked_3 = 1;
