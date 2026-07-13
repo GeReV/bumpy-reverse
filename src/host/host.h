@@ -8,8 +8,12 @@
 /* VGA */
 #define VGA_SEG_PAGE0   0xA000u      /* page 0 plane window */
 #define VGA_SEG_PAGE1   0xA200u      /* page 1 (== A000 + 0x200 paragraphs = +0x2000 B) */
+#define VGA_SEG_PAGE0_LIN ((u32)VGA_SEG_PAGE0 << 4) /* page 0 as a 20-bit linear address */
+#define VGA_DISPLAY_EXTENT 0x4000u   /* both pages' combined per-plane extent [0..0x4000) */
 #define VGA_PLANE_BYTES 0x1F40u      /* 320x200/8 per plane per page */
 #define VGA_ROW_BYTES   40u
+#define SCREEN_W_TILES  20u          /* 320px / 16px-per-tile */
+#define SCREEN_H_TILES  25u          /* 200px / 8px-per-tile  */
 #define SEQ_INDEX       0x3C4u
 #define SEQ_DATA        0x3C5u
 #define SEQ_MAP_MASK    0x02u
@@ -20,8 +24,20 @@
 /* Graphics Controller — used by the real-VGA plane-store primitives below. */
 #define GC_INDEX        0x3CEu
 #define GC_DATA         0x3CFu
-#define GC_BIT_MASK     0x08u       /* index 8: per-bit write enable (RMW masking) */
-#define GC_READ_MAP     0x04u       /* index 4: read-map-select (plane read-back)  */
+#define GC_SET_RESET        0x00u  /* index 0: set/reset                          */
+#define GC_ENABLE_SET_RESET 0x01u  /* index 1: enable set/reset                   */
+#define GC_DATA_ROTATE      0x03u  /* index 3: data rotate / logical function     */
+#define GC_READ_MAP         0x04u  /* index 4: read-map-select (plane read-back)  */
+#define GC_MODE             0x05u  /* index 5: write mode / read mode             */
+#define GC_BIT_MASK         0x08u  /* index 8: per-bit write enable (RMW masking) */
+#define GC_BIT_MASK_ALL     0xFFu  /* GC_BIT_MASK value: all bits writable        */
+#define SEQ_MAP_ALL_PLANES  0x0Fu  /* SEQ_DATA (map-mask) value: all 4 planes     */
+/* Attribute Controller (palette-index remap) — index+data share one port; the
+ * VGA_INPUT_STATUS1 read before writing resets its internal address flip-flop. */
+#define ATTR_PORT       0x3C0u
+/* DAC (palette RGB) index/data ports. */
+#define DAC_INDEX       0x3C8u
+#define DAC_DATA        0x3C9u
 /* VGA Input Status Register 1 — polled for vertical retrace (bit 3) in vblank sync. */
 #define VGA_INPUT_STATUS1 0x3DAu
 #define VGA_VRETRACE_BIT  0x08u
@@ -81,6 +97,7 @@ void host_text_draw_string(u16 str_off, u16 str_seg); /* host_render.c — glyph
  * static DGROUP segment (Ghidra renders DS as 0x203b) into descriptor far-ptr seg
  * fields; in the recompiled image the loaded DGROUP segment differs, so the playable
  * build resolves the *_DGROUP_RUNTIME_SEG macros to this instead of the static 0x203b. */
+#define ENGINE_STATIC_DGROUP_SEG 0x203bu
 u16 host_dgroup_seg(void);
 /* Timer */
 extern volatile unsigned host_tick;  /* ISR-incremented frame counter */

@@ -287,7 +287,7 @@ void load_palette(u16 src_off, u16 src_seg)
  * load_palette(0x578,0x203b) keeps the engine signature. */
 void apply_level_palette(void)
 {
-    load_palette(0x578u, 0x203bu);
+    load_palette(0x578u, ENGINE_STATIC_DGROUP_SEG);
 }
 
 /* ── init_display_97f1 (1000:97f1) ─────────────────────────────────────────────
@@ -309,12 +309,12 @@ void apply_level_palette(void)
 static void host_set_gfx_attribute_palette(void)
 {
     u8 i;
-    (void)inp(0x3DAu);                 /* reset the AC index/data flip-flop */
+    (void)inp(VGA_INPUT_STATUS1);      /* reset the AC index/data flip-flop */
     for (i = 0u; i < 16u; i++) {
-        outp(0x3C0u, i);               /* AC palette register index (bit5=0: programming) */
-        outp(0x3C0u, (u8)(i < 8u ? i : (0x10u + (i - 8u))));
+        outp(ATTR_PORT, i);            /* AC palette register index (bit5=0: programming) */
+        outp(ATTR_PORT, (u8)(i < 8u ? i : (0x10u + (i - 8u))));
     }
-    outp(0x3C0u, 0x20u);               /* bit5=1: re-enable video output */
+    outp(ATTR_PORT, 0x20u);            /* bit5=1: re-enable video output */
 }
 
 void init_display_97f1(void)
@@ -387,7 +387,7 @@ void clear_viewport(void)
         u8 p;
         for (p = 0u; p < 4u; p++) {
             u8 __far *base = (u8 __far *)(host_framebuffer + (u32)p * HOST_PLANE_SIZE);
-            _fmemset(base, 0, (u16)0x4000u);   /* display extent: pages 0 + 1 */
+            _fmemset(base, 0, (u16)VGA_DISPLAY_EXTENT);   /* display extent: pages 0 + 1 */
         }
     }
 
@@ -439,9 +439,9 @@ void present_frame(u8 page)
 {
     u8 v;
     (void)page;                    /* engine's constant descriptor-index arg */
-    outp(0x3d4u, 0x0cu);           /* CRTC index: start address high         */
-    v = (u8)inp(0x3d5u);
-    outp(0x3d5u, (u8)(v ^ 0x20u)); /* display page 0x0000 <-> 0x2000         */
+    outp(CRTC_INDEX, CRTC_START_HI);       /* CRTC index: start address high  */
+    v = (u8)inp(CRTC_DATA);
+    outp(CRTC_DATA, (u8)(v ^ 0x20u));      /* display page 0x0000 <-> 0x2000  */
     host_page_table_swap();        /* 1ab9:06c1 tail: table[0] <-> table[1]  */
 }
 

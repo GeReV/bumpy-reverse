@@ -151,29 +151,29 @@ void host_gfx_upload_palette_to_dac(u16 page)
     if (palette_mode == 1u) {
         const u8 *ac = host_gfx_page_ac[page & 1u];
         u8 i;
-        (void)inp(0x3DAu);                         /* reset AC flip-flop */
+        (void)inp(VGA_INPUT_STATUS1);              /* reset AC flip-flop */
         for (i = 0u; i < 16u; i++) {
-            outp(0x3C0u, i);                       /* AC palette reg index */
-            outp(0x3C0u, ac[i]);                   /* value = image AC index (0..15) */
+            outp(ATTR_PORT, i);                    /* AC palette reg index */
+            outp(ATTR_PORT, ac[i]);                /* value = image AC index (0..15) */
         }
-        outp(0x3C0u, 0x20u);                       /* re-enable video */
+        outp(ATTR_PORT, 0x20u);                     /* re-enable video */
         return;
     }
     {                                                /* VGA (existing) */
         const u8 *pal = host_gfx_page_palette[page & 1u];
         u8 i;
-        outp(0x3c8, 0x00);                 /* DAC write index 0 */
+        outp(DAC_INDEX, 0x00u);            /* DAC write index 0 */
         for (i = 0u; i < 8u; i++) {
-            outp(0x3c9, pal[0]);           /* R */
-            outp(0x3c9, pal[1]);           /* G */
-            outp(0x3c9, pal[2]);           /* B */
+            outp(DAC_DATA, pal[0]);        /* R */
+            outp(DAC_DATA, pal[1]);        /* G */
+            outp(DAC_DATA, pal[2]);        /* B */
             pal += 3;
         }
-        outp(0x3c8, 0x10);                 /* DAC write index 0x10 (graphics-overlay colours 8..15) */
+        outp(DAC_INDEX, 0x10u);            /* DAC write index 0x10 (graphics-overlay colours 8..15) */
         for (i = 0u; i < 8u; i++) {
-            outp(0x3c9, pal[0]);
-            outp(0x3c9, pal[1]);
-            outp(0x3c9, pal[2]);
+            outp(DAC_DATA, pal[0]);
+            outp(DAC_DATA, pal[1]);
+            outp(DAC_DATA, pal[2]);
             pal += 3;
         }
     }
@@ -231,8 +231,8 @@ void host_gfx_set_viewport(u8 __far *view, u16 seg)
     u8 __far *vga;
 
     (void)seg;
-    *(u16 __far *)(view + 0x18) = 0x14u;   /* clip extent width  = 20 (constant) */
-    *(u16 __far *)(view + 0x1a) = 0x19u;   /* clip extent height = 25 (constant) */
+    *(u16 __far *)(view + 0x18) = SCREEN_W_TILES;   /* clip extent width  = 20 (constant) */
+    *(u16 __far *)(view + 0x1a) = SCREEN_H_TILES;   /* clip extent height = 25 (constant) */
     gfx_write_mode_flag_a = 2u;             /* DGROUP 0x541f */
     gfx_write_mode_flag_b = 1u;             /* DGROUP 0x5420 */
 
@@ -251,13 +251,13 @@ void host_gfx_set_viewport(u8 __far *view, u16 seg)
     h_t  = *(u16 __far *)(view + 0x20);     /* height (tiles) */
     wb   = (u16)(w_t * 2u);                 /* width in VGA bytes  (2 bytes / 16px tile) */
     hr   = (u16)(h_t * 8u);                 /* height in rows      (8 rows / tile)       */
-    base = (u16)(host_draw_page_off() + (u16)((u16)(dy_t * 8u) * 40u) + (u16)(dx_t * 2u));
+    base = (u16)(host_draw_page_off() + (u16)((u16)(dy_t * 8u) * VGA_ROW_BYTES) + (u16)(dx_t * 2u));
 
     vga = (u8 __far *)MK_FP(VGA_SEG_PAGE0, 0u);
-    outp(GC_INDEX, GC_BIT_MASK); outp(GC_DATA, 0xFFu);   /* all bits writable */
-    outp(SEQ_INDEX, SEQ_MAP_MASK); outp(SEQ_DATA, 0x0Fu);/* all 4 planes: one write = black */
+    outp(GC_INDEX, GC_BIT_MASK); outp(GC_DATA, GC_BIT_MASK_ALL);       /* all bits writable */
+    outp(SEQ_INDEX, SEQ_MAP_MASK); outp(SEQ_DATA, SEQ_MAP_ALL_PLANES); /* all 4 planes: one write = black */
     for (r = 0u; r < hr; r++) {
-        u16 off = (u16)(base + (u16)(r * 40u));
+        u16 off = (u16)(base + (u16)(r * VGA_ROW_BYTES));
         for (c = 0u; c < wb; c++) {
             vga[off + c] = 0u;
         }

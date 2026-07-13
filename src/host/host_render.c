@@ -8,6 +8,7 @@
 #include "host.h"
 #include "../sprite_chain.h"   /* sprite_view */
 #include "../entity.h"         /* entity_draw_p1 / entity_draw_p2 */
+#include "../level.h"          /* DG_P2_OBJ */
 #include "../gfx_overlay.h"    /* restore_bg_view / render_player_view + gfx_view_desc */
 
 /* ============================================================================
@@ -81,7 +82,7 @@ static u8 hr_cur_page_idx = 1u;   /* set_sprite_table_ptr index (engine boots on
 u16 host_draw_page_off(void)
 {
     return (u16)((((u32)host_sprite_table_seg[hr_cur_page_idx] << 4)
-                  + host_sprite_table_off[hr_cur_page_idx]) - 0xA0000UL);
+                  + host_sprite_table_off[hr_cur_page_idx]) - VGA_SEG_PAGE0_LIN);
 }
 
 /* Page offset of an arbitrary table index (for descriptor word00/word0e). */
@@ -89,7 +90,7 @@ u16 host_page_off_of(u8 index)
 {
     u8 i = (u8)(index & 1u);
     return (u16)((((u32)host_sprite_table_seg[i] << 4)
-                  + host_sprite_table_off[i]) - 0xA0000UL);
+                  + host_sprite_table_off[i]) - VGA_SEG_PAGE0_LIN);
 }
 
 /* present_frame's table swap (engine 1ab9:06c1: xchg table[0] <-> table[1] after
@@ -266,7 +267,7 @@ void host_vga_put4(u16 off, u8 v0, u8 v1, u8 v2, u8 v3)
 {
     u8 __far *vp = (u8 __far *)MK_FP(VGA_SEG_PAGE0, off);
     outp(GC_INDEX, GC_BIT_MASK);
-    outp(GC_DATA,  0xFFu);                     /* all bits writable (opaque)      */
+    outp(GC_DATA,  GC_BIT_MASK_ALL);           /* all bits writable (opaque)      */
     outp(SEQ_INDEX, SEQ_MAP_MASK);
     outp(SEQ_DATA, 0x01u); *vp = v0;
     outp(SEQ_DATA, 0x02u); *vp = v1;
@@ -291,18 +292,18 @@ void host_vga_clear4(u16 off)
 {
     u8 __far *vp = (u8 __far *)MK_FP(VGA_SEG_PAGE0, off);
     outp(GC_INDEX, GC_BIT_MASK);
-    outp(GC_DATA,  0xFFu);
+    outp(GC_DATA,  GC_BIT_MASK_ALL);
     outp(SEQ_INDEX, SEQ_MAP_MASK);
-    outp(SEQ_DATA, 0x0Fu);                     /* all planes enabled              */
+    outp(SEQ_DATA, SEQ_MAP_ALL_PLANES);        /* all planes enabled              */
     *vp = 0u;                                  /* one write zeroes all 4 planes   */
 }
 
 void host_vga_blit_end(void)
 {
     outp(GC_INDEX, GC_BIT_MASK);
-    outp(GC_DATA,  0xFFu);                     /* restore default: all bits       */
+    outp(GC_DATA,  GC_BIT_MASK_ALL);           /* restore default: all bits       */
     outp(SEQ_INDEX, SEQ_MAP_MASK);
-    outp(SEQ_DATA, 0x0Fu);                     /* restore default: all planes     */
+    outp(SEQ_DATA, SEQ_MAP_ALL_PLANES);        /* restore default: all planes     */
 }
 
 /* Clear the displayed VGA page extent (a000 [0..0x4000): page0 + page1 regions) to
@@ -321,19 +322,19 @@ void host_vga_blit_end(void)
  * back to default by then). */
 void host_vga_reset_gc(void)
 {
-    outp(GC_INDEX, 0x00u); outp(GC_DATA, 0x00u);   /* idx0 set/reset        = 0       */
-    outp(GC_INDEX, 0x01u); outp(GC_DATA, 0x00u);   /* idx1 enable set/reset = 0       */
-    outp(GC_INDEX, 0x03u); outp(GC_DATA, 0x00u);   /* idx3 data-rotate/func = MOV     */
-    outp(GC_INDEX, 0x05u); outp(GC_DATA, 0x00u);   /* idx5 mode = write-mode 0/read 0 */
-    outp(GC_INDEX, GC_BIT_MASK); outp(GC_DATA, 0xFFu);
+    outp(GC_INDEX, GC_SET_RESET);        outp(GC_DATA, 0x00u); /* set/reset        = 0 */
+    outp(GC_INDEX, GC_ENABLE_SET_RESET); outp(GC_DATA, 0x00u); /* enable set/reset = 0 */
+    outp(GC_INDEX, GC_DATA_ROTATE);      outp(GC_DATA, 0x00u); /* data-rotate/func = MOV */
+    outp(GC_INDEX, GC_MODE);             outp(GC_DATA, 0x00u); /* write-mode 0/read 0 */
+    outp(GC_INDEX, GC_BIT_MASK); outp(GC_DATA, GC_BIT_MASK_ALL);
 }
 
 void host_vga_clear_display(void)
 {
     u8 __far *vga = (u8 __far *)MK_FP(VGA_SEG_PAGE0, 0u);
     host_vga_reset_gc();                            /* ensure write-mode 0 (post-iris) */
-    outp(SEQ_INDEX, SEQ_MAP_MASK); outp(SEQ_DATA, 0x0Fu);
-    _fmemset(vga, 0, 0x4000u);
+    outp(SEQ_INDEX, SEQ_MAP_MASK); outp(SEQ_DATA, SEQ_MAP_ALL_PLANES);
+    _fmemset(vga, 0, VGA_DISPLAY_EXTENT);
 }
 
 /* ── Blit-sprite leaves — blit_sprite (1000:942a) ─────────────────────────────
@@ -343,8 +344,9 @@ void host_vga_clear_display(void)
  *   read those obj fields back from the registered dg shadow and re-run the
  *   validated entity_draw_{p1,p2} pipeline into host_framebuffer's current page —
  *   the exact call shape composite_ctest uses (planes=framebuffer base, view→page).
- *   obj_off 0x792e = p1_sprite (used by P1, layers A/B/C, screens);
- *   obj_off 0x795a = p2_sprite.  Any other off falls back to the p1 path. */
+ *   obj_off DG_P1_OBJ (0x792e) = p1_sprite (used by P1, layers A/B/C, screens);
+ *   obj_off DG_P2_OBJ (0x795a) = p2_sprite.  Any other off falls back to the p1 path. */
+#define FTBL_OFF_MENU_CURSOR 0x6c2cu   /* DAT_6c2c — FLECHE cursor frame-table offset */
 static void hr_blit_obj(u16 obj_off)
 {
     sprite_view view;
@@ -379,13 +381,13 @@ static void hr_blit_obj(u16 obj_off)
     ftbl_seg = (u16)((u16)hr_dg[obj_off + 8u] | ((u16)hr_dg[obj_off + 9u] << 8));
     ftbl_lin = ((u32)ftbl_seg << 4) + (u32)ftbl_off;
 
-    if (obj_off == 0x795au) {
+    if (obj_off == DG_P2_OBJ) {
         /* p2_sprite obj path. p2_cell == -1 guard is the caller's; here the obj is
            already valid, so draw unconditionally via the p2 pipeline (frame_base=0,
            cell=0 → entity_draw_p2 blits the obj as-built). */
         entity_draw_p2(host_framebuffer, hr_dg, x, y, frame, 0u, (s8)0,
                        hr_bank, hr_bank_base_lin, &view);
-    } else if (ftbl_off == 0x6c2cu) {
+    } else if (ftbl_off == FTBL_OFF_MENU_CURSOR) {
         return;   /* menu cursor (FLECHE) — drawn from the cursor bank by host_blit_cursor */
     } else if (hr_bank != (u8 __huge *)0 && ftbl_lin < hr_bank_base_lin) {
         /* front-end screen glyph: force the host main bank + skip the P1 hidden/move-anim
@@ -1151,7 +1153,7 @@ void host_text_draw_string(u16 str_off, u16 str_seg)
     /* The engine's static call sites stamp the Ghidra-static DGROUP segment 0x203b
        into string far ptrs; remap to the loaded image's real DGROUP (the same
        *_DGROUP_RUNTIME_SEG convention the descriptor seg fields use). */
-    if (str_seg == 0x203bu) {
+    if (str_seg == ENGINE_STATIC_DGROUP_SEG) {
         str_seg = host_dgroup_seg();
     }
     s = (const u8 __far *)MK_FP(str_seg, str_off);
