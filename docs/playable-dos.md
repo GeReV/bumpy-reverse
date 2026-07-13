@@ -92,6 +92,39 @@ exit
 > does not strip them, so `machine = vgaonly  # foo` is parsed verbatim and corrupts the
 > machine type (which stalls the playable boot at a BIOS wait). Keep values clean.
 
+### Audio devices
+
+The engine lets you pick the sound device at boot — **None** (F5), **PC-speaker** (F6),
+**AdLib/OPL2** (F7), or **MT-32** (F8). Two of those target a *specific* Roland/Yamaha
+part, so faithful playback needs the emulator pointed at the right one (see
+[06-engine.md §7](06-engine.md#7-target-playback-hardware) for why). Add these sections to
+the config above:
+
+```ini
+[sblaster]
+oplmode = opl2
+oplemu  = nuked
+[midi]
+mpu401      = intelligent
+mididevice  = mt32
+mt32.model  = cm32l
+mt32.romdir = /path/to/dir/holding/CM32L_CONTROL.ROM+CM32L_PCM.ROM
+```
+
+- **AdLib (F7):** the game drives a single OPL2. DOSBox-X's default OPL core (`DBOPL`) is
+  a fast approximation that can add a volume transient at each note's onset; the
+  cycle-accurate `oplemu = nuked` core (with `oplmode = opl2`, the game's real hardware)
+  removes it. The reconstruction's OPL register writes are byte-faithful either way — the
+  difference is purely the emulated chip.
+- **MT-32 (F8):** the game is a **CM-32L** title — it uses rhythm-part sound-effect keys
+  (e.g. the overworld→level "enter" sound is note 83) that a first-generation MT-32 ROM
+  leaves silent. Use CM-32L ROMs (`CM32L_CONTROL.ROM` / `CM32L_PCM.ROM`) and
+  `mt32.model = cm32l`; the CM-32L is backward-compatible with the melodic music. The
+  ROMs are copyright and **user-supplied**. DOSBox-X's built-in `munt` needs no external
+  synth.
+
+Everything else about the audio is device-agnostic and already correct in the build.
+
 **What you should see:** like the original, the playable build boots into the
 interactive graphics-select screen (`gfx_driver_init`, `src/main.c`) — press **F2** for
 EGA (`palette_mode = 1`) or **F3** for VGA (`palette_mode = 2`, the default and most-

@@ -606,3 +606,43 @@ sound-subsystem audit.
 - **`tools/validate_integration.sh`** — confirms `BUMPY.EXE` links with `sound.obj` +
   `midi.obj` and no duplicate symbols, and that `game_stubs.c`'s remaining carve-outs
   are all on the explicit allowlist (no audio function is silently still a stub).
+
+### 7. Target playback hardware
+
+The device the engine drives is picked once at the boot sound-device menu — **None**
+(F5), **PC-speaker** (F6), **AdLib/OPL2** (F7), or **MT-32/MPU-401** (F8) — which sets
+`sound_device_state` (DGROUP `0x689c`; `-0x8000`/`0`/`1`/`4`) and the shared `snddrv_mode`
+(§1). Two of the three sounding devices target a **specific** period card, and getting
+faithful playback out of the (byte-accurate) reconstruction depends on emulating *that*
+card, not a superficially-similar one. This is documentation of the original's hardware
+assumptions; no reconstruction deviation is involved (the register/note streams are
+validated 1:1 — §6).
+
+**MT-32 path (device `4`) targets the Roland CM-32L / LAPC-I, not a bare MT-32.** Both
+the MIDI music engine (§3) and the effect-tone engine's device-4 SFX branch
+(`play_sound_effect` `6e30` → `snd_emit_raw_sample` `8a07`, which emits `0x99 note vel` =
+a note-on on MIDI channel 10, the rhythm part) address the rhythm part with note numbers
+that only the CM-32L-class extended rhythm/**sound-effect** bank defines. The device-4
+SFX notes come from `snd_opl_sample_table` (DGROUP `0x27ae`) and reach up into keys
+`79/83/84/88/91/98/99`; e.g. the overworld→level "enter" sound `intro_start_level`
+(`3cf7`) plays effect `0x28` → note `0x53` (83). On a first-generation MT-32 (control ROM
+v1.0x) those keys are **unassigned → silent**; on the CM-32L they are the intended
+effects (verified with `munt`: key 83 is "unmapped key" → silence on MT-32 control ROM
+`9513fec4`, audible on the CM-32L ROM). Lower keys the game also uses (e.g. the platform-
+bounce snare, note 38) are mapped on both, so a bare MT-32 plays *some* effects and drops
+the CM-32L-only ones — the diagnostic signature of a CM-32L title.
+
+**AdLib path (device `1`) is a single OPL2 (YM3812)** at ports `0x388` (index/status) /
+`0x389` (data) — the L4 register file §2/§3 program. Note volume is the OPL2's own
+envelope generator: `emit_midi_voice_message` (`8bc8`) loads the `BUMPY.BNK` patch's
+attack/decay/sustain/level bytes, and `opl_play_note` (`905d`) sets the per-note Total-
+Level from velocity (`level = 0x20 - ((DH - vel) >> 4)`, with `DH = 0` on the note-on
+path — this is provable from the caller chain and is faithful, though it is a documented
+port-write-gate *exclusion* since the F-number tables are runtime-populated). Because the
+register writes are byte-faithful, the audible envelope is whatever the *emulated OPL2*
+produces: an approximate FM core (e.g. DOSBox's `DBOPL`) can add an onset transient that
+a cycle-accurate core (`nuked`) does not. Emulate OPL2 with an accurate core for faithful
+attacks.
+
+The emulator settings that satisfy both requirements (built-in `munt` with CM-32L ROMs;
+the `nuked` OPL2 core) are in [playable-dos.md](playable-dos.md#running--playing-it-under-dosbox).
