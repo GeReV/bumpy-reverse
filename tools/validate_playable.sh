@@ -151,8 +151,16 @@ if [ -f "$DEF_EXE" ]; then
     # moves even though no logic changed.  snd_opl_sample_table's struct-array conversion and
     # snd_tone_param_frame's macro-overlay (sound.c) did NOT move the hash (same variable count/
     # position, verified by direct rebuild comparison).
-    [ "$DEF_MD5" = "4b78a7fa5a6312cdee2e53a4d80b923e" ] \
-        || echo "   WARNING: default BUMPY.EXE md5 changed (expected 4b78a7fa...)"
+    # Re-bumped 2026-07-14 (Tier 2, item #8 narrow slice + item #9): player_view_geom_t
+    # (player.c/player2.c) names the geometry fields shared by render_p1/p2_view +
+    # erase_p1/p2_view over the same view-descriptor memory gfx_view_desc already
+    # documents the dispatch-guard fields for (did NOT move the hash — retypes a local
+    # pointer only). cell_pos_t (entity.h) replaces the posA/posB/posC dg_rd16 offset
+    # reads in entity.c + the raw byte-copy loop in level.c with typed {x,y} array
+    # access (DID move the hash — code-segment changes, not just data layout; verified
+    # via validate_int8.sh 150-tick replay + validate_p1_spine.sh 30/30 descriptor gates).
+    [ "$DEF_MD5" = "5fe1db15183aa72c2ee429b13614c6e3" ] \
+        || echo "   WARNING: default BUMPY.EXE md5 changed (expected 5fe1db15...)"
 fi
 
 # ── 4. Capture helper ─────────────────────────────────────────────────────────

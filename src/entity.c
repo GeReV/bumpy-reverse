@@ -47,16 +47,13 @@ void host_animb_capture(u16 voff, u16 cols, u16 rows, u16 stride);
    We seed the object's frametable far ptr from the captured dg snapshot.
 */
 
-/* DG offsets for posC table and sprite obj structs */
-#define DG_POSC_BASE  0x0274u   /* first XY pair; cell n at 0x274 + n*4 */
+/* DG offsets for posA/posB/posC tables (48-entry cell_pos_t, entity.h) and
+   sprite obj structs. */
+#define DG_POSC_BASE  0x0274u   /* posC: dg[0x274 + cell*4] */
 #define DG_P1_OBJ     0x792eu   /* p1_sprite obj struct start in DGROUP */
 #define DG_P2_OBJ     0x795au   /* p2_sprite obj struct start in DGROUP */
-
-/* DG offsets for posA/posB tables (draw_anim_channels_a/b: 0xf4/0xf6 and 0x3f4/0x3f6) */
-#define DG_POSA_X_BASE 0x00f4u  /* posA X: dg[0xf4 + cell*4]  (interleaved; Y at 0xf6+cell*4) */
-#define DG_POSA_Y_BASE 0x00f6u  /* posA Y */
-#define DG_POSB_X_BASE 0x03f4u  /* posB X: dg[0x3f4 + cell*4] */
-#define DG_POSB_Y_BASE 0x03f6u  /* posB Y */
+#define DG_POSA_BASE  0x00f4u   /* posA: dg[0xf4 + cell*4]  (draw_anim_channels_a) */
+#define DG_POSB_BASE  0x03f4u   /* posB: dg[0x3f4 + cell*4] (draw_anim_channels_b) */
 
 /* p1_sprite/p2_sprite obj field layout: see sprite_obj_t (entity.h). */
 #define OBJ_VISIBLE   0x80u     /* flags bit: visible */
@@ -305,11 +302,6 @@ static int anim_desc_valid_b(u8 cv)
     return (anim_b_desc[cv].frame != 0u);
 }
 
-static u16 dg_rd16(const u8 __far *dg, u16 off)
-{
-    return (u16)((u16)dg[off] | ((u16)dg[off + 1u] << 8));
-}
-
 /* Seed obj's frametable far ptr (ftbl_off/ftbl_seg) from the engine's sprite
    obj struct captured in the dg snapshot at DGROUP offset dg_obj_base (0x792e
    for p1_sprite, 0x795a for p2_sprite). */
@@ -416,8 +408,11 @@ void entity_draw_layer_c(u8 __huge *planes, const u8 __far *bum,
             }
 
             /* Build sprite object: write X, Y, frame, flags. */
-            obj.s.x     = (s16)dg_rd16(dg, (u16)(DG_POSC_BASE + cell * 4u));
-            obj.s.y     = (s16)dg_rd16(dg, (u16)(DG_POSC_BASE + cell * 4u + 2u));
+            {
+                const cell_pos_t __far *posC = (const cell_pos_t __far *)(dg + DG_POSC_BASE);
+                obj.s.x = (s16)posC[cell].x;
+                obj.s.y = (s16)posC[cell].y;
+            }
             obj.s.frame = (u16)(cv + 0x179u);
             obj.s.flags = OBJ_VISIBLE;
 
@@ -597,9 +592,12 @@ void entity_draw_layer_a(u8 __huge *planes, const u8 __far *bum,
                for layer A as for layer C and P1). */
             seed_ftbl(&obj, dg, DG_P1_OBJ);
 
-            /* posA position from dg (draw_anim_channels_a: 0xf4/0xf6 tables). */
-            pos_x = dg_rd16(dg, (u16)(DG_POSA_X_BASE + cell * 4u));
-            pos_y = dg_rd16(dg, (u16)(DG_POSA_Y_BASE + cell * 4u));
+            /* posA position from dg (draw_anim_channels_a: 0xf4 table). */
+            {
+                const cell_pos_t __far *posA = (const cell_pos_t __far *)(dg + DG_POSA_BASE);
+                pos_x = posA[cell].x;
+                pos_y = posA[cell].y;
+            }
 
             obj.s.x     = (s16)pos_x;
             obj.s.y     = (s16)((s16)pos_y + yoff);
@@ -712,9 +710,12 @@ void entity_draw_layer_b(u8 __huge *planes, const u8 __far *bum,
             /* Seed frametable far ptr from p1_sprite obj (same obj for all layers). */
             seed_ftbl(&obj, dg, DG_P1_OBJ);
 
-            /* posB position from dg (draw_anim_channels_b: 0x3f4/0x3f6 tables). */
-            pos_x = dg_rd16(dg, (u16)(DG_POSB_X_BASE + cell * 4u));
-            pos_y = dg_rd16(dg, (u16)(DG_POSB_Y_BASE + cell * 4u));
+            /* posB position from dg (draw_anim_channels_b: 0x3f4 table). */
+            {
+                const cell_pos_t __far *posB = (const cell_pos_t __far *)(dg + DG_POSB_BASE);
+                pos_x = posB[cell].x;
+                pos_y = posB[cell].y;
+            }
 
             /* Layer-B frame bias: draw_anim_channels_b assigns frame + 0xf1. */
             obj.s.x     = (s16)pos_x;

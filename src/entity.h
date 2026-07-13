@@ -30,6 +30,17 @@ typedef struct {
 } sprite_obj_t;         /* 0x2c bytes of real content; entity.c allocates OBJ_SIZE (0x40)
                             scratch headroom beyond that (see entity.c) */
 
+/* cell_pos_t — one {x,y} entry in the posA/posB/posC per-cell coordinate
+   tables (anim_data.c's g_anim_posA/g_anim_posB/g_posC, 48 cells x 4 bytes
+   each, copied verbatim by level.c into the dg shadow buffer at
+   DG_POSA_BASE/DG_POSB_BASE/DG_POSC_BASE).  The three tables are separate,
+   non-contiguous 48-entry arrays of this SAME element shape — not one
+   combined layout, so this struct is intentionally not merged across them. */
+typedef struct {
+    u16 x;
+    u16 y;
+} cell_pos_t;
+
 /* Faithful C ports of the entity draw functions from spawn_and_draw_level_entities
    (1000:2a78), draw_p1_sprite (1000:1cb2) / draw_p2_sprite (1000:1cea), and the
    anim-channel draw helpers draw_anim_channels_a (1000:165e) /

@@ -423,13 +423,19 @@ static void level_populate_dg(void)
         }
     }
 
-    /* posA, posC, posB: copy the verbatim engine tables (48 cells × 4 B each). */
+    /* posA, posC, posB: copy the verbatim engine tables (48 cell_pos_t entries each). */
     {
-        u16 i;
-        for (i = 0u; i < 192u; i++) {
-            g_entity_dg[DG_POSA_X_BASE + i] = anim_posA_tbl[i];
-            g_entity_dg[DG_POSC_X_BASE + i] = p2_cell_coord_tbl[i];
-            g_entity_dg[DG_POSB_X_BASE + i] = anim_posB_tbl[i];
+        const cell_pos_t __far *srcA = (const cell_pos_t __far *)anim_posA_tbl;
+        const cell_pos_t __far *srcB = (const cell_pos_t __far *)anim_posB_tbl;
+        const cell_pos_t __far *srcC = (const cell_pos_t __far *)p2_cell_coord_tbl;
+        cell_pos_t __far *dstA = (cell_pos_t __far *)(g_entity_dg + DG_POSA_BASE);
+        cell_pos_t __far *dstB = (cell_pos_t __far *)(g_entity_dg + DG_POSB_BASE);
+        cell_pos_t __far *dstC = (cell_pos_t __far *)(g_entity_dg + DG_POSC_BASE);
+        u16 cell;
+        for (cell = 0u; cell < 48u; cell++) {
+            dstA[cell] = srcA[cell];
+            dstB[cell] = srcB[cell];
+            dstC[cell] = srcC[cell];
         }
     }
 

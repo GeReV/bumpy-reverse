@@ -70,12 +70,10 @@
 #define LEVEL_DG_SIZE       0xa200u
 
 /* ── DGROUP field offsets (mirrors entity.c / entity.h definitions) ──────── */
-#define DG_POSA_X_BASE  0x00f4u   /* posA X: dg[0xf4 + cell*4]            */
-#define DG_POSA_Y_BASE  0x00f6u   /* posA Y: dg[0xf6 + cell*4]            */
-#define DG_POSC_X_BASE  0x0274u   /* posC X: dg[0x274 + cell*4]           */
-#define DG_POSC_Y_BASE  0x0276u   /* posC Y: dg[0x276 + cell*4]           */
-#define DG_POSB_X_BASE  0x03f4u   /* posB X: dg[0x3f4 + cell*4]           */
-#define DG_POSB_Y_BASE  0x03f6u   /* posB Y: dg[0x3f6 + cell*4]           */
+/* posA/posB/posC: 48-entry cell_pos_t (entity.h) tables; dg[BASE + cell*4] */
+#define DG_POSA_BASE    0x00f4u   /* posA: dg[0xf4 + cell*4]              */
+#define DG_POSC_BASE    0x0274u   /* posC: dg[0x274 + cell*4]             */
+#define DG_POSB_BASE    0x03f4u   /* posB: dg[0x3f4 + cell*4]             */
 #define DG_P1_OBJ       0x792eu   /* p1_sprite obj — sprite_obj_t (entity.h) */
 #define DG_P2_OBJ       0x795au   /* p2_sprite obj — sprite_obj_t (entity.h) */
 #define DG_P2_CELL      0x8571u   /* p2_cell (s8): -1 = P2 absent          */
