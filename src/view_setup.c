@@ -173,7 +173,7 @@ static void (__far *hv_p2_state_handlers[16])(void);
  * table (slots 10..15 here are only harness headroom, never indexed: move states
  * are 1..9).  Recorded in docs/reconstruction-fidelity.md. */
 static void __far hv_p2_state_noop(void) {}
-#define HV_SAVEUNDER_SIZE (4u * 0x1F40u)   /* 4 planes × 8000 B = 32000 B */
+#define HV_SAVEUNDER_SIZE (4u * VGA_PLANE_BYTES)   /* 4 planes × 8000 B = 32000 B */
 
 /* ── init_sprite_structs — 1000:33c5 ───────────────────────────────────────────
  *
@@ -268,7 +268,7 @@ void init_sprite_structs(void)
      * Mirrors: hud_icon_sprite_ptr = (dword)&sprite_obj_203b_7986; */
     {
         extern u8 __far *hud_icon_sprite_ptr;   /* anim.c */
-        hud_icon_sprite_ptr = dg + 0x7986u;
+        hud_icon_sprite_ptr = dg + DG_HUD_ICON_OBJ;
     }
 }
 
@@ -304,8 +304,8 @@ void init_fullscreen_view_desc(u8 mode, u8 flag)
     d->dest_x = 0;
     d->dest_y = 0;
     d->subhandler = 0;
-    d->clip_w = 0x14;
-    d->clip_h = 0x19;
+    d->clip_w = SCREEN_W_TILES;
+    d->clip_h = SCREEN_H_TILES;
 
     /* Engine: gfx_set_mode_11_thunk(off, seg) — the FULL-SCREEN PAGE SYNC: copy
      * page[word00=mode] → page[word0e=flag] (e.g. (1,0) copies the just-composed
@@ -350,12 +350,12 @@ void init_fullscreen_view_desc(u8 mode, u8 flag)
             const u8 __far *sp = (const u8 __far *)MK_FP(VGA_SEG_PAGE0, src);
             u8 __far       *dp = (u8 __far *)MK_FP(VGA_SEG_PAGE0, dst);
             u16 off;
-            outp(0x3C4u, 2u);  outp(0x3C5u, 0x0Fu);   /* Map Mask: all planes   */
-            outp(0x3CEu, 5u);  outp(0x3CFu, 0x01u);   /* GC Mode: write mode 1  */
-            for (off = 0u; off < (u16)0x1F40u; off++) {
+            outp(SEQ_INDEX, SEQ_MAP_MASK); outp(SEQ_DATA, SEQ_MAP_ALL_PLANES); /* all planes */
+            outp(GC_INDEX, GC_MODE);       outp(GC_DATA, 0x01u);   /* write mode 1  */
+            for (off = 0u; off < (u16)VGA_PLANE_BYTES; off++) {
                 dp[off] = sp[off];                     /* latch copy, 4 planes   */
             }
-            outp(0x3CEu, 5u);  outp(0x3CFu, 0x00u);   /* back to write mode 0   */
+            outp(GC_INDEX, GC_MODE);       outp(GC_DATA, 0x00u);   /* back to write mode 0 */
             host_vga_blit_end();                       /* Bit-Mask FF / Map 0F   */
         }
     }
@@ -403,11 +403,11 @@ void setup_fullscreen_view(void)
     d->blit_seg = fullscreen_buf_seg;
     d->dest_x = 0;
     d->dest_y = 0;
-    d->sub_w = 0x14;
-    d->sub_h = 0x19;
+    d->sub_w = SCREEN_W_TILES;
+    d->sub_h = SCREEN_H_TILES;
     d->subhandler = 0;               /* sub-handler 0 = full 4-plane copy */
-    d->clip_w = 0x14;
-    d->clip_h = 0x19;
+    d->clip_w = SCREEN_W_TILES;
+    d->clip_h = SCREEN_H_TILES;
 
     /* Step 3: clean-background capture (RECONSTRUCTION FIDELITY note §1).
      * Engine calls render_player_view(off, seg) which copies VGA a000 → fullscreen_buf.
@@ -423,12 +423,12 @@ void setup_fullscreen_view(void)
     if (hv_saveunder_buf != (u8 __far *)0) {
         u16 off;
         u16 pg = host_draw_page_off();   /* the page the bg was just painted to */
-        for (off = 0u; off < (u16)0x1F40u; off++) {
+        for (off = 0u; off < (u16)VGA_PLANE_BYTES; off++) {
             host_vga_read4((u16)(pg + off),
                            &hv_saveunder_buf[off],
-                           &hv_saveunder_buf[(u16)0x1F40u + off],
-                           &hv_saveunder_buf[2u * (u16)0x1F40u + off],
-                           &hv_saveunder_buf[3u * (u16)0x1F40u + off]);
+                           &hv_saveunder_buf[(u16)VGA_PLANE_BYTES + off],
+                           &hv_saveunder_buf[2u * (u16)VGA_PLANE_BYTES + off],
+                           &hv_saveunder_buf[3u * (u16)VGA_PLANE_BYTES + off]);
         }
     }
 
@@ -545,9 +545,9 @@ void show_text_screen(void)
             so->frame = (u16)(ch + 0x175u);
             so->x     = (s16)((u16)col_pos << 4);
             if (ch != 0x20) {
-                /* blit_sprite(0x792e, DS) — engine stamps the static DGROUP 0x203b;
+                /* blit_sprite(DG_P1_OBJ, DS) — engine stamps the static DGROUP 0x203b;
                  * pass the loaded image's real DGROUP (host_dgroup_seg convention). */
-                anim_blit_sprite_leaf(0x792e, host_dgroup_seg());
+                anim_blit_sprite_leaf(DG_P1_OBJ, host_dgroup_seg());
             }
             col_pos = col_pos + 1;
         }
@@ -581,7 +581,12 @@ void show_text_screen(void)
 
 /* Engine DGROUP 0x9694: the 0x500-byte pause strip save buffer — 0x14 tiles × 1 tile
  * row = 40 bytes × 8 rows × 4 planes, PLANE-MAJOR (320 bytes per plane). */
-static u8 hv_pause_strip[4u * 8u * 40u];
+#define PAUSE_STRIP_DGROUP_OFF 0x9694u
+#define PAUSE_STRIP_PLANE_SIZE (8u * VGA_ROW_BYTES)   /* 8 rows x 40 B/row = 320 B/plane */
+#define SCANCODE_PAUSE   0x19u
+#define SCANCODE_CHEAT_1 0x1du
+#define SCANCODE_CHEAT_2 0x21u
+static u8 hv_pause_strip[4u * PAUSE_STRIP_PLANE_SIZE];
 
 void show_pause_screen(void)
 {
@@ -603,14 +608,14 @@ void show_pause_screen(void)
     d->mode = 0;
     d->src_x = 0;
     d->src_y = 0;
-    d->blit_off = 0x9694u;
-    d->blit_seg = 0x203bu;
+    d->blit_off = PAUSE_STRIP_DGROUP_OFF;
+    d->blit_seg = ENGINE_STATIC_DGROUP_SEG;
     d->dest_x = 0;
     d->dest_y = 0;
-    d->sub_w = 0x14u;
+    d->sub_w = SCREEN_W_TILES;
     d->sub_h = 1;
     d->subhandler = 0;
-    d->clip_w = 0x14u;
+    d->clip_w = SCREEN_W_TILES;
     d->clip_h = 1;
 
     /* SAVE (engine: render_player_view with the descriptor above, word00=0 →
@@ -621,13 +626,13 @@ void show_pause_screen(void)
      * UI below draws onto inside the fun_9410(0)…(1) bracket. */
     pg = host_page_off_of(0);
     for (r = 0; r < 8u; r++) {
-        for (c = 0; c < 40u; c++) {
-            u16 i = (u16)((u16)r * 40u + c);
+        for (c = 0; c < VGA_ROW_BYTES; c++) {
+            u16 i = (u16)((u16)r * VGA_ROW_BYTES + c);
             host_vga_read4((u16)(pg + i),
                            &hv_pause_strip[i],
-                           &hv_pause_strip[320u + i],
-                           &hv_pause_strip[2u * 320u + i],
-                           &hv_pause_strip[3u * 320u + i]);
+                           &hv_pause_strip[PAUSE_STRIP_PLANE_SIZE + i],
+                           &hv_pause_strip[2u * PAUSE_STRIP_PLANE_SIZE + i],
+                           &hv_pause_strip[3u * PAUSE_STRIP_PLANE_SIZE + i]);
         }
     }
 
@@ -645,15 +650,15 @@ void show_pause_screen(void)
 
     /* Wait for pause key (0x19) to be RELEASED before entering poll loop. */
     do {
-        key_state = get_key_state(0x19);
+        key_state = get_key_state(SCANCODE_PAUSE);
     } while (key_state != '\0');
 
     /* Poll until resume key pressed (0x19) OR action input (fun_75a2_poll_action). */
-    while ((key_state = get_key_state(0x19), key_state == '\0') &&
+    while ((key_state = get_key_state(SCANCODE_PAUSE), key_state == '\0') &&
            (quit_pressed = fun_75a2_poll_action(0), quit_pressed == '\0')) {
-        key_state = get_key_state(0x1d);
+        key_state = get_key_state(SCANCODE_CHEAT_1);
         if (key_state != '\0') {
-            key_state = get_key_state(0x21);
+            key_state = get_key_state(SCANCODE_CHEAT_2);
             if (key_state != '\0') {
                 /* Cheat: fill move_descriptor_table entries (far ptr from level.c).
                  * move_descriptor_table not directly accessible here; deferred. */
@@ -664,18 +669,18 @@ void show_pause_screen(void)
     /* Wait for all keys + action to be released. */
     do {
         do {
-            key_state = get_key_state(0x19);
+            key_state = get_key_state(SCANCODE_PAUSE);
         } while (key_state != '\0');
         quit_pressed = fun_75a2_poll_action(0);
     } while (quit_pressed != '\0');
 
     /* Build the restore-view descriptor (1:1 from decomp): source=0x9694:0x203b,
      * word0e=0 (restore to page a200), 0x14 × 1 rect. */
-    d->image_off = 0x9694u;
-    d->image_seg = 0x203bu;
+    d->image_off = PAUSE_STRIP_DGROUP_OFF;
+    d->image_seg = ENGINE_STATIC_DGROUP_SEG;
     d->src_x = 0;
     d->src_y = 0;
-    d->width = 0x14u;
+    d->width = SCREEN_W_TILES;
     d->height = 1;
     d->flag = 0;           /* word0e = 0 → restore to a200 page */
     d->dest_x = 0;
@@ -686,13 +691,13 @@ void show_pause_screen(void)
      * 4 planes back to the same VGA rect, then end the plane-store sequence. */
     pg = host_page_off_of(0);
     for (r = 0; r < 8u; r++) {
-        for (c = 0; c < 40u; c++) {
-            u16 i = (u16)((u16)r * 40u + c);
+        for (c = 0; c < VGA_ROW_BYTES; c++) {
+            u16 i = (u16)((u16)r * VGA_ROW_BYTES + c);
             host_vga_put4((u16)(pg + i),
                           hv_pause_strip[i],
-                          hv_pause_strip[320u + i],
-                          hv_pause_strip[2u * 320u + i],
-                          hv_pause_strip[3u * 320u + i]);
+                          hv_pause_strip[PAUSE_STRIP_PLANE_SIZE + i],
+                          hv_pause_strip[2u * PAUSE_STRIP_PLANE_SIZE + i],
+                          hv_pause_strip[3u * PAUSE_STRIP_PLANE_SIZE + i]);
         }
     }
     host_vga_blit_end();

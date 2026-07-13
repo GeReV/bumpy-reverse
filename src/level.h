@@ -76,6 +76,7 @@
 #define DG_POSB_BASE    0x03f4u   /* posB: dg[0x3f4 + cell*4]             */
 #define DG_P1_OBJ       0x792eu   /* p1_sprite obj — sprite_obj_t (entity.h) */
 #define DG_P2_OBJ       0x795au   /* p2_sprite obj — sprite_obj_t (entity.h) */
+#define DG_HUD_ICON_OBJ 0x7986u   /* hud_icon_sprite_ptr obj (view_setup.c)   */
 #define DG_P2_CELL      0x8571u   /* p2_cell (s8): -1 = P2 absent          */
 #define DG_P2_FRAME_BASE 0xa0deu  /* p2_frame_base (u16)                   */
 
