@@ -15,9 +15,7 @@ platform (Plan A)”*).
 > **Status (current).** `BUMPYP.EXE` boots pure-DOS → BIOS video mode 0x0D → level 1 →
 > the main menu → and into the **per-tick `game_tick()` gameplay loop** (`game_mode`
 > reaches 4 and holds), verified under scripted boot input. Interactive keyboard play is
-> the thing for you to try. The automated pixel frame-compare gate
-> (`tools/validate_playable.sh`) is scaffolded and validated on the original-game side;
-> its playable-side capture trigger still needs calibration (see *Known limitations*).
+> the thing for you to try.
 
 ---
 
@@ -145,49 +143,14 @@ this build is for you to exercise.
 
 ---
 
-## The headless capture + frame-compare gate (for validation)
+## Validation
 
-`tools/validate_playable.sh` is the Plan-A integration gate: it runs **both** `BUMPYP.EXE`
-and the **real original** `BUMPY.EXE` under one instrumented DOSBox-X build, captures the
-rendered VGA planes per per-tick frame, and compares them plane-for-plane (the idea: same
-level → identical pixels, proving the host render/present/flip glue is faithful).
-
-```sh
-# one-time: build the instrumented emulator (pinned source + tracked patches, no fork)
-bash tools/dosbox/build-dosbox-x.sh
-# the gate (needs the real original game under local/build/capture/game/)
-tools/validate_playable.sh
-```
-
-The instrumented emulator is built from pinned upstream DOSBox-X plus the tracked patches
-under `tools/dosbox/patches/` (`01` bring-up/input hook, `02` int8 SNAP, `03` per-frame
-A000 plane dump) — **no DOSBox fork is vendored**; the build script re-applies the patches
-onto the pinned tag. See `tools/dosbox/patches/README.md`.
-
-### Calibration notes
-- **Runtime DGROUP shifts with code size.** This build’s runtime DGROUP segment is
-  `0x3fe4`; it moves whenever `BUMPYP.EXE`’s code size changes. The **DGROUP-internal
-  offsets are stable** (`keytbl 0x9dbe`, `current_level 0x05c2`, `game_mode 0x9eca`,
-  `input_state 0x9e83`). After a rebuild, re-derive `BUMPYCAP_DGROUP` from the live `DS`
-  in the run log if the gate’s map-derived value warns of a mismatch.
-- **dosbox hook rebuilds:** after editing a patch, force-remove the stale objects/archive
-  (`hardware/vga_draw.o`, `hardware/libhardware.a`, `src/dosbox-x`) before `make`, and
-  verify with `strings src/dosbox-x | grep BUMPYCAP` — a plain `make` can silently keep a
-  stale hook.
-
-### Known limitations (gate not yet green)
-- The gate’s **playable-side per-tick capture trigger** (the CS:IP at which it samples the
-  framebuffer each tick) is not yet correctly calibrated: the playable engine’s gameplay
-  code runs in a relocated code segment (observed `mode=4` code at runtime segment `ba51`,
-  not the boot/menu segment `0824`), and the per-tick loop-top IP is not the linker-map
-  offset. Locating it needs an instruction-level CS:IP probe of the running playable
-  `game_loop`. Until then the playable capture produces 0 frames and the gate reports FAIL
-  at the “playable capture produced no frames” step. The **original-side capture works**
-  (32 frames, decoding to a real level render), and two real harness bugs were fixed along
-  the way (the inline-comment conf corruption above; dosbox ignoring `timeout`’s SIGTERM →
-  `timeout -k`).
-- **Reconstruction correctness does not depend on this gate.** The per-tick game state is
-  already validated tick-for-tick by the int8 end-to-end gate (`tools/validate_int8.sh`),
-  and the planar blitters/compose are byte-exact (`tools/validate_composite.sh`,
-  `validate_host_compose.sh`). The pixel frame-compare gate is *additional* assurance over
-  the host present/flip glue, not the project’s primary validation.
+The playable build's fidelity was proven during development by an internal harness (a
+per-tick pixel frame-compare gate running both `BUMPYP.EXE` and the real original under an
+instrumented DOSBox-X, plus a frame-accurate int8-synced end-to-end replay of the
+reconstructed game loop against a captured golden trace). That harness — and the dosbox-x
+build/patch/capture tooling it depended on — is development scaffolding and isn't part of
+this repo; see [`docs/reconstruction-fidelity.md`](reconstruction-fidelity.md) for the
+methodology and results it established (the "int8-synced end-to-end gate" section and the
+per-module fidelity audit). Reconstruction correctness does not depend on any tooling in
+the public tree — it's a property of `src/` matching the decompiled original.

@@ -6,6 +6,13 @@ original's structure — the reimplementation-leaning parts to keep labeled and,
 feasible, bring back toward 1:1. Each module's `.h` carries the detailed in-code
 `RECONSTRUCTION FIDELITY` note; this is the index.
 
+> This audit cites the internal validation harness throughout (`validate_*.sh`,
+> `*_ctest.c`, `*_oracle.py`, the DOSBox capture pipeline, the Ghidra analysis scripts) as
+> the methodology and evidence behind each finding. That harness was development
+> scaffolding, not part of the deliverable, and has been archived out of the public repo
+> once its job — proving `src/` faithful — was done; the results recorded below stand on
+> their own.
+
 ## Classification
 
 - **Transcription** — 1:1 with the decompiled function (same control flow, same data).

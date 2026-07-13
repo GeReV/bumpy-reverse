@@ -85,9 +85,9 @@ So VGA repaints the *colours* every image (fixed pixel→AC, moving AC-index→D
 repaints the *mapping* every image (moving pixel→AC, fixed AC-index→DAC). The same plane
 data can therefore resolve to very different RGB depending on `palette_mode`, even though
 every other stage — pixel/plane transforms, the blit paths in §1/§3/§4 above — is
-EGA==VGA (every `1cec` sprite-op table's EGA slot equals its VGA slot; see
-[faithfulness-gap-audit.md](faithfulness-gap-audit.md) §2). The palette pipeline is the
-*only* axis on which EGA and VGA diverge.
+EGA==VGA (every `1cec` sprite-op table's EGA slot equals its VGA slot, confirmed by reading
+the unpacked image directly). The palette pipeline is the *only* axis on which EGA and VGA
+diverge.
 
 **Dispatch.** Each palette op indirects through a static per-mode vector table (3 slots:
 CGA, EGA, VGA) — confirmed **static initialised data** in the unpacked image, read directly,

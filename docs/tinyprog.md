@@ -65,5 +65,4 @@ reads and patches it; layer 2 consumes it.
 
 `tools/tinyprog_unpack.py` recovers the unpacked MZ by emulating both layers
 at two different load segments and differencing the outputs to reconstruct the
-relocation table. `tools/compare_unpacked.py` diffs two MZ load modules for
-cross-validation.
+relocation table.
