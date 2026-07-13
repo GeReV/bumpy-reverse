@@ -32,6 +32,7 @@
 #include "sound.h"   /* play_exit_sound/_contact/_pickup/_state_79b9/_event_64c1 (move_step_dispatch_tbl targets) */
 #include "items.h"   /* check_exit_tile_vert (6372), move_step_read_item (6627) */
 #include "input.h"   /* input_state_clear (65d2) */
+#include "gfx_overlay.h"  /* player_view_geom_t */
 #ifdef BUMPY_PLAYABLE
 #include "dosio.h"   /* dosio_save — OOB-mode diagnostic log (playable only) */
 #endif
@@ -3255,7 +3256,7 @@ void p1_advance_grid_history(void)
  */
 void render_p1_view(void)
 {
-    u8 __far *view;
+    player_view_geom_t __far *view;
 
     p1_scroll_x = 4;
     if (p1_grid_x > 0x10) {
@@ -3266,11 +3267,11 @@ void render_p1_view(void)
         p1_scroll_y = (s16)(0x19 - p1_grid_y);
     }
 
-    view = p1_view;
-    *(s16 __far *)(view + 0x06) = p1_grid_x;
-    *(s16 __far *)(view + 0x08) = p1_grid_y;
-    *(s16 __far *)(view + 0x1e) = p1_scroll_x;
-    *(s16 __far *)(view + 0x20) = p1_scroll_y;
+    view = (player_view_geom_t __far *)p1_view;
+    view->pos_x    = p1_grid_x;
+    view->pos_y    = p1_grid_y;
+    view->scroll_x = p1_scroll_x;
+    view->scroll_y = p1_scroll_y;
     p1_render_view_leaf(p1_view);                                /* present leaf */
     return;
 }
@@ -3291,13 +3292,13 @@ void render_p1_view(void)
  */
 void erase_p1_view(void)
 {
-    u8 __far *view;
+    player_view_geom_t __far *view;
 
-    view = p1_erase_view;
-    *(s16 __far *)(view + 0x14) = p1_grid_x_prev;
-    *(s16 __far *)(view + 0x16) = p1_grid_y_prev;
-    *(s16 __far *)(view + 0x1e) = p1_scroll_x;
-    *(s16 __far *)(view + 0x20) = p1_scroll_y;
+    view = (player_view_geom_t __far *)p1_erase_view;
+    view->prev_x   = p1_grid_x_prev;
+    view->prev_y   = p1_grid_y_prev;
+    view->scroll_x = p1_scroll_x;
+    view->scroll_y = p1_scroll_y;
     p1_restore_view_leaf(p1_erase_view);                         /* restore leaf */
     return;
 }

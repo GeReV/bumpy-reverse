@@ -84,6 +84,33 @@ typedef struct {
     u16 subhandler;      /* +0x1c sub-dispatch index (mode-10) */
 } gfx_view_desc;
 
+/* player_view_geom_t — the geometry fields render_p1_view/erase_p1_view
+   (player.c) and render_p2_view/erase_p2_view (player2.c) write into the SAME
+   0x40-byte view-descriptor slots as gfx_view_desc above (allocated by
+   game.c's init_view_anim_descriptors).  This is a DIFFERENT, narrower named
+   view of that memory: these 4 functions never touch word00/word0e/subhandler
+   (gfx_view_desc's dispatch fields — always 0 from the zero-fill), only the
+   geometry below.
+   VERIFIED consistent across all 4 functions (2026-07-14): render_p1_view and
+   render_p2_view are structurally identical (pos_x/pos_y + scroll_x/scroll_y);
+   erase_p1_view and erase_p2_view are structurally identical (prev_x/prev_y +
+   scroll_x/scroll_y) — a genuinely shared shape, unlike the anim.c erase
+   functions and restore_bg_pending (player.c), which each use a different,
+   mutually-inconsistent subset of this same byte range (far ptr / flag bits /
+   doubled position writes) and are therefore NOT modeled by this struct —
+   left as raw offset arithmetic with their own per-function documentation. */
+typedef struct {
+    u16 _pad0[3];        /* +0x00..0x05 (gfx_view_desc's dispatch fields; unused here) */
+    s16 pos_x;           /* +0x06 render_p1_view/render_p2_view: current grid X */
+    s16 pos_y;           /* +0x08 render_p1_view/render_p2_view: current grid Y */
+    u16 _pad1[5];        /* +0x0a..0x13 */
+    s16 prev_x;          /* +0x14 erase_p1_view/erase_p2_view: previous grid X */
+    s16 prev_y;          /* +0x16 erase_p1_view/erase_p2_view: previous grid Y */
+    u16 _pad2[3];        /* +0x18..0x1d */
+    s16 scroll_x;        /* +0x1e both render and erase: view scroll X */
+    s16 scroll_y;        /* +0x20 both render and erase: view scroll Y */
+} player_view_geom_t;
+
 /* VGA page table (mirrors sprite_table_base at DGROUP:0x5415):
      entry[0] = a200:0000  (VGA plane offset 0x2000 — page1 / sprite-scratch)
      entry[1] = a000:0000  (VGA plane offset 0x0000 — page0 / visible)

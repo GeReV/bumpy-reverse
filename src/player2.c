@@ -47,6 +47,7 @@
 
 #include "bumpy.h"
 #include "player2.h"
+#include "gfx_overlay.h"  /* player_view_geom_t */
 
 /* ── P2-render globals — OWNED here (see ownership note above) ────────────────── */
 s16 p2_pixel_x;          /* DGROUP 0x79ba */
@@ -832,7 +833,7 @@ void draw_p2_sprite(void)
  */
 void render_p2_view(void)
 {
-    u8 __far *view;
+    player_view_geom_t __far *view;
 
     if (p2_cell != (s8)0xff) {
         p2_scroll_x = 4;
@@ -844,11 +845,11 @@ void render_p2_view(void)
             p2_scroll_y = (s16)(0x19 - p2_grid_y);
         }
 
-        view = p2_view;
-        *(s16 __far *)(view + 0x06) = p2_grid_x;
-        *(s16 __far *)(view + 0x08) = p2_grid_y;
-        *(s16 __far *)(view + 0x1e) = p2_scroll_x;
-        *(s16 __far *)(view + 0x20) = p2_scroll_y;
+        view = (player_view_geom_t __far *)p2_view;
+        view->pos_x    = p2_grid_x;
+        view->pos_y    = p2_grid_y;
+        view->scroll_x = p2_scroll_x;
+        view->scroll_y = p2_scroll_y;
         p2_render_view_leaf(p2_view);                                /* present leaf */
     }
     return;
@@ -869,14 +870,14 @@ void render_p2_view(void)
  */
 void erase_p2_view(void)
 {
-    u8 __far *view;
+    player_view_geom_t __far *view;
 
     if (p2_cell != (s8)0xff) {
-        view = p2_erase_view;
-        *(s16 __far *)(view + 0x14) = p2_grid_x_prev;
-        *(s16 __far *)(view + 0x16) = p2_grid_y_prev;
-        *(s16 __far *)(view + 0x1e) = p2_scroll_x;
-        *(s16 __far *)(view + 0x20) = p2_scroll_y;
+        view = (player_view_geom_t __far *)p2_erase_view;
+        view->prev_x   = p2_grid_x_prev;
+        view->prev_y   = p2_grid_y_prev;
+        view->scroll_x = p2_scroll_x;
+        view->scroll_y = p2_scroll_y;
         p2_restore_view_leaf(p2_erase_view);                         /* restore leaf */
     }
     return;
