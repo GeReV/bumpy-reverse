@@ -54,7 +54,7 @@ under the git-ignored `local/` tree; users supply their own.
   (also at `local/originals/unpacked/BUMPY_unpacked.exe`).
 - ~399 functions total. Far-pointer / 32-bit global pairs (`_off`/`_seg`,
   `_lo`/`_hi`) are **deliberately kept split** as two 2-byte items — merging makes
-  the decompiled C worse for this segmented code. See `docs/06-engine.md`.
+  the decompiled C worse for this segmented code. See `docs/engine.md`.
 
 ## Repo layout
 
@@ -121,8 +121,8 @@ a reimplementation.
 
 - `README.md` — project overview & how to reproduce.
 - `docs/README.md` — documentation index.
-- `docs/06-engine.md` — engine internals (game loop, two-player pipeline, physics
-  state machine, anim channels). To be rewritten from the reconstructed source.
+- `docs/engine.md` — engine internals (game loop, two-player pipeline, physics
+  state machine, anim channels).
 - `docs/rendering-pipeline.md` — how the engine draws: the (Loriciel-custom, `gfx_*`)
   graphics-overlay dispatch, the a000/a200 VGA double-buffer, background/sprite/entity
   blit paths.

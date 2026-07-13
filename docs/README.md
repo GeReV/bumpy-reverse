@@ -26,7 +26,7 @@ note in [formats/README.md](formats/README.md).
 | [tinyprog.md](tinyprog.md) | The TinyProg executable-packing format (CRC-keyed anti-tamper + LZSS) |
 | [copy-protection.md](copy-protection.md) | The copy-protection mechanism (platform-number challenge + protection data files) |
 | [data-files.md](data-files.md) | Data-file inventory, resource descriptor tables, and the load pipeline |
-| [06-engine.md](06-engine.md) | Engine internals: game loop, two-player pipeline, physics state machine, anim channels |
+| [engine.md](engine.md) | Engine internals: game loop, two-player pipeline, physics state machine, anim channels |
 | [rendering-pipeline.md](rendering-pipeline.md) | The graphics-overlay dispatch, the VGA double-buffer, and the background/sprite/entity blit paths |
 | [reconstruction-fidelity.md](reconstruction-fidelity.md) | Per-module audit of where `src/` deviates from the original's structure, and why |
 | [playable-dos.md](playable-dos.md) | Building and running the playable `BUMPYP.EXE` host build under DOSBox |

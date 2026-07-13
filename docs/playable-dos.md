@@ -95,7 +95,7 @@ exit
 The engine lets you pick the sound device at boot — **None** (F5), **PC-speaker** (F6),
 **AdLib/OPL2** (F7), or **MT-32** (F8). Two of those target a *specific* Roland/Yamaha
 part, so faithful playback needs the emulator pointed at the right one (see
-[06-engine.md §7](06-engine.md#7-target-playback-hardware) for why). Add these sections to
+[engine.md](engine.md#target-playback-hardware) for why). Add these sections to
 the config above:
 
 ```ini

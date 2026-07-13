@@ -10,7 +10,7 @@ typedef signed char    s8;
 typedef int            s16;
 typedef long           s32;
 
-/* Far-pointer / 32-bit globals are kept SPLIT as two words (see docs/06-engine.md).
+/* Far-pointer / 32-bit globals are kept SPLIT as two words (see docs/engine.md).
    Reconstruct a far pointer at the use site with MK_FP(seg, off). */
 
 /* PRNG state (segment 203b in the original DGROUP). */

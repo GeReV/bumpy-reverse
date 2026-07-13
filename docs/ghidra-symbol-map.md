@@ -5,7 +5,7 @@ project (`BumpyDecomp`). Every `FUN_*` has been named and typed; the data labels
 where groundable. Identities come from the Phases 1-7 reconstruction (the `src/` tree is the
 authoritative source — names there were validated by the per-function gates), Borland Turbo
 C++ 1990 RTL knowledge, and the Borland/BGI source under `local/borlandc/` (see
-[reconstruction-fidelity.md](reconstruction-fidelity.md) and `06-engine.md`).
+[reconstruction-fidelity.md](reconstruction-fidelity.md) and `engine.md`).
 
 **Conventions.** 16-bit real-mode, near calls (`__cdecl16near`); far pointers are kept split
 as `_off`/`_seg` pairs. Names ground in `src/` or a decompile/disassembly; genuinely

@@ -68,7 +68,7 @@ u8  p2_set_cell_col;     /* DGROUP 0x8564 (Ghidra: p2_col_counter — in-row col
 u8  p2_set_cell_row;     /* DGROUP 0x8565 (Ghidra: p2_row_counter — grid row)     */
 
 /* P2 move-script far pointer (DGROUP 0xa0ba off / 0xa0bc seg) — the engine keeps
-   it SPLIT as two words (docs/06-engine.md); here a single u16 __far * carries it,
+   it SPLIT as two words (docs/engine.md); here a single u16 __far * carries it,
    the same convention as p1_move_script in player.c.  p2_set_move_state loads it
    from the per-state script table; p2_step_scripted_move reads [anim,dx,dy] 6-byte
    entries through it and advances by 3 words (= 6 bytes) per step. */
