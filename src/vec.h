@@ -18,6 +18,8 @@
 #define VEC_PAL_OFF     51u     /* palette starts at decoded_buf[51]             */
 #define VEC_PAL_BYTES   48u     /* 16 colours x 3 bytes                          */
 #define VEC_PLANE_BYTES 8000u   /* bytes per plane (40 bytes/row x 200 rows)     */
+#define VEC_PLANE_COUNT 4u      /* VGA planar mode: 4 bit-planes                */
+#define VEC_RECORD_HDR_BYTES 12u /* vec_decode_planar record header size        */
 
 /* Decode a .VEC op4 full-screen image into a PLANE-MAJOR planar buffer.
    Layout: plane p at planar[p*8000 .. p*8000+8000), 40 bytes/row, 200 rows.

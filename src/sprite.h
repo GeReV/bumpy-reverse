@@ -3,6 +3,10 @@
 
 #include "bumpy.h"
 
+/* Sprite bank capacity (BUMSPJEU.BIN, 90112 bytes >= 89116 actual) — shared
+ * by bsprite_buf.c (the storage array) and bsprite.c (the load-loop bound). */
+#define SPR_BANK_CAP 0x16000UL
+
 /* Sprite bank (BUMSPJEU) load-time transform — faithful C port of the engine's
    sprite_bank_relocate_frames (1cec:0c34) + sprite_frame_transform (1cec:0c77),
    the palette_mode-dispatched post-process applied once after the sprite resource

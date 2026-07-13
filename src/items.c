@@ -40,6 +40,11 @@ extern u8  anim_target_cell;     /* player.c — DGROUP 0x856f                  
 extern u8  p1_cell;              /* player.c — DGROUP 0x856e                          */
 extern s16 sound_device_state;   /* player.c — DGROUP 0x689c (==4 → OPL/charger ids)  */
 extern u8 __far *tilemap;        /* game.c   — level tilemap far ptr (DGROUP 0xa0d8)  */
+/* tilemap layer B/C band offsets (player.h's TILE_CONTACT_LAYER_OFF names the
+ * B band under a different local alias — see spawn.h's layer-A/B/C prose).
+ * Bare (unsuffixed, signed-int) literals — matches the original exactly. */
+#define TILEMAP_LAYER_B_OFF 0x30
+#define TILEMAP_LAYER_C_OFF 0x60
 
 /* Cross-module globals the exit/teleport functions (T4) touch (owned by player.c). */
 extern u8  p1_step_col_count;    /* player.c — DGROUP 0x855e — cursor/move-step COLUMN counter */
@@ -85,7 +90,7 @@ u8  collect_mode_2810;           /* DGROUP 0x2810 — set to 0xf at p1_collect_i
  */
 void read_tile_layer2(u8 cell)
 {
-    p1_item_code = tilemap[(u16)cell + 0x60];
+    p1_item_code = tilemap[(u16)cell + TILEMAP_LAYER_C_OFF];
     return;
 }
 
@@ -177,7 +182,7 @@ void p1_collect_item(void)
 
     collect_mode_2810 = 0xf;
     p1_collect_item_score();
-    tilemap[(u16)p1_cell + 0x60] = 0;                 /* clear the collected item */
+    tilemap[(u16)p1_cell + TILEMAP_LAYER_C_OFF] = 0;  /* clear the collected item */
 
     if (p1_item_code != '\x01' && p1_item_code != '#') {
         items_remaining = items_remaining - 1;
@@ -247,7 +252,7 @@ void check_exit_tile_vert(void)
        The counter read is DGROUP 0x855e (CMP [0x855e],7) = p1_step_col_count,
        the COLUMN counter — NOT move_step_count @ 0x824c (see disasm note above). */
     if ((p1_step_col_count != '\a') &&
-        ((s8)tilemap[(u16)p1_cell + 0x30] == '\f')) {
+        ((s8)tilemap[(u16)p1_cell + TILEMAP_LAYER_B_OFF] == '\f')) {
         p1_move_step_idx = 0;
         physics_frozen = 1;
         enter_game_mode(0x2e);

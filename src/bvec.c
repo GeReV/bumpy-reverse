@@ -24,7 +24,7 @@
    the 64 KB DGROUP limit of the large memory model. */
 
 #define VEC_FILE_MAX 0x8400u   /* 33792 B — covers SCORE.VEC (32099 B), the largest .VEC */
-#define PLANAR_BYTES 32000u    /* 4 planes * 8000 bytes */
+#define PLANAR_BYTES VEC_PLANAR /* 4 planes * 8000 bytes (vec.h) */
 
 /* Large buffers declared __far in bvec_buf1.c / bvec_buf2.c to keep each
    segment under the 64 KB DGROUP limit. */
@@ -41,9 +41,9 @@ static void selftest_fill(u8 *planar)
     u16 p;
     u16 i;
 
-    for (p = 0; p < 4u; p++) {
-        for (i = 0; i < 8000u; i++) {
-            planar[p * 8000u + i] = (u8)((i + p * 37u) & 0xFFu);
+    for (p = 0; p < VEC_PLANE_COUNT; p++) {
+        for (i = 0; i < VEC_PLANE_BYTES; i++) {
+            planar[p * VEC_PLANE_BYTES + i] = (u8)((i + p * 37u) & 0xFFu);
         }
     }
 }

@@ -13,7 +13,7 @@
 
 extern u8 __huge g_spr_bank[];
 
-#define BANK_CAP   0x16000UL
+#define BANK_CAP   SPR_BANK_CAP
 #define DATA_OFF   0x800UL
 #define CHUNK      0x4000u
 

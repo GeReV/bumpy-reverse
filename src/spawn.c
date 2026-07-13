@@ -67,6 +67,11 @@
 #include "spawn.h"
 #include "anim.h"   /* anim_channels_a/b_tbl, anim_a/b_frame_tbl, g_anim_cur_cmd_byte,
                        anim_b_cur_frame_byte, p1_sprite, tilemap (all OWNED elsewhere) */
+/* tilemap layer B/C band offsets (see spawn.h's layer-A/B/C prose; items.c
+ * keeps its own copy of the same pair). Bare (unsuffixed, signed-int)
+ * literals — matches the original exactly. */
+#define TILEMAP_LAYER_B_OFF 0x30
+#define TILEMAP_LAYER_C_OFF 0x60
 
 /* ── globals OWNED BY spawn.c (DEFINED here; no other TU owns them; grep-verified
  *    against the src tree — see spawn.h ownership block) ─────────────────────── */
@@ -214,7 +219,7 @@ void spawn_and_draw_level_entities(void)
             }
 
             /* ── layer B (tilemap[+0x30 + cell], skip col 7) — asm 2c03..2c58 ─────── */
-            cv = tilemap[(u16)grid_row * 8 + (u16)grid_col + 0x30];
+            cv = tilemap[(u16)grid_row * 8 + (u16)grid_col + TILEMAP_LAYER_B_OFF];
             if ((cv != 0) && (grid_col != 7)) {
                 type = spawn_b_type_tbl[cv];
                 descfar = (u16 __far *)MK_FP(
@@ -228,7 +233,7 @@ void spawn_and_draw_level_entities(void)
             }
 
             /* ── layer C (tilemap[+0x60 + cell]) — asm 2c73..2cdb ──────────────────── */
-            cv = tilemap[(u16)grid_row * 8 + (u16)grid_col + 0x60];
+            cv = tilemap[(u16)grid_row * 8 + (u16)grid_col + TILEMAP_LAYER_C_OFF];
             if (cv != 0) {
                 /* posC X/Y from the layer-C coord table (0x274): each cell entry is
                    X@+0, Y@+2; index = (col*2 + row*0x10)*2 = cell*4 (== cell stride 4).

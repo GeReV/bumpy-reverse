@@ -18,6 +18,7 @@
 #define WM_REG_START   0x09e6u   /* original DGROUP offset of blob[0] */
 #define WM_MOVE_TBL    0x06e2u          /* blob offset of the move-desc lookup table */
 #define WM_ANIM_TBL    0x0706u          /* blob offset of the anim-coord lookup table */
+#define WM_LEVEL_COUNT 9u                /* worlds are 1-based; table has WM_LEVEL_COUNT+1 4-byte slots */
 
 u8 __far g_worldmap_blob[1838] = {
     0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
@@ -146,7 +147,7 @@ void init_worldmap_data(void)
     u16 seg  = FP_SEG((void __far *)g_worldmap_blob);
     u16 base = FP_OFF((void __far *)g_worldmap_blob);
     u16 e;
-    for (e = WM_MOVE_TBL; e < WM_ANIM_TBL + 10u * 4u; e += 4u) {
+    for (e = WM_MOVE_TBL; e < WM_ANIM_TBL + (WM_LEVEL_COUNT + 1u) * 4u; e += 4u) {
         u16 off = *(u16 __far *)(g_worldmap_blob + e);
         u16 sg  = *(u16 __far *)(g_worldmap_blob + e + 2u);
         if (sg == 0x103bu && off >= WM_REG_START && off < 0x1114u) {

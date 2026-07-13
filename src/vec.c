@@ -160,7 +160,7 @@ u16 vec_decode_planar(const u8 *data, u16 n, u8 *planar, u8 *pal_out)
     u16 decoded;
 
     /* ── Record 0 header: 6 big-endian words (12 bytes) ─────────────────── */
-    if (n < 12u) { return 0xffffu; }
+    if (n < VEC_RECORD_HDR_BYTES) { return 0xffffu; }
 
     w0              = be16(data, 0);
     w1_decoded_size = be16(data, 2);
@@ -208,7 +208,7 @@ u16 vec_decode_planar(const u8 *data, u16 n, u8 *planar, u8 *pal_out)
         if (w1_decoded_size < VEC_HDR_BYTES || w1_decoded_size > VEC_DECODE_MAX) {
             return 0xffffu;
         }
-        payload_start = 12u;  /* escape byte at data[12], rle stream at data[13] */
+        payload_start = VEC_RECORD_HDR_BYTES;  /* escape byte at data[12], rle stream at data[13] */
         decoded = op4_rle_decode(data, n, payload_start, w1_decoded_size,
                                  vec_decode_scratch);
         if (decoded < VEC_HDR_BYTES) { return 0xffffu; }
