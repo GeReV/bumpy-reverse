@@ -214,6 +214,7 @@ extern u8 opl_note_param2;              /* CODE   0x9273 — opl_set_note_params
  *  the self-modifying-graphics-overlay-blitter precedent (behavior-faithful, not runtime-gated).  See
  *  the RECONSTRUCTION FIDELITY block at the L5 section in sound.c +
  *  docs/reconstruction-fidelity.md. */
+void snd_timer_slot_sweep(void);        /* 1000:7c02 core (no EOI) — playable host ISR calls this */
 void pit_timer_isr_multiplexer(void);   /* 1000:7c02 — IRQ0/int-8 PIT tick mux           */
 void tone_seq_callback_9631(void);      /* 1000:9631 — sweep tone sequencer (sched_a cb)  */
 void tone_seq_callback_96c4(void);      /* 1000:96c4 — noise/PRNG tone sequencer (sched_b)*/

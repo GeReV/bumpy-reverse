@@ -4,6 +4,7 @@
 #include "host.h"
 #include "../game.h"     /* run_n_frames prototype (u8 n) */
 #include "../screens.h"  /* timing_flag_accumulator (DGROUP 0x854f) */
+#include "../sound.h"    /* snd_timer_slot_sweep — per-PIT-tick sound-callback sweep */
 
 /* ============================================================================
  * host_timer.c — INT8/PIT frame pacing (Plan A, Task 5)
@@ -34,9 +35,11 @@
  *   (c) sends a PIC EOI (OUT 0x20,0x20) on non-chain ticks.
  *
  * Deviations from the original:
- *   - The original ISR ran the full 6-channel sound callback sweep; the host ISR
- *     does NOT (sound is a Tier-2 deliverable; the sound carve-outs remain
- *     no-ops).  Adding the sweep here would be premature and out of scope.
+ *   - The original ISR ran the full 6-channel sound callback sweep; the host ISR now
+ *     runs it too, via snd_timer_slot_sweep() (2026-07-13, once the sound subsystem was
+ *     reconstructed) — walking the 0x549c slot table and firing the due tone/tempo
+ *     callbacks so scheduled tones advance and gate off.  The host still owns EOI /
+ *     BIOS-vector chaining (below), replacing the original slot-0 BIOS-clock chain.
  *   - The original chained the old vector via a hand-rolled far frame; the host
  *     uses Open Watcom's _chain_intr() which produces the same observable effect
  *     (re-enters the old handler with the 8259 still unacknowledged — the old
@@ -116,6 +119,14 @@ static void __interrupt __far host_int8_isr(void)
 {
     host_tick++;
 
+    /* Service the sound timer slots every PIT tick (~500 Hz), exactly as the original
+     * engine's int-8 multiplexer (pit_timer_isr_multiplexer 1000:7c02) did: walk the 0x549c
+     * slot table and fire the due tone/tempo callbacks so scheduled tones actually advance and
+     * gate off.  We call the no-EOI sweep and keep the host's own EOI / BIOS-vector-chain model
+     * below (the original's slot-0 BIOS-clock chain is replaced by the host's _chain_intr
+     * cadence; the sound engine's own slots are 2..5, driven by set_timer_slot_raw). */
+    snd_timer_slot_sweep();
+
     s_chain_count++;
     if (s_chain_count >= CHAIN_EVERY) {
         s_chain_count = 0u;
@@ -155,11 +166,14 @@ static void pit_program(unsigned divisor)
  * the host ISR (AH=0x25), then reprogram the PIT to PIT_DIVISOR (~500 Hz).
  *
  * RECONSTRUCTION FIDELITY: the original engine's install_interrupt_handler
- * (1000:7cde) also initialises the 6-channel sound-timer-callback table
- * (snd_timer_cb_table at DGROUP 0x5516) and the 16-entry tick_counter table
- * (0x54f6).  Those inits are NOT reproduced here — the sound subsystem is a
- * Tier-2 deliverable and the sound carve-outs remain no-ops; the tick counters
- * are irrelevant to the host_tick pacing model.  Deviation noted. */
+ * (1000:7cde) also clears the 6-slot 0x549c timer-slot table and installs its slot 0
+ * (BIOS-clock chain) + slot 1 (the 0x7e80 sub-sweep over the 0x5516 / 0x54f6 tables).
+ * Here the 0x549c slot table is zero-initialised BSS (snd_timer_slot_table), so it needs
+ * no explicit clear — it stays inert until set_timer_slot_raw populates slots 2..5 as
+ * sounds play, which snd_timer_slot_sweep() (called from host_int8_isr) then services.
+ * The host does NOT install slot 0 (BIOS chaining is handled by host_int8_isr's own
+ * _chain_intr cadence) or slot 1 (the 0x5516/0x54f6 sub-sweep has no reconstructed users),
+ * and does not init those secondary tables.  Deviation noted. */
 void install_interrupt_handler(void)
 {
     /* Save old INT 8 vector. */

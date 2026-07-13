@@ -2018,9 +2018,9 @@ void record_status_and_strobe_speaker(void)
  *  Phase-6 T6 — L5 ISR TONE-SEQUENCER (the PIT timer-callback tone engine).
  *
  *  These are the engine's IRQ0 / int-8 (PIT, ~18.2 Hz reprogrammed faster) machinery:
- *  a multiplexer ISR (1000:7c02) that walks the 6-channel timer-callback table 0x5516
- *  each tick decrementing a per-channel counter and, when it wraps past 500, FAR-CALLS
- *  the channel's installed tone-sequencer callback; and the three installed callbacks
+ *  a multiplexer ISR (1000:7c02) that walks the 6-slot timer-SLOT table 0x549c (via the far
+ *  pointer [0x54cc]) each tick accumulating a per-slot increment and, when it passes 500,
+ *  FAR-CALLS the slot's installed tone-sequencer callback; and the three installed callbacks
  *  (1000:9631 / 96c4 / 95b5) the L3 schedule_timer_callback_a / _b / _c fns install (via
  *  set_timer_slot_raw + the snd_timer_cb_off/seg far ptr).  Each callback advances the
  *  10-word tone param frame snd_param_frame (0x9788..0x979a) it was handed and reprograms
@@ -2029,7 +2029,7 @@ void record_status_and_strobe_speaker(void)
  *  the duration counter (frame[0]) expires.
  *
  *  ── RECONSTRUCTION FIDELITY: reconstructed 1:1 as DOCUMENTATION, NOT runtime-gated ──
- *  Reached ONLY through the installed far pointer (the 0x5516 table the L3 layer fills),
+ *  Reached ONLY through the installed far pointer (the 0x549c slot table the L3 layer fills),
  *  these routines have NO Ghidra function boundary and are NOT hooked by the sound oracle
  *  (tools/sound_oracle.py FN_NAMES) — so the Phase-6 T1 capture contains ZERO records for
  *  0x7c02 / 0x9631 / 0x96c4 / 0x95b5, and there is no host differential to gate them.  Each
@@ -2229,40 +2229,53 @@ void tone_seq_callback_95b5(void)
     outp(0x61, port61);                        /* OUT 0x61,AL */
 }
 
-/* ── pit_timer_isr_multiplexer (1000:7c02) — the IRQ0 / int-8 PIT tick multiplexer ─────────
- *  The installed hardware ISR (set as the int-8 vector at the timer-init routine 1000:7c34
- *  via DOS int 21h AH=25 AL=8).  Per tick it sets DS=DGROUP (0x103b), loads the far pointer
- *  to the 6-channel timer-callback table (DGROUP [0x54cc] -> base 0x5516), and walks 6 slots
- *  of 8 bytes {current@0, reload@2, cb_off@4, cb_seg@6}: current += reload; if it reaches the
- *  500-tick (0x1f4) period it subtracts 500 and FAR-CALLS the slot's installed callback
- *  (cb_seg:cb_off) — that is where tone_seq_callback_9631 / 96c4 / 95b5 run.  After the sweep
- *  it sends the 8259 EOI (OUT 0x20,0x20) and chains/returns to the prior int-8 handler.
+/* ── snd_timer_slot_sweep — the per-PIT-tick core of the int-8 mux (1000:7c02), NO EOI ─────
+ *  Walk the 6 slots (8 bytes each) of the 0x549c timer-slot table and, on the 500-tick
+ *  (0x1f4) period, fire each slot's installed callback.  This is the faithful body of the
+ *  engine's int-8 multiplexer WITHOUT the 8259 EOI, so the playable host's INT8 ISR can call
+ *  it every PIT tick while keeping its own EOI / BIOS-vector-chain (see host/host_timer.c).
  *
- *  The original is a hand-written naked ISR (CS-scratch register save/restore at 0x7cce.., a
- *  manufactured far-return frame at 0x7c87, the int-21h vector chain).  Reconstructed here at
- *  the LOGICAL level — the per-channel period accumulate + far-callback dispatch + EOI — over
- *  the same 0x5516 slot layout (snd_timer_cb_table); the register-save/EOI/vector-chain
- *  plumbing is the ambient ISR scaffolding, noted not transcribed.  Dispatches the channel-2
- *  far callback by its installed offset (the value the L3 schedulers wrote: 0x9631 / 0x96c4 /
- *  0x95b5) so the engine's actual per-tick tone advance is reproduced.  NOT runtime-gated
- *  (see the L5 FIDELITY block) — documentation of the async sweep driver. */
-void pit_timer_isr_multiplexer(void)
+ *  ── FIDELITY FIX (2026-07-13, verified vs raw disasm 7c02 / 7e62 / 7cde) ──
+ *  The earlier reconstruction walked snd_timer_cb_table (DGROUP 0x5516) and read cb_off/cb_seg
+ *  at [+4]/[+6].  That was WRONG.  The asm mux (7c02) does `lds bx,[0x54cc]` -> the 0x549c
+ *  slot table (the 6-slot table install_interrupt_handler clears and the L3 schedulers /
+ *  set_timer_slot_raw write), NOT 0x5516 (a separate arm_timer_callback table serviced by the
+ *  0x7e80 sub-sweep, which has no reconstructed users).  The 0x549c slot layout written by
+ *  set_timer_slot_raw (7e62) is {increment@0, accumulator@2, cb_seg@4, cb_off@6}, so the tone
+ *  callbacks the L3 schedulers install (cb_off 0x9631/0x96c4/0x95b5) live HERE — the old mux
+ *  read the wrong table entirely and would dispatch nothing.
+ *
+ *  Asm per tick (7c40..7c61): AX = [bx] (increment) + [bx+2] (accum); if AX >= 0x1f4 subtract
+ *  0x1f4 and far-call {cb_seg=[bx+4], cb_off=[bx+6]}; store [bx+2] = AX.  The store happens
+ *  DURING the loop (7c5b) and the callbacks run AFTER it, via the manufactured far-return
+ *  trampoline at 0x7c87 — so a callback that re-arms its own slot (set_timer_slot_raw resets
+ *  [+2]=0) wins over the loop store.  This two-pass form reproduces that ordering; the
+ *  trampoline / register-save / re-entry-counter(0x54d5) plumbing is ambient ISR scaffolding,
+ *  modelled as a direct call.  Dispatch is by cb_off (the reconstructed callbacks are near C
+ *  fns; cb_seg is the load-base CODE segment). */
+void snd_timer_slot_sweep(void)
 {
+    u16 fired_off[6];
+    int fired = 0;
     int channel;
 
-    for (channel = 0; channel < 6; channel++) {            /* MOV CX,6; (loop) */
-        u16 idx = (u16)(channel * 8);                      /* 0x5516 + channel*8 */
-        u16 cur = *(u16 *)(snd_timer_cb_table + idx + 0);  /* [bx]     = current  */
-        u16 reload = *(u16 *)(snd_timer_cb_table + idx + 2);/* [bx+2]   = reload   */
-        u16 acc = (u16)(cur + reload);                     /* AX = [bx] + [bx+2]  */
-        if (acc >= 0x1f4) {                                /* cmp ax,0x1f4; jge fire */
-            u16 cb_off = *(u16 *)(snd_timer_cb_table + idx + 4);   /* push [bx+4] */
-            u16 cb_seg = *(u16 *)(snd_timer_cb_table + idx + 6);   /* push [bx+6] */
+    for (channel = 0; channel < 6; channel++) {            /* MOV CX,6; lds bx,[0x54cc] */
+        u16 idx = (u16)(channel * 8);                      /* 0x549c + channel*8 */
+        u16 acc = (u16)(*(u16 *)(snd_timer_slot_table + idx + 0) +   /* AX = [bx]   (increment) */
+                        *(u16 *)(snd_timer_slot_table + idx + 2));   /*    + [bx+2] (accumulator)*/
+        if (acc >= 0x1f4) {                                /* cmp ax,0x1f4; jl skip */
             acc = (u16)(acc - 0x1f4);                       /* SUB AX,0x1f4 */
-            /* FAR-CALL cb_seg:cb_off (the manufactured far frame at 0x7c87 returns here).
-             *  On the host we dispatch by the installed CODE-seg offset to the reconstructed
-             *  callback (cb_seg is the load-base CODE segment). */
-            (void)cb_seg;
+            fired_off[fired] = *(u16 *)(snd_timer_slot_table + idx + 6);  /* cb_off @ [bx+6] */
+            fired++;
+        }
+        *(u16 *)(snd_timer_slot_table + idx + 2) = acc;    /* MOV [bx+2],AX (store accumulator) */
+    }
+    /* Dispatch AFTER the accumulate loop (asm trampoline order); at most one handled slot
+     *  fires per tick in practice (tone channel 2), so inter-slot order is immaterial. */
+    {
+        int i;
+        for (i = 0; i < fired; i++) {
+            u16 cb_off = fired_off[i];
             if (cb_off == 0x9631) {
                 tone_seq_callback_9631();
             } else if (cb_off == 0x96c4) {
@@ -2270,8 +2283,22 @@ void pit_timer_isr_multiplexer(void)
             } else if (cb_off == 0x95b5) {
                 tone_seq_callback_95b5();
             }
+            /* cb_off 0x864c (MIDI tempo/sequence advance) is a documented follow-on: that
+             *  callback is not yet reconstructed, so music stays SILENT (no notes are keyed
+             *  on — they are emitted inside it per tick), which is correct-until-done, not the
+             *  noise bug.  Slots 0/1 (BIOS chain 0x7e7a / 0x7e80 sub-sweep) are not installed
+             *  by the playable host, so their cb_off never appears here. */
         }
-        *(u16 *)(snd_timer_cb_table + idx + 2) = acc;      /* MOV [bx+2],AX (store back) */
     }
+}
+
+/* ── pit_timer_isr_multiplexer (1000:7c02) — the IRQ0 / int-8 PIT tick multiplexer ─────────
+ *  The full engine int-8 ISR: the per-tick slot sweep above, then the 8259 EOI (OUT 0x20,0x20)
+ *  and (in the original) the manufactured far-return chain to the prior int-8 handler.  Kept as
+ *  documentation of the complete asm ISR; the playable host does not call this directly — it
+ *  calls snd_timer_slot_sweep() and owns its own EOI / BIOS-vector-chain cadence. */
+void pit_timer_isr_multiplexer(void)
+{
+    snd_timer_slot_sweep();                                /* 6-slot walk + callback dispatch */
     outp(0x20, 0x20);                                      /* OUT 0x20,AL — 8259 EOI */
 }
