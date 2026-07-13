@@ -77,7 +77,7 @@ static void render_player_view_full_copy(u8 __huge *dest_buf,
 {
     u8 plane;
 
-    for (plane = 0; plane < 4u; plane++) {
+    for (plane = 0; plane < GFX_PLANE_COUNT; plane++) {
         const u8 __huge *src = src_planes
                              + (u32)plane * GFX_OVL_PLANE_SIZE
                              + src_page_off;
@@ -198,7 +198,7 @@ void restore_bg_view(u8 __huge *planes,
                          + (u32)((u32)dy_tiles * 8u) * GFX_OVL_ROW_BYTES
                          + (u32)dx_tiles * 2u;
 
-        for (plane = 0; plane < 4u; plane++) {
+        for (plane = 0; plane < GFX_PLANE_COUNT; plane++) {
             const u8 __huge *src = vga_src + (u32)plane * src_plane_stride;
             u8 __huge *dst = planes
                            + (u32)plane * GFX_OVL_PLANE_SIZE
@@ -215,7 +215,7 @@ void restore_bg_view(u8 __huge *planes,
        — a flat plane-by-plane PAGE_SIZE copy.  Kept verbatim so gfx_overlay.obj is
        byte-stable in BUMPY.EXE.  See the #ifdef branch above for the executed,
        clip-aware playable path. */
-    for (plane = 0; plane < 4u; plane++) {
+    for (plane = 0; plane < GFX_PLANE_COUNT; plane++) {
         const u8 __huge *src = vga_src + (u32)plane * GFX_OVL_PAGE_SIZE;
         u8 __huge *dst = planes
                        + (u32)plane * GFX_OVL_PLANE_SIZE

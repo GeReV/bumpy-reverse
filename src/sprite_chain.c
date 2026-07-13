@@ -95,7 +95,7 @@ static int sprite_blit_clip(const u8 __far *obj, const sprite_view *view,
     }
     iVar1 = 0;
     if ((s16)(st->bcb + view->top) != 0) {
-        iVar1 = (s16)(((st->bcb + view->top) & 0xff) * 0x28);
+        iVar1 = (s16)(((st->bcb + view->top) & 0xff) * VIEW_ROW_STRIDE);
     }
     st->dst_off = (u16)(iVar1 + view->data_off + st->bc9 + view->left);
 
@@ -144,7 +144,7 @@ static void sprite_blit_setup(const u8 __far *obj, const sprite_view *view,
     desc->dst_off    = st->dst_off;
     desc->dst_seg    = view->data_seg;
     desc->full_w     = (u16)((u16)half_w & 0xff);
-    desc->dst_stride = 0x28;
+    desc->dst_stride = VIEW_ROW_STRIDE;
     desc->cols       = (u16)st->be5;
     desc->rows       = (u16)st->be7;
     desc->_rsvd_14   = 0;
@@ -171,17 +171,17 @@ static int sprite_blit_object_list(const u8 __far *obj, const sprite_view *view,
     s16 iv4;
     blit_state st;
 
-    if ((flags & 0x80) == 0) {
+    if ((flags & SPRITE_FLAG_VISIBLE) == 0) {
         return 0;                              /* not visible */
     }
 
     /* Compute screen pixel X, then derive cell column + sub-cell shift */
-    if ((flags & 0x20) == 0) {
+    if ((flags & SPRITE_FLAG_HFLIP) == 0) {
         x = (s16)(rd_s16(obj + 0x00) - rd_s16(obj + 0x14));
     } else {
         x = (s16)(rd_s16(obj + 0x00) + width * -4 + rd_s16(obj + 0x14));
     }
-    if ((flags & 1) != 0) {
+    if ((flags & SPRITE_FLAG_ALIGN8) != 0) {
         x = (s16)((x + 4) & 0xfff8);
     }
     st.shift = (u8)(x & 7);

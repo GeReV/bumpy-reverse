@@ -49,6 +49,17 @@
 extern u16 gfx_draw_object_off;   /* DGROUP 0x5311 */
 extern u16 gfx_draw_object_seg;   /* DGROUP 0x5313 */
 
+/* Per-page draw-object slot layout (see gfx_page_slot_offset) + DAC ports.
+ * Bare (unsuffixed, signed-int) literals except where the original already
+ * used 'u' — matches the original exactly so every substitution below is
+ * textually value-and-type identical. */
+#define GFX_PAL_SLOT_STRIDE      99      /* bytes per page slot (object + page*99) */
+#define GFX_PAL_EGA_OFF          0x23    /* EGA 16-byte AC-index palette offset    */
+#define GFX_PAL_VGA_OFF          0x33    /* VGA 48-byte RGB palette offset         */
+#define GFX_PAL_VGA_MODE5_ADJUST 0x30u   /* extra stage offset when palette_mode==5*/
+#define GFX_DAC_INDEX_PORT       0x3c8
+#define GFX_DAC_DATA_PORT        0x3c9
+
 /* gfx_page_slot_offset — 1ab9:05b6: per-page draw-object slot = page * 99. */
 int gfx_page_slot_offset(u8 page);
 

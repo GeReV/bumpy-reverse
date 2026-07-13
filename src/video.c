@@ -27,9 +27,9 @@ void video_set_palette6(const u8 *dac)
     /* dac: 16*3 bytes of 6-bit DAC values (R,G,B per colour index 0..15). */
     u16 i;
 
-    outp(0x3C8, 0x00);   /* start at DAC entry 0 */
+    outp(VIDEO_DAC_INDEX, 0x00);   /* start at DAC entry 0 */
     for (i = 0; i < 16u * 3u; i++) {
-        outp(0x3C9, dac[i] & 0x3F);
+        outp(VIDEO_DAC_DATA, dac[i] & 0x3F);
     }
 }
 
@@ -45,14 +45,14 @@ void video_blit_planar(const u8 *planar)
     u16 i;
 
     /* Ensure GC write mode 0 with no bit-mask gating (all bits pass through). */
-    outp(0x3CE, 0x05); outp(0x3CF, 0x00);  /* GC mode register: write mode 0 */
-    outp(0x3CE, 0x08); outp(0x3CF, 0xFF);  /* GC bit mask: all bits enabled   */
+    outp(VIDEO_GC_INDEX, VIDEO_GC_MODE); outp(VIDEO_GC_DATA, 0x00);         /* write mode 0 */
+    outp(VIDEO_GC_INDEX, VIDEO_GC_BIT_MASK); outp(VIDEO_GC_DATA, VIDEO_GC_BIT_MASK_ALL); /* all bits enabled */
 
-    outp(0x3C4, 0x02);   /* sequencer address = map-mask register */
-    for (p = 0; p < 4u; p++) {
-        outp(0x3C5, (u8)(1u << p));   /* enable only plane p */
-        for (i = 0; i < 8000u; i++) {
-            vga[i] = planar[p * 8000u + i];
+    outp(VIDEO_SEQ_INDEX, VIDEO_SEQ_MAP_MASK);   /* sequencer address = map-mask register */
+    for (p = 0; p < VIDEO_PLANE_COUNT; p++) {
+        outp(VIDEO_SEQ_DATA, (u8)(1u << p));   /* enable only plane p */
+        for (i = 0; i < VIDEO_PLANE_BYTES; i++) {
+            vga[i] = planar[p * VIDEO_PLANE_BYTES + i];
         }
     }
 }

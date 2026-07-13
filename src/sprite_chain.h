@@ -21,6 +21,11 @@
      +0x14 X anchor (s16)     +0x16 Y anchor (s16)
 
    The view window + the current VGA page base are engine globals: */
+/* Bare (unsuffixed, signed-int) literals — matches the original exactly. */
+#define SPRITE_FLAG_VISIBLE 0x80   /* obj +0x0a: sprite is visible */
+#define SPRITE_FLAG_HFLIP   0x20   /* obj +0x0a: horizontal flip   */
+#define SPRITE_FLAG_ALIGN8  1      /* obj +0x0a: align to 8px      */
+#define VIEW_ROW_STRIDE     0x28   /* dest row pitch, 320px view (=40)  */
 typedef struct {
     s16 left;       /* iRam00026bbd — view left bound  (cells) */
     s16 right;      /* iRam00026bbf — view right bound (cells) */

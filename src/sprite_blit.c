@@ -3,6 +3,10 @@
 #include "host/host.h"          /* host_vga_rmw4 / host_vga_blit_end — real-VGA store */
 #endif
 
+/* Matches the original's bare (unsuffixed, signed-int) literal exactly, so the
+ * substitution below is textually value-and-type identical. */
+#define PLANE_COUNT 4           /* VGA planar mode: 4 bit-planes */
+
 /* See sprite_blit.h.  This mirrors the inner per-column arithmetic of the engine
    blitter exactly (ror / current-column mask / inter-column carry / RMW plane
    store), validated byte-exact against the engine plane capture by
@@ -117,7 +121,7 @@ void sprite_blit_planar_vga(u8 __huge *planes, const u8 __far *src,
                offset (< 0x4000).  vals/bm are the validated per-byte results. */
             host_vga_rmw4((u16)d, vals[0], vals[1], vals[2], vals[3], bm);
 #else
-            for (p = 0; p < 4; p++) {
+            for (p = 0; p < PLANE_COUNT; p++) {
                 u32 idx = (u32)p * PLANE_SIZE + d;
                 u8 old = planes[idx];
                 planes[idx] = (u8)((vals[p] & bm) | (old & (u8)~bm));

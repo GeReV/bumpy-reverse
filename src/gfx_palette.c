@@ -32,7 +32,7 @@ u16 gfx_draw_object_seg;   /* DGROUP 0x5313 */
 /* gfx_page_slot_offset — 1ab9:05b6: per-page draw-object slot = page * 99. */
 int gfx_page_slot_offset(u8 page)
 {
-    return (int)page * 99;
+    return (int)page * GFX_PAL_SLOT_STRIDE;
 }
 
 /* gfx_stage_palette_cga — 1ab9:0605: bare RET (no-op). */
@@ -47,8 +47,8 @@ void gfx_stage_palette_cga(u8 __far *src, u8 page)
 void gfx_stage_palette_ega(u8 __far *src, u8 page)
 {
     u8 __far *obj = (u8 __far *)MK_FP(gfx_draw_object_seg, gfx_draw_object_off);
-    u8 __far *dst = obj + gfx_page_slot_offset(page) + 0x23;
-    u8 __far *s   = src + 0x23;
+    u8 __far *dst = obj + gfx_page_slot_offset(page) + GFX_PAL_EGA_OFF;
+    u8 __far *s   = src + GFX_PAL_EGA_OFF;
     u8 i;
     for (i = 0u; i < 16u; i++) { dst[i] = s[i]; }
 }
@@ -58,11 +58,11 @@ void gfx_stage_palette_ega(u8 __far *src, u8 page)
 void gfx_stage_palette_vga(u8 __far *src, u8 page)
 {
     u8 __far *obj = (u8 __far *)MK_FP(gfx_draw_object_seg, gfx_draw_object_off);
-    u16 slot = (u16)(gfx_page_slot_offset(page) + 0x33);
+    u16 slot = (u16)(gfx_page_slot_offset(page) + GFX_PAL_VGA_OFF);
     u8 __far *dst;
-    u8 __far *s = src + 0x33;
+    u8 __far *s = src + GFX_PAL_VGA_OFF;
     u8 i;
-    if (palette_mode == 5u) { slot = (u16)(slot + 0x30u); }
+    if (palette_mode == 5u) { slot = (u16)(slot + GFX_PAL_VGA_MODE5_ADJUST); }
     dst = obj + slot;
     for (i = 0u; i < 48u; i++) { dst[i] = s[i]; }
 }
@@ -78,7 +78,7 @@ void gfx_upload_palette_cga(u8 page)
 void gfx_upload_palette_ega(u8 page)
 {
     u8 __far *obj = (u8 __far *)MK_FP(gfx_draw_object_seg, gfx_draw_object_off);
-    u8 __far *tbl = obj + gfx_page_slot_offset(page) + 0x23;
+    u8 __far *tbl = obj + gfx_page_slot_offset(page) + GFX_PAL_EGA_OFF;
     union REGS r; struct SREGS sr;
     segread(&sr);
     sr.es  = FP_SEG(tbl);
@@ -94,20 +94,20 @@ void gfx_upload_palette_ega(u8 page)
 void gfx_upload_palette_vga(u8 page)
 {
     u8 __far *obj = (u8 __far *)MK_FP(gfx_draw_object_seg, gfx_draw_object_off);
-    u8 __far *tbl = obj + gfx_page_slot_offset(page) + 0x33;
+    u8 __far *tbl = obj + gfx_page_slot_offset(page) + GFX_PAL_VGA_OFF;
     u8 i;
-    outp(0x3c8, 0x00);                 /* DAC write index 0 */
+    outp(GFX_DAC_INDEX_PORT, 0x00);                 /* DAC write index 0 */
     for (i = 0u; i < 8u; i++) {
-        outp(0x3c9, tbl[0]);           /* R */
-        outp(0x3c9, tbl[1]);           /* G */
-        outp(0x3c9, tbl[2]);           /* B */
+        outp(GFX_DAC_DATA_PORT, tbl[0]);           /* R */
+        outp(GFX_DAC_DATA_PORT, tbl[1]);           /* G */
+        outp(GFX_DAC_DATA_PORT, tbl[2]);           /* B */
         tbl += 3;
     }
-    outp(0x3c8, 0x10);                 /* DAC write index 0x10 (colours 8..15) */
+    outp(GFX_DAC_INDEX_PORT, 0x10);                 /* DAC write index 0x10 (colours 8..15) */
     for (i = 0u; i < 8u; i++) {
-        outp(0x3c9, tbl[0]);
-        outp(0x3c9, tbl[1]);
-        outp(0x3c9, tbl[2]);
+        outp(GFX_DAC_DATA_PORT, tbl[0]);
+        outp(GFX_DAC_DATA_PORT, tbl[1]);
+        outp(GFX_DAC_DATA_PORT, tbl[2]);
         tbl += 3;
     }
 }

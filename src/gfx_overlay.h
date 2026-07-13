@@ -127,6 +127,7 @@ typedef struct {
 #endif
 #define GFX_ROWS           200u      /* display rows */
 #define GFX_ROW_BYTES      40u       /* VGA row stride (320px ÷ 8 bits) */
+#define GFX_PLANE_COUNT    4u        /* VGA planar mode: 4 bit-planes (this file/video.c) */
 
 /* restore_bg_view — wrapper for gfx_set_mode_01 (1000:80bc → 1ab9:0d77).
    Parameters:

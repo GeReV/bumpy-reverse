@@ -10,6 +10,23 @@
 #define VIDEO_MODE_VGA13  0x13   /* 320x200x256 (chunky)  */
 #define VIDEO_MODE_EGA0D  0x0d   /* 320x200x16 (planar)   */
 
+/* VGA hardware ports (local to this TU — video.c is the standalone VEC render
+ * slice / BVEC.EXE target and does not link src/host/host.h's SEQ_, GC_, DAC_
+ * port names).  Bare (unsuffixed, signed-int) literals except where the
+ * original already used 'u' — matches the original exactly. */
+#define VIDEO_DAC_INDEX   0x3C8
+#define VIDEO_DAC_DATA    0x3C9
+#define VIDEO_GC_INDEX    0x3CE
+#define VIDEO_GC_DATA     0x3CF
+#define VIDEO_GC_MODE         0x05  /* GC index: write mode / read mode          */
+#define VIDEO_GC_BIT_MASK     0x08  /* GC index: per-bit write enable            */
+#define VIDEO_GC_BIT_MASK_ALL 0xFF  /* GC_BIT_MASK value: all bits writable      */
+#define VIDEO_SEQ_INDEX   0x3C4
+#define VIDEO_SEQ_DATA    0x3C5
+#define VIDEO_SEQ_MAP_MASK 0x02     /* SEQ index: map-mask register              */
+#define VIDEO_PLANE_BYTES 8000u     /* 320x200/4bpp planar: bytes per plane      */
+#define VIDEO_PLANE_COUNT 4u        /* VGA planar mode: 4 bit-planes             */
+
 /* Set mode 0x0D: 320x200x16 EGA planar via INT 10h AX=0x000D. */
 void video_set_mode_0d(void);
 
