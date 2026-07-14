@@ -96,7 +96,8 @@ char p1_step_scripted_move(void)
 
     step_result = (char)move_locked;
     if (move_locked == 0 && p1_move_steps_left != 0 &&
-        game_mode != 0x05 && game_mode != 0x0b && game_mode != 0x1c) {
+        game_mode != GAME_MODE_WALK_RIGHT_STEP && game_mode != GAME_MODE_JUMP &&
+        game_mode != GAME_MODE_WALK) {
 
         p1_move_anim = p1_move_script[0];              /* anim = script[0] (full word,
                                                           1000:1414/1417) */
@@ -203,7 +204,8 @@ void enter_game_mode(u8 mode)
 #endif
     if (move_locked == 0) {
         game_mode = mode;
-        if (mode != 0x05 && mode != 0x0b && mode != 0x1c) {
+        if (mode != GAME_MODE_WALK_RIGHT_STEP && mode != GAME_MODE_JUMP &&
+            mode != GAME_MODE_WALK) {
             p1_move_anim_frame_idx = 0;
 
             /* mode_script_tbl[mode] : 4-byte far pointer (off @ +0, seg @ +2). */
@@ -832,7 +834,7 @@ void move_left(void)
         mode = resolved_mode;
         if (resolved_mode == 1) {
             read_tile_at_cell(p1_cell_prev);
-            if (p1_current_tile == 0x0b) {
+            if (p1_current_tile == TILE_TELEPORT) {
                 mode = 0x16;
             } else {
                 mode = 1;
@@ -869,7 +871,7 @@ void move_right(void)
         mode = resolved_mode;
         if (resolved_mode == 2) {
             read_tile_at_cell((u8)(p1_cell + 1));
-            if (p1_current_tile == 0x0b) {
+            if (p1_current_tile == TILE_TELEPORT) {
                 mode = 0x17;
             } else {
                 mode = 2;
@@ -891,7 +893,7 @@ void move_settle(void)
 {
     p1_queued_action_code = 0;
     move_override = 0;
-    tile_below_player = 0x0b;
+    tile_below_player = TILE_TELEPORT;
     if (p1_pending_action == 0x11) {
         enter_game_mode(0x2f);
     } else {
@@ -921,7 +923,7 @@ void enter_mode_04_fall(void)
  */
 void enter_mode_1c_walk(void)
 {
-    game_mode = 0x1c;
+    game_mode = GAME_MODE_WALK;
     play_walk_anim_default();
     return;
 }
@@ -1210,7 +1212,7 @@ void p1_enter_walk_right_mode(void)
     u8 mode;
 
     read_tile_at_cell((u8)(p1_cell + 1));
-    if (p1_current_tile == 0x0b) {
+    if (p1_current_tile == TILE_TELEPORT) {
         mode = 0x2a;
     } else {
         mode = 0x26;
@@ -1230,7 +1232,7 @@ void p1_enter_walk_left_mode(void)
     u8 mode;
 
     read_tile_at_cell((u8)(p1_cell + 0xff));          /* cell - 1 */
-    if (p1_current_tile == 0x0b) {
+    if (p1_current_tile == TILE_TELEPORT) {
         mode = 0x29;
     } else {
         mode = 0x25;
@@ -1376,7 +1378,7 @@ void move_left_step_resolve(void)
         mode = resolved_mode;
         if (resolved_mode == 8) {
             read_tile_at_cell(p1_cell_prev);
-            if (p1_current_tile == 0x0b) {
+            if (p1_current_tile == TILE_TELEPORT) {
                 mode = 0x18;
             } else {
                 mode = 8;
@@ -1412,7 +1414,7 @@ void move_right_step_resolve_alt(void)
         mode = resolved_mode;
         if (resolved_mode == 9) {
             read_tile_at_cell((u8)(p1_cell + 1));
-            if (p1_current_tile == 0x0b) {
+            if (p1_current_tile == TILE_TELEPORT) {
                 mode = 0x19;
             } else {
                 mode = 9;
@@ -1455,7 +1457,7 @@ void p1_resolve_walk_left_contact(void)
             mode = 0x38;
         } else {
             read_tile_at_cell((u8)(p1_cell + 0xff));
-            if (p1_current_tile == 0x0b) {
+            if (p1_current_tile == TILE_TELEPORT) {
                 mode = 0x3a;
             } else if (p1_step_col_count == 1) {  /* 0x855e */
                 p1_contact_code = 0x1f;
@@ -1467,7 +1469,7 @@ void p1_resolve_walk_left_contact(void)
                     mode = 0x34;
                 } else {
                     read_tile_at_cell((u8)(p1_cell + 0xfe));
-                    if (p1_current_tile == 0x0b) {
+                    if (p1_current_tile == TILE_TELEPORT) {
                         mode = 0x36;
                     } else {
                         mode = 0x1a;
@@ -1510,7 +1512,7 @@ void p1_resolve_walk_right_contact(void)
             mode = 0x39;
         } else {
             read_tile_at_cell((u8)(p1_cell + 1));
-            if (p1_current_tile == 0x0b) {
+            if (p1_current_tile == TILE_TELEPORT) {
                 mode = 0x3b;
             } else if (p1_step_col_count == 6) {  /* 0x855e */
                 p1_contact_code = 0x1f;
@@ -1522,7 +1524,7 @@ void p1_resolve_walk_right_contact(void)
                     mode = 0x35;
                 } else {
                     read_tile_at_cell((u8)(p1_cell + 2));
-                    if (p1_current_tile == 0x0b) {
+                    if (p1_current_tile == TILE_TELEPORT) {
                         mode = 0x37;
                     } else {
                         mode = 0x1b;
@@ -3971,11 +3973,11 @@ void move_walk_right_anim_step(void)
  * one grid-row below p1_cell) — a tile-leaf read that is part of this handler's
  * own control-flow condition, so it ports inline via the `tilemap` far pointer
  * (extern, player.h), exactly as gamemode_03_move's `tilemap[p1_cell - 8]` probe.
- * Decomp: *(char *)((uint)p1_cell + (int)tilemap + 8) != '\v';  '\v' == 0x0b.
+ * Decomp: *(char *)((uint)p1_cell + (int)tilemap + 8) != '\v';  '\v' == 0x0b == TILE_TELEPORT.
  */
 void move_step_check_walkable(void)
 {
-    if (p1_pending_action == 0 && tilemap[(u16)p1_cell + 8] != 0x0b) {
+    if (p1_pending_action == 0 && tilemap[(u16)p1_cell + 8] != TILE_TELEPORT) {
         enter_mode_04_fall();
     } else {
         move_step_dispatch_input();

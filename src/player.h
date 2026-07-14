@@ -192,6 +192,19 @@ extern u8 __far *tilemap;                  /* level tilemap far pointer (cross-m
 #define MOVE_SCRIPT_WALK_LEFT_OFF   0x1460
 #define MOVE_SCRIPT_ROUND_ENTRY_OFF 0x1394
 
+/* Tile type read via read_tile_at_cell (p1_current_tile / tile_below_player):
+ * the teleport-exit tile a level's tilemap marks with this ID. */
+#define TILE_TELEPORT 0x0b
+
+/* game_mode values referenced directly (not just via game_mode_handlers[idx]) by
+ * p1_step_scripted_move's guard and enter_game_mode's anim-reset condition. Named
+ * from the handlers that enter each mode (enter_mode_1c_walk sets game_mode=0x1c;
+ * enter_mode_0b_jump_start is game_mode_handlers[0x0a], transitioning into 0x0b;
+ * game_mode_handlers[0x05] is move_walk_right_anim_step). */
+#define GAME_MODE_WALK_RIGHT_STEP 0x05
+#define GAME_MODE_JUMP            0x0b
+#define GAME_MODE_WALK            0x1c
+
 /* The two raw tilemap reads (the actual "tile leaves"). */
 void read_tile_layer_contact(u8 cell);     /* 1000:6bd4 — p1_contact_code = tilemap[cell+0x30] */
 void read_tile_at_cell(u8 cell);           /* 1000:6bb5 — p1_current_tile = tilemap[cell] */
