@@ -6,13 +6,11 @@
 /* ────────────────────────────────────────────────────────────────────────────
  *  player2.h — Player-2 (AI opponent) module (Phase-4 reconstruction).
  *
- *  SKELETON (Phase-4 Task 2): this header declares the P2 module's globals + the
- *  eleven P2 function prototypes.  The function BODIES are NOT reconstructed yet
- *  — they port across Phase-4 Tasks 3/4/5 (move-state/trajectory, AI rng-decision,
- *  draw/pvp).  Until then the P2 functions remain stubbed in game_stubs.c (no dup:
- *  src/player2.c defines ONLY globals, no bodies) and player2.obj is NOT yet
- *  linked into BUMPY.EXE.  The host replay harness tools/p2_ctest.c #includes
- *  src/player2.c for the globals and validates each ported body as it lands.
+ *  RECONSTRUCTED (Phase-4 Tasks 3/4/5: move-state/trajectory, AI rng-decision,
+ *  draw/pvp) — this header declares the P2 module's globals + function prototypes;
+ *  src/player2.c defines the real bodies for all of them, and player2.obj is linked
+ *  into BUMPY.EXE (both the default and BUMPY_PLAYABLE builds).  The host replay
+ *  harness tools/p2_ctest.c #includes src/player2.c and validates each body.
  *
  *  P2 is AI-controlled / autonomous (not key-driven): an rng-decision layer
  *  (p2_ai_dispatch_move + select_move_a/b/random keyed on rng_frame) chooses a
@@ -122,8 +120,7 @@ extern u8  p2_move_state;     /* game.c   0x8562 — P2 move-state              
    modules that own them (player.h/game.h/level.h); player2.c includes those. */
 
 /* ════════════════════════════════════════════════════════════════════════════
- *  P2 functions — DECLARED here, BODIES reconstructed in Phase-4 T3/T4/T5.
- *  (Until ported they remain stubbed in game_stubs.c; player2.c defines no bodies.)
+ *  P2 functions — DECLARED here, BODIES reconstructed in player2.c (Phase-4 T3/T4/T5).
  *  Engine seg-1000 offsets are noted for the harness's per-fn registry.
  * ════════════════════════════════════════════════════════════════════════════ */
 void p2_set_move_state(u8 state);     /* 1000:4bc6 — load script/steps/facing      */

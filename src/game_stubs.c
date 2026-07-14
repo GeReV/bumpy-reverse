@@ -31,11 +31,17 @@
  *     sound.c / midi.c (audio-subsystem branch, Phases A-E) — no longer stubbed in
  *     this file.
  *
- * Bodies are no-ops (void) or a benign default (0).  Where a return value steers
- * control flow the chosen default is noted.  These stubs make BUMPY.EXE LINK; the
- * carve-out boundary (which callees are genuine hardware/CRT/int8-timing leaves
- * vs reconstructed game logic) is enforced by tools/validate_integration.sh and
- * recorded in docs/reconstruction-fidelity.md row "game_stubs.c".
+ * Bodies are no-ops (void) or a benign default (0), WITH ONE EXCEPTION: three
+ * game-mode-handler-table targets (move_step_teleport_exit, game_mode_handler_idx1d,
+ * game_mode_handler_idx30) are fully RECONSTRUCTED, real logic — they live here only
+ * to avoid disturbing the validated game_mode_handlers[] call sites elsewhere (see
+ * the "game-mode handler-table targets" note below, near their definitions). Every
+ * other symbol in this file is a genuine no-op/benign-default carve-out.  Where a
+ * return value steers control flow the chosen default is noted.  These stubs make
+ * BUMPY.EXE LINK; the carve-out boundary (which callees are genuine hardware/CRT/
+ * int8-timing leaves vs reconstructed game logic) is enforced by
+ * tools/validate_integration.sh and recorded in docs/reconstruction-fidelity.md row
+ * "game_stubs.c".
  *
  * NAMING: carve-out stubs use their Ghidra-canonical name (e.g. sweep_active_entities
  * for 1000:6183) even though they are NOT reconstructed here — the name documents

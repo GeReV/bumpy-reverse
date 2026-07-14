@@ -56,13 +56,3 @@ void video_blit_planar(const u8 *planar)
         }
     }
 }
-
-/* Legacy stub kept for back-compat; delegates to video_set_mode_0d. */
-void video_set_mode(u8 mode)
-{
-    union REGS regs;
-
-    regs.h.ah = 0x00;
-    regs.h.al = mode;
-    int86(0x10, &regs, &regs);
-}

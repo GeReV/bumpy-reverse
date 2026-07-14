@@ -42,7 +42,4 @@ void video_set_palette6(const u8 *dac);
    (ports 0x3C4/0x3C5) with write mode 0 (one plane per pass). */
 void video_blit_planar(const u8 *planar);
 
-/* Legacy: set an arbitrary BIOS video mode via INT 10h AH=0. */
-void video_set_mode(u8 mode);
-
 #endif /* VIDEO_H */
