@@ -71,4 +71,25 @@ problems that it ran into, and occasionally throwing an idea to make it try a di
 Despite this, it eventually managed to crack every single problem it ran into, performing work that would have 
 taken me (a very inexperienced reverse-engineer) weeks or months, if I succeeded at all.
 
-I _would_ say I am impressed.
+Color me impressed.
+
+### Update (2026-07-14)
+
+In what reminds me of the [Rick and Morty "20 Minutes Adventure" meme](https://knowyourmeme.com/memes/20-minutes-adventure), 
+what started as a weekend project naturally extended to a roughly month-long effort.
+
+During this time, I did get the chance to test out Fable 5 for a bit. 
+While it absolutely devoured my 5-hour token quota in mere minutes, actually managed to resolve a couple of major issues.
+
+The rest of the time, Opus did the majority of the work. 
+
+Opus' ability to understand and translate from disassembly is impressive. Its ability to come up with debugging schemes and methods for dynamic analysis are even more so.
+
+It wrote things ranging from full emulators, to validation scripts, to patches of DOSBox-X and instrumentation of the recompilation binary.  
+Those are committed in this repo's history, but not included in its final list of files, as they were mostly ad-hoc things I did not think we're worth
+keeping in a game reverse-engineering repository.
+
+However, it's not all smooth sailing. There were times I had to intervene to get Claude to take a different approaches when things didn't seem to converge, 
+suggest workarounds or validate things manually, when its limitations to see and understand the game itself presented themselves.
+
+That being said, this effort would still take me many more weeks had I took it on solely by myself.
