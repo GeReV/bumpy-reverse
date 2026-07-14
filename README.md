@@ -1,8 +1,11 @@
 # Bumpy's Arcade Fantasy — reverse engineering
 
 This is a Claude-led reverse-engineering effort of **[Bumpy's Arcade Fantasy](https://www.mobygames.com/game/3832/bumpys-arcade-fantasy/)** (1992, Loriciel) — the DOS English
-release — into documentation and **pure-Python asset extractors/renderers**, plus a
-Ghidra-based decompilation of the engine.
+release. The primary deliverable is a **faithful decompilation** under `src/`: a
+structure-faithful C mirror of the original binary (one function per original
+function, same control flow, same data layout — the *Devilution* model, not a clean
+rewrite), grounded throughout in a Ghidra decompilation of the engine. Alongside it
+are pure-Python decoders/renderers for the game's asset formats.
 
 The original game files are copyright and **not distributed here**; you supply your own.
 
@@ -10,22 +13,23 @@ The original game files are copyright and **not distributed here**; you supply y
 
 | Path | What |
 |------|------|
-| `tools/extract/` | pure-Python decoders/renderers for the game's data (`.PAV/.DEC/.BUM`, `.VEC`, `.BIN`, `.CAR`, `.BNK`) → level PNGs, sprite sheets, world maps, JSON level tables. Self-contained: the only third-party deps are the emulators below. |
-| `tools/emu/`     | the from-scratch 16-bit x86 interpreter (`vec_cpu.py`) + pure-Python DOS host (`pydos.py`) and the Unicorn-based DOS emulators (`dosemu.py`, `vec_emu.py`, `vec_interp.py`) used while reversing the renderer |
-| `tools/ghidra_scripts/`, `tools/bin/ghidra-headless` | Ghidra analysis scripts + headless wrapper |
-| `tools/*.py`     | TinyProg unpacker (`tinyprog_unpack.py`) and the relocation/diff helpers (`inspect_relocs.py`, `compare_unpacked.py`) behind the unpacking write-up |
-| `docs/`          | reference docs: executable packing (`tinyprog.md`), copy protection, data files & resource pipeline, engine (draft), and the file-format specs under `docs/formats/` ([index](docs/README.md)) |
-| `local/`         | **git-ignored** working tree: your game files, the toolchain (Ghidra/JDK/DOSBox), and build intermediates |
+| `src/` | the reconstructed C source — the decompilation itself. Builds two targets: the faithful `BUMPY.EXE` (link-only, byte-compared, never run) and the playable `BUMPYP.EXE` (adds a thin host platform layer so the engine actually runs — see [`docs/playable-dos.md`](docs/playable-dos.md)) |
+| `tools/extract/` | pure-Python decoders/renderers for the game's data (`.PAV/.DEC/.BUM`, `.VEC`, `.BIN`, `.CAR`, `.BNK`) → level PNGs, sprite sheets, world maps, JSON level tables. Pure stdlib, no third-party deps. |
+| `tools/tinyprog_unpack.py` | recovers the unpacked load module from the TinyProg-packed `BUMPY.EXE` (see [`docs/tinyprog.md`](docs/tinyprog.md)) |
+| `tools/disasm16.py` | a small capstone-based 16-bit disassembler, for inspecting the binary or a built `.EXE` directly |
+| `docs/`          | reference docs: engine internals, rendering pipeline, the reconstruction-fidelity audit, executable packing, copy protection, data files & resource pipeline, and the file-format specs under `docs/formats/` ([index](docs/README.md)) |
+| `local/`         | **git-ignored** working tree: your game files, the toolchain (Ghidra/JDK/DOSBox/Open Watcom), and build intermediates |
 | `results/`       | **git-ignored** generated outputs (level PNGs, sprite sheets, world maps, level JSON) — regenerable from the game files via the tools |
 
 ## Reproducing
 
+### Asset extraction (Python, no game binary needed beyond the data files)
+
 1. **Dependencies** (managed with [uv](https://docs.astral.sh/uv/)):
    ```sh
-   uv sync          # creates .venv with unicorn + capstone
+   uv sync
    ```
-   The asset extractors/renderers are pure stdlib; only the emulator/disassembly tools
-   need the packages above.
+   The extractors/renderers are pure stdlib and need no third-party packages.
 2. **Supply the game files** into `local/build/capture/game/` (the `D1..D9.{PAV,DEC,BUM}`,
    `MONDE*.VEC`, `BUMSPJEU.BIN`, etc. from your copy of the game).
 3. **Run the tools**, e.g.:
@@ -33,6 +37,20 @@ The original game files are copyright and **not distributed here**; you supply y
    uv run python tools/extract/render_levels.py     # all puzzles -> results/levels_png/
    uv run python tools/extract/render_vec_images.py # title/score/world maps
    ```
+
+### Building the reconstruction (Open Watcom, 16-bit DOS)
+
+Requires the Open Watcom 16-bit DOS toolchain vendored under
+`local/toolchain/open-watcom/` (user-supplied, git-ignored):
+
+```sh
+src/build.sh          # builds the playable BUMPYP.EXE
+src/build.sh BUMPY     # builds the faithful, non-running BUMPY.EXE
+```
+
+See [`docs/playable-dos.md`](docs/playable-dos.md) for running `BUMPYP.EXE` under
+DOSBox, and [`docs/engine.md`](docs/engine.md) for the engine internals the
+reconstruction documents.
 
 See [`docs/`](docs/README.md) for the file-format references and the game's
 data/resource and copy-protection systems.

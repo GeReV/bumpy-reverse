@@ -62,11 +62,9 @@ under the git-ignored `local/` tree; users supply their own.
 |------|------|----------|
 | `src/` | Reconstructed C source (the current big effort) | yes |
 | `tools/extract/` | Pure-stdlib decoders/renderers (`.PAV/.DEC/.BUM`, `.VEC`, `.BIN`, `.CAR`, `.BNK`) | yes |
-| `tools/emu/` | From-scratch 16-bit x86 interpreter + Unicorn-based DOS emulators | yes |
-| `tools/ghidra_scripts/`, `tools/bin/ghidra-headless` | Ghidra analysis scripts + headless wrapper | yes |
-| `tools/*.py` | TinyProg unpacker + relocation/diff helpers | yes |
+| `tools/tinyprog_unpack.py`, `tools/disasm16.py` | TinyProg unpacker + a small disassembly utility | yes |
 | `docs/` | Format specs (`docs/formats/`), packing, copy-protection, data files, engine | yes |
-| `local/` | Game files, toolchain (Ghidra/JDK/DOSBox), build intermediates, planning | **gitignored** |
+| `local/` | Game files, toolchain (Ghidra/JDK/DOSBox/Open Watcom), build intermediates, planning, and the archived dev-only tooling (`local/archive/tools/`: the Ghidra analysis scripts, the from-scratch emulators, the `validate_*.sh`/oracle/ctest fidelity-validation suite, and the DOSBox capture pipeline that produced the results in `docs/reconstruction-fidelity.md`) | **gitignored** |
 | `results/` | Generated outputs (PNGs, sprite sheets, JSON) — regenerable | **gitignored** |
 
 ## Ghidra (decompilation source of truth)
