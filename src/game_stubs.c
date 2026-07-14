@@ -37,11 +37,9 @@
  * vs reconstructed game logic) is enforced by tools/validate_integration.sh and
  * recorded in docs/reconstruction-fidelity.md row "game_stubs.c".
  *
- * NAMING: symbols still spelled FUN_1000_<off> are carve-outs whose Ghidra label
- * IS now canonical (e.g. FUN_1000_6183 = sweep_active_entities) but which are NOT
- * reconstructed here; the FUN_ spelling is kept deliberately to mark "unported
- * carve-out, link-only" and to avoid churning the validated call sites (sound.c,
- * player.c) that reference them.  The canonical Ghidra name is cited in the note.
+ * NAMING: carve-out stubs use their Ghidra-canonical name (e.g. sweep_active_entities
+ * for 1000:6183) even though they are NOT reconstructed here — the name documents
+ * what the binary calls this leaf; the stub body stays a no-op.
  *
  * GROUPING (by where they are called):
  *   A. init_game_session_state (0282) hardware/resource setup + the opaque
@@ -103,7 +101,7 @@
  *  note at their definitions in sound.c).  The MPU/init carve (mpu401_reset_to_uart
  *  8a75 + snddrv_init_substep, 1000:8b2a) and the timer teardown (timer_teardown_restore,
  *  1000:7fef) are ALSO now RECONSTRUCTED in sound.c (Task A3; stubs removed here).
- *  STILL stubbed (out-of-scope): the entity sweep FUN_6183 (reached from
+ *  STILL stubbed (out-of-scope): the entity sweep sweep_active_entities (reached from
  *  play_contact_sound for contact codes 0xe..0x11); and pit_set_counter0 (PIT hardware
  *  init, called from timer_teardown_restore's isr_installed_flag-guarded body — also
  *  called by the unrelated, unreconstructed uninstall_interrupt_handler/
@@ -114,7 +112,7 @@
  *  opl_event_note_on) — carved out by a prior task, extended by Task D1 with
  *  midi_emit_voice_msg_w1 — are NOW RECONSTRUCTED in midi.c (Task D2; their stubs
  *  removed here — midi.obj supplies the real bodies). */
-void FUN_1000_6183(void)         {}   /* 1000:6183 sweep_active_entities — out-of-scope entity sweep (carve) */
+void sweep_active_entities(void)         {}   /* 1000:6183 sweep_active_entities — out-of-scope entity sweep (carve) */
 void pit_set_counter0(void)       {}  /* 1000:7f9a — PIT hardware init (carve) */
 /* midi_process_event (1000:873c) — RECONSTRUCTED in midi.c (Task E2); its carve-out
  * stub is REMOVED here (would be a duplicate symbol against midi.obj's real body).
@@ -128,7 +126,7 @@ void pit_set_counter0(void)       {}  /* 1000:7f9a — PIT hardware init (carve)
    the no-op stub is removed (would be a duplicate symbol against player.obj). */
 /* step_walk_anim (1000:495c) — RECONSTRUCTED in player.c (audit 2026-06-28); stub removed. */
 /* ── game-mode handler-table targets — RECONSTRUCTED from Ghidra (no longer carve-outs).
-   FUN_ names kept to avoid churning the game_mode_handlers[] call sites (NAMING rule). */
+   Named per their Ghidra-canonical symbol. */
 extern void play_sound(u8 sound_id);
 extern void apply_cell_animation(u8 action_code);
 extern void enter_game_mode(u8 mode);
@@ -145,8 +143,8 @@ extern u16  move_descriptor_ptr;
 extern u16  move_descriptor_ptr_seg;
 u8 dgroup_flag_a1a9;     /* DGROUP 0xa1a9 — round-activate flag set by idx30 handler */
 
-/* FUN_1000_4802 = move_step_teleport_exit (1000:4802): exit/teleport trigger. */
-void FUN_1000_4802(void)
+/* move_step_teleport_exit = move_step_teleport_exit (1000:4802): exit/teleport trigger. */
+void move_step_teleport_exit(void)
 {
     u8 sound_id = (sound_device_state == 4u) ? 0x28u : 3u;
     play_sound(sound_id);
@@ -166,16 +164,16 @@ void FUN_1000_4802(void)
 /* move_step_dispatch_input (1000:250a) — RECONSTRUCTED in player.c (audit 2026-06-28); stub removed. */
 /* teleport_to_next_exit_tile (1000:25ad, idx 0x0e) is RECONSTRUCTED in items.c
    (Phase-3 T4) — no longer stubbed here (would be a duplicate symbol). */
-/* FUN_1000_22b0 (idx 0x10/0x2c) + run_physics_settle_wrap (1000:22c1, idx 0x2d)
+/* game_mode_handler_idx10 (1000:22b0, idx 0x10/0x2c) + run_physics_settle_wrap (1000:22c1, idx 0x2d)
    are now RECONSTRUCTED in player.c (Phase 2, Task 4). */
 /* p1_input_dispatch_bit10 (1000:4344) — RECONSTRUCTED in player.c (audit 2026-06-28); stub removed. */
-/* FUN_1000_4437 = game_mode_handler_idx1d (1000:4437, idx 0x1d..0x20): input router —
+/* game_mode_handler_idx1d = game_mode_handler_idx1d (1000:4437, idx 0x1d..0x20): input router —
    fire (0x10) settles to idle, else dispatch the direction bits.
    (Binary: 1000:4443 TEST [0x8244],0x10; JZ 444f; CALL 440c; 444f CALL 4398.)
-   NOTE 2026-07-02: this body and FUN_1000_1e3d's were SWAPPED in the original
+   NOTE 2026-07-02: this body and game_mode_handler_idx30's were SWAPPED in the original
    reconstruction (each carried the other address's code); re-verified against the
    disasm and the dispatch table at DGROUP 0x7ca (2-byte near offsets) and corrected. */
-void FUN_1000_4437(void)
+void game_mode_handler_idx1d(void)
 {
     if ((input_state & 0x10u) == 0u) {
         p1_input_dispatch_bit01();
@@ -184,11 +182,11 @@ void FUN_1000_4437(void)
     }
 }
 /* advance_physics_freeze (1000:22d2) — RECONSTRUCTED in player.c (audit 2026-06-28); stub removed. */
-/* FUN_1000_1e3d = game_mode_handler_idx30 (1000:1e3d, idx 0x30): activate current
+/* game_mode_handler_idx30 = game_mode_handler_idx30 (1000:1e3d, idx 0x30): activate current
    move-descriptor entry (set round-continue + a1a9 flags, mark the entry done).
    (Binary: 1000:1e49 MOV AL,1; MOV [0x9d30],AL; MOV [0xa1a9],AL; CALL 3a88;
    LES BX,[0x9baa]; MOV ES:[BX],0x1.)  See the swap note above. */
-void FUN_1000_1e3d(void)
+void game_mode_handler_idx30(void)
 {
     round_continue_flag = 1u;
     dgroup_flag_a1a9 = 1u;
@@ -217,7 +215,7 @@ int dos_abort(void)                         { return 0; }
  *  the canonical Ghidra label is cited per stub.  install_keyboard_isr is the one
  *  REAL reconstructed call in this block (input.c).
  *
- *  BUMPY_PLAYABLE: all hardware-init symbols below (through init_misc_7bbd) are
+ *  BUMPY_PLAYABLE: all hardware-init symbols below (through gfx_overlay_thunk_0232) are
  *  owned by src/host/host_boot.c and src/host/host_video.c in the playable build.
  *  Guard them out so both game_stubs.obj + host_*.obj can link without duplicates. */
 
@@ -257,27 +255,32 @@ void init_sound_tables(u16 a, u16 b, u16 seg)
 #endif /* !BUMPY_PLAYABLE */
 
 /* 1000:7bd7 gfx_overlay_thunk_gfx_init — misc subsystem init. */
-void init_misc_7bd7(void)
+void gfx_overlay_thunk_init(void)
 {
 }
 
 #ifndef BUMPY_PLAYABLE
-/* 1000:97a4 — near-thunk to detect_video_adapter (202c:0000), an adapter probe
-   (stores adapter/mode code at 0x26c4c).  Default build: no-op (no live BIOS). */
-void init_display_97a4(void)
+/* 1000:97a4 — near-thunk to sound_device_select_screen (202c:0000): the F5..F8
+ * "NO SOUND / PC BASE / ADLIB / MT32" boot menu that sets sound_device_state.
+ * NAMING CORRECTED 2026-07-14: previously misattributed as a "detect_video_adapter"
+ * probe (an earlier read of the same {0x8000,0,1,4} sound_device_state values as an
+ * unrelated adapter/mode code); config_screens.c's sound_device_select_screen is the
+ * real 1:1 reconstruction of 202c:0000 and is called directly from main.c, so this
+ * thunk slot carries no distinct game logic.  Default build: no-op (no live BIOS). */
+void sound_device_select_screen_thunk(void)
 {
 }
 #endif /* !BUMPY_PLAYABLE */
 
 /* 1000:7bbd gfx_overlay_thunk_0232 — misc init (one byte arg). */
-void init_misc_7bbd(u8 mode)
+void gfx_overlay_thunk_0232(u8 mode)
 {
     (void)mode;
 }
 
 #ifndef BUMPY_PLAYABLE
 /* 1000:97f1 init_display_controller_b — display controller init. */
-void init_display_97f1(void)
+void gfx_draw_sequence_thunk(void)
 {
 }
 
@@ -375,12 +378,12 @@ void init_sprite_structs(void)   {}
    play_iris_wipe_transition — RECONSTRUCTED 1:1 in screens.c (Phase-7 T4); their stubs
    are removed here (would be duplicate symbols once screens.obj links). */
 
-/* 1000:75a2 read_input_action — the engine's input-poll primitive (returns the action
-   byte in AL).  CARVE-OUT: faithful-signature stub for the BUMPY.EXE link.  The
-   screens.c menu / state-machine loops call it through this symbol.
-   BUMPY_PLAYABLE: owned by src/host/host_input.c in the playable build. */
+/* 1000:75a2 read_input_action_byte — u8/char-width adapter over input.c's real
+   read_input_action(u16) (same engine address; screens.c's menu / state-machine
+   loops call it through this narrower symbol).  CARVE-OUT: faithful-signature stub
+   for the BUMPY.EXE link.  BUMPY_PLAYABLE: owned by src/input.c in the playable build. */
 #ifndef BUMPY_PLAYABLE
-char fun_75a2_poll_action(u8 arg)    { (void)arg; return 0; }
+char read_input_action_byte(u8 arg)    { (void)arg; return 0; }
 #endif /* !BUMPY_PLAYABLE */
 
 /* show_highscore_screen (1000:5681), show_level_intro_screen (1000:0d9d),

@@ -80,10 +80,10 @@ void install_interrupt_handler(void);
 void init_joystick_handlers(void);
 void mouse_reset(void);
 void init_sound_tables(u16 a, u16 b, u16 seg);       /* 1000:7563 init_sound_tables (carve) */
-void init_misc_7bd7(void);
-void init_display_97a4(void);
-void init_misc_7bbd(u8 mode);
-void init_display_97f1(void);
+void gfx_overlay_thunk_init(void);           /* 1000:7bd7 */
+void sound_device_select_screen_thunk(void); /* 1000:97a4 — near-thunk to sound_device_select_screen (202c:0000) */
+void gfx_overlay_thunk_0232(u8 mode);        /* 1000:7bbd */
+void gfx_draw_sequence_thunk(void);          /* 1000:97f1 */
 void init_crtc_window(u16 x0, u16 y0, u16 x1, u16 y1);/* 1000:9821 set_crtc_window (carve) */
 void set_display_page(u8 page);
 void set_text_color(u8 fg, u8 bg);   /* 1000:97c5 → 1ab9:1311/14ef graphics-overlay set-text-colour

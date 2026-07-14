@@ -43,8 +43,8 @@ extern u16 palette_mode;                  /* DGROUP 0x541d */
  *  draw_hud_composite / show_title_background / show_title_and_init /
  *  run_main_menu / show_highscore_screen / level_intro_screen /
  *  play_iris_wipe_transition (screens.c) and their host counterparts
- *  (view_setup.c); consumed by anim_render_leaf_80ac / fun_7b4a_view_blit /
- *  fun_7b93_present_blank.  Every field below is write-only in this codebase
+ *  (view_setup.c); consumed by blit_view_masked / gfx_set_viewport_thunk /
+ *  gfx_stage_image_palette_thunk.  Every field below is write-only in this codebase
  *  (no read-back site exists), so field roles come from the constructors.
  *
  *  Two fields carry more than one role depending on which underlying blit
@@ -174,7 +174,7 @@ void draw_number(u16 val_lo, u16 val_hi, u8 width, u16 arg_a, u16 arg_c);
 void draw_number_sprites(u16 value_lo, u16 value_hi, u8 width, u16 base_x, u16 frame_y);
 
 /* draw_hud_composite (1000:51d8): build the in-game status row — fill the
- *  render_descriptor_ptr view struct and call FUN_1000_80ac 7× (7 HUD sprite tiles). */
+ *  render_descriptor_ptr view struct and call blit_view_masked 7× (7 HUD sprite tiles). */
 void draw_hud_composite(void);
 
 /* ── PORTED (Phase-7 T4): title screens + main menu + iris-wipe + DAC palette ────────
@@ -232,7 +232,7 @@ void show_highscore_screen(void);
 void render_highscore_table(void);
 
 /* highscore_enter_name (1000:59d3): the interactive 8-char table-row name-entry state
- *  machine (polls FUN_75a2; left/right cycle letters, prev/next move the cursor). */
+ *  machine (polls read_input_action_byte; left/right cycle letters, prev/next move the cursor). */
 void highscore_enter_name(u8 row);
 
 /* enter_password (1000:5c87): the interactive 6-char menu-select name-entry state

@@ -151,7 +151,7 @@ u8        deferred_contact_buf[16];    /* DGROUP 0x0886 — the event buffer (he
  *       the non-zero ones are dead).  Reproducing them as ~46 named externs would
  *       invent structure the binary does not document.
  *   (2) The hardware-setup sub-calls (init_timer_resource_table=7bad,
- *       init_sound_tables=7563, init_display_97a4=97a4 / init_display_97f1=97f1,
+ *       init_sound_tables=7563, sound_device_select_screen_thunk=97a4 / gfx_draw_sequence_thunk=97f1,
  *       init_crtc_window=set_crtc_window 9821, set_display_page=9814,
  *       set_text_color=97c5, set_resource_table, install_interrupt_handler,
  *       init_joystick_handlers, mouse_reset, set_disk_swap_callback) are audio/CRTC/
@@ -172,10 +172,11 @@ void init_game_session_state(void)
     init_joystick_handlers();
     mouse_reset();
     init_sound_tables(0x4c00, 0x4cd0, 0x203b);    /* 1000:7563 init_sound_tables */
-    init_misc_7bd7();                              /* 1000:7bd7 gfx_overlay_thunk_gfx_init */
-    init_display_97a4();                           /* 1000:97a4 thunk→detect_video_adapter (adapter probe); host folds the mode-0x0D set here */
-    init_misc_7bbd(2);                             /* 1000:7bbd gfx_overlay_thunk_0232 */
-    init_display_97f1();                           /* 1000:97f1 → 1ab9:137b gfx_draw_sequence (text pos/window/page/colour init) */
+    gfx_overlay_thunk_init();                      /* 1000:7bd7 */
+    sound_device_select_screen_thunk();            /* 1000:97a4 thunk→sound_device_select_screen (F5..F8 sound menu; already
+                                                       run from main.c); host folds the mode-0x0D set into this slot */
+    gfx_overlay_thunk_0232(2);                     /* 1000:7bbd */
+    gfx_draw_sequence_thunk();                     /* 1000:97f1 → 1ab9:137b gfx_draw_sequence (text pos/window/page/colour init) */
     init_crtc_window(0, 0, 0x13f, 199);            /* 1000:9821 → 1ab9:1422 clip-window store (NO CRTC — see host_video.c) */
     set_display_page(1);                           /* 1000:9814 set_active_display_page */
     set_text_color(0xe, 1);                        /* 1000:97c5 → 1ab9:1311/14ef: session text colours fg=14, bg=1 (disasm @1000:02f1) */
@@ -185,9 +186,9 @@ void init_game_session_state(void)
     /* Set VGA mode 0x0D (320x200x16 EGA planar). DEVIATION: see header note —
        the original's mode set lives in the graphics-overlay init (absent from the
        corpus); surfaced here so the boot harness has an observable mode set.
-       PLAYABLE build: the mode set is folded into init_display_97a4 above —
-       repeating it HERE would reset the CRTC start address to 0 AFTER
-       init_display_97f1 programmed the 0x2000 boot page parity, inverting
+       PLAYABLE build: the mode set is folded into sound_device_select_screen_thunk
+       above — repeating it HERE would reset the CRTC start address to 0 AFTER
+       gfx_draw_sequence_thunk programmed the 0x2000 boot page parity, inverting
        `displayed == page[table[0]]` for the whole session (the 2026-07-03
        menu-cursor hidden-page bug).  See host_video.c host_crtc_set_start. */
     video_set_mode_0d();

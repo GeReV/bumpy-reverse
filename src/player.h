@@ -273,7 +273,7 @@ extern void play_action_sound(void);             /* move_left/right action sound
    action handler family declarations below; no longer a game_stubs.c no-op. */
 extern void play_walk_anim_default(void);        /* 1000:4361 — enter_mode_1c_walk anim */
 extern void step_walk_anim(u8 anim_base, u8 period, u16 frame_off, u16 frame_seg); /* 1000:495c */
-extern void FUN_1000_4802(void);                 /* handle_move_input pending==0x0f leaf */
+extern void move_step_teleport_exit(void);                 /* handle_move_input pending==0x0f leaf */
 
 /* OUT-OF-SCOPE handler-table targets (modes outside the §4.2 slice set).  These
    are referenced by game_mode_handlers[] but their bodies are deferred to T6c
@@ -285,9 +285,9 @@ extern void move_step_check_walkable(void);      /* 1000:24d7  idx 0x0c */
 extern void move_step_dispatch_input(void);      /* 1000:250a  idx 0x0d */
 extern void teleport_to_next_exit_tile(void);    /* 1000:25ad  idx 0x0e */
 extern void p1_input_dispatch_bit10(void);       /* 1000:4344  idx 0x1c */
-extern void FUN_1000_4437(void);                 /* 1000:4437  idx 0x1d..0x20 */
+extern void game_mode_handler_idx1d(void);                 /* 1000:4437  idx 0x1d..0x20 */
 extern void advance_physics_freeze(void);        /* 1000:22d2  idx 0x2e */
-extern void FUN_1000_1e3d(void);                 /* 1000:1e3d  idx 0x30 */
+extern void game_mode_handler_idx30(void);                 /* 1000:1e3d  idx 0x30 */
 
 /* P1 movement / input-dispatch subsystem leaves — RECONSTRUCTED in player.c
  * (audit 2026-06-28; dispatch-knot completion).  See per-function headers. */
@@ -306,7 +306,7 @@ void p1_input_dispatch_bit01(void);
 void p1_input_dispatch_bit02(void);
 void p1_input_dispatch_bit04(void);
 void p1_input_dispatch_bit04b(void);
-void FUN_1000_43ef(void);
+void p1_input_router_bit08(void);
 
 /* ══ PHASE 2, TASK 4 — JUMP / FALL / BOUNCE MOVE-STEP SUBSTATES ════════════════
  *
@@ -314,7 +314,7 @@ void FUN_1000_43ef(void);
  * (dispatched via move_step_dispatch_tbl), the run_physics_settle handler, and the
  * two delegates check_tile_below_ladder_or_land tail-calls.  Ported 1:1 in
  * player.c; each cites its engine address there.  The boundary callees
- * (apply_cell_animation, play_sound, FUN_1000_4802) stay stubbed with
+ * (apply_cell_animation, play_sound, move_step_teleport_exit) stay stubbed with
  * RECONSTRUCTION FIDELITY notes; apply_contact_action is now RECONSTRUCTED
  * (Phase-9 T1, see the contact-action family declarations near the end of this file).
  */
@@ -344,7 +344,7 @@ extern u8   frame_abort_flag;             /* game.c — DGROUP 0x928d */
 extern u8   settle_countdown;             /* game.c — per-round settle counter */
 char run_physics_settle(void);            /* 1000:22fc */
 void run_physics_settle_wrap(void);       /* 1000:22c1  (game_mode_handlers[0x2d]) */
-void FUN_1000_22b0(void);                 /* 1000:22b0  (game_mode_handlers[0x10]/[0x2c]) */
+void game_mode_handler_idx10(void);                 /* 1000:22b0  (game_mode_handlers[0x10]/[0x2c]) */
 void p1_read_tile_under(void);            /* 1000:236f  (tile leaf: p1_pending_action = tilemap[p1_cell]) */
 
 /* anim-channel / cell-animation setters (thin FX-allocator wrappers). */

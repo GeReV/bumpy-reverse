@@ -118,15 +118,15 @@ void redraw_level_background_tiles(void)
 
 /* graphics-overlay screen present thunks (stubs in screens.c).
  * show_text_screen calls these after loading the fullscreen image.
- * In screens.c these are fun_7b93_present_blank / fun_7bca_flip. */
-extern void fun_7b93_present_blank(u16 buf_off, u16 buf_seg, u16 flag);  /* FUN_1000_7b93 */
-extern void fun_7bca_flip(u8 page);                                        /* FUN_1000_7bca */
+ * In screens.c these are gfx_stage_image_palette_thunk / gfx_upload_palette_to_dac_thunk. */
+extern void gfx_stage_image_palette_thunk(u16 buf_off, u16 buf_seg, u16 flag);  /* 1000:7b93 */
+extern void gfx_upload_palette_to_dac_thunk(u8 page);                          /* 1000:7bca */
 
 /* Sprite-table selector (screens.c stub name; host_render.c provides the real body
  * under the same symbol — host_set_draw_page — via host_render.c's host_set_draw_page;
- * but the engine symbol is fun_9410_set_sprite_table from screens.c extern block).
- * screens.c declares this as fun_9410_set_sprite_table(u16 arg). */
-extern void fun_9410_set_sprite_table(u16 arg);   /* screens.c */
+ * but the engine symbol is set_sprite_table_ptr from screens.c extern block).
+ * screens.c declares this as set_sprite_table_ptr(u16 arg). */
+extern void set_sprite_table_ptr(u16 arg);   /* screens.c */
 
 /* wait_50_frames (screens.c stub): wait ~50 display frames. */
 extern void wait_50_frames(void);                 /* screens.c */
@@ -134,8 +134,8 @@ extern void wait_50_frames(void);                 /* screens.c */
 /* draw_icon_row (screens.c stub): draw the in-game HUD icon row. */
 extern void draw_icon_row(void);                  /* screens.c */
 
-/* read_input_action stub used in show_pause_screen (screens.c). */
-extern char fun_75a2_poll_action(u8 arg);         /* screens.c / host_input.c */
+/* read_input_action_byte stub used in show_pause_screen (screens.c). */
+extern char read_input_action_byte(u8 arg);            /* screens.c / host_input.c */
 
 /* anim_blit_sprite_leaf: the host blit leaf (host_render.c under BUMPY_PLAYABLE;
  * NOP stub in anim.c for the default build).  Declared extern here for the
@@ -321,7 +321,7 @@ void init_fullscreen_view_desc(u8 mode, u8 flag)
            WHY NOT host_page_off_of(mode)/(flag): the host's draw-page index
            (hr_cur_page_idx) is NOT kept in lockstep with the engine's descriptor page
            convention.  At the (1,0) game/overworld-entry callers the screen is composed
-           on slot 0 (they bracket their draw with fun_9410_set_sprite_table(0)), but
+           on slot 0 (they bracket their draw with set_sprite_table_ptr(0)), but
            mode=1 resolves to slot 1 — the OTHER, non-composed page — so a literal
            host_page_off_of(mode) sourced the WRONG page (and host_page_off_of(flag=0)
            targeted the draw page itself).  While the iris wipe was a NOP that page held
@@ -462,7 +462,7 @@ const u8 __far *host_clean_bg(void)
  * and the palette_mode==1 EGA palette patch are now LIVE via the host resource loader
  * (host_resource.c) + the DGROUP 0x71e AC table (screens.c) — a 1:1 mirror of the
  * sibling show_menu_select_screen (they share resource 3 and the 0x71e palette).  The
- * graphics-overlay present/flip leaves route through screens.c's fun_7b93/fun_7bca
+ * graphics-overlay present/flip leaves route through screens.c's gfx_stage_image_palette_thunk/gfx_upload_palette_to_dac_thunk
  * host bodies (host_gfx.c); the p1_sprite glyph-blit path is live.
  * The engine fmemcpy's the far ptr at DGROUP 0x11ae into a stack-local text_buf
  * ptr and renders text_buf[0..8]; statically 0x11ae = {0x1327, DGROUP} — the
@@ -502,7 +502,7 @@ void show_text_screen(void)
      * mode-11 sync READS FROM) BEFORE the iris.  Without this start bracket the iris +
      * present drew onto the stale gameplay draw page, so the wipe was invisible.  The
      * binary ends the routine with (1) — the (0)…(1) UI bracket (see screens.c). */
-    fun_9410_set_sprite_table(0);
+    set_sprite_table_ptr(0);
 
     /* 1000:1235 — load resource 3 into fullscreen_buf (raw decoded image: 16-byte EGA
      * AC-index palette at +0x23, 48-byte VGA DAC palette at +0x33, planar raster at +99).
@@ -526,10 +526,10 @@ void show_text_screen(void)
 
     /* Iris-wipe in, present fullscreen image + upload DAC palette.
      * Engine calls gfx_overlay_thunk_01e1 + _02b1 (Ghidra names); in screens.c
-     * these are fun_7b93_present_blank + fun_7bca_flip (the reconstructed names). */
+     * these are gfx_stage_image_palette_thunk + gfx_upload_palette_to_dac_thunk (the reconstructed names). */
     play_iris_wipe_transition();
-    fun_7b93_present_blank(fullscreen_buf, fullscreen_buf_seg, 0);
-    fun_7bca_flip(0);
+    gfx_stage_image_palette_thunk(fullscreen_buf, fullscreen_buf_seg, 0);
+    gfx_upload_palette_to_dac_thunk(0);
     wait_vretrace_thunk();   /* vsync wait (1000:9864); formerly mis-named upload_vga_dac_palette */
 
     /* Render 9 sprite glyphs at row 0x60 starting at col 6.
@@ -557,13 +557,13 @@ void show_text_screen(void)
     for (char_idx = 0; char_idx < 2; char_idx = char_idx + 1) {
         wait_50_frames();
     }
-    fun_9410_set_sprite_table(1);
+    set_sprite_table_ptr(1);
 }
 
 /* ── show_pause_screen — 1000:49d7 ─────────────────────────────────────────────
  *
  * Pause/status overlay: save a 0x14 × 1 strip, draw score panel + HUD icon row,
- * poll for resume (scancode 0x19) or quit (fun_75a2_poll_action), optionally
+ * poll for resume (scancode 0x19) or quit (read_input_action_byte), optionally
  * execute the tileflip cheat (scancodes 0x1d + 0x21), then restore the bg view.
  *
  * Structural 1:1 port of 1000:49d7.  The tileflip cheat body (walk
@@ -623,7 +623,7 @@ void show_pause_screen(void)
      * 8 rows × 4 planes — from VGA into hv_pause_strip, plane-major (320 B/plane),
      * mirroring the engine's copy into DGROUP 0x9694.  page[table[0]] is resolved
      * LIVE (host_page_off_of(0)); at this point it is the DISPLAYED page the pause
-     * UI below draws onto inside the fun_9410(0)…(1) bracket. */
+     * UI below draws onto inside the set_sprite_table_ptr(0)…(1) bracket. */
     pg = host_page_off_of(0);
     for (r = 0; r < 8u; r++) {
         for (c = 0; c < VGA_ROW_BYTES; c++) {
@@ -638,14 +638,14 @@ void show_pause_screen(void)
 
     /* Switch to visible page 0 + sprite table 0 (draw to page1). */
     set_display_page(0);
-    fun_9410_set_sprite_table(0);
+    set_sprite_table_ptr(0);
 
     /* Draw score + HUD icon row. */
     draw_number(score_lo, score_hi, 7, 0, 7);
     draw_icon_row();
 
     /* Restore draw page. */
-    fun_9410_set_sprite_table(1);
+    set_sprite_table_ptr(1);
     set_display_page(1);
 
     /* Wait for pause key (0x19) to be RELEASED before entering poll loop. */
@@ -653,9 +653,9 @@ void show_pause_screen(void)
         key_state = get_key_state(SCANCODE_PAUSE);
     } while (key_state != '\0');
 
-    /* Poll until resume key pressed (0x19) OR action input (fun_75a2_poll_action). */
+    /* Poll until resume key pressed (0x19) OR action input (read_input_action_byte). */
     while ((key_state = get_key_state(SCANCODE_PAUSE), key_state == '\0') &&
-           (quit_pressed = fun_75a2_poll_action(0), quit_pressed == '\0')) {
+           (quit_pressed = read_input_action_byte(0), quit_pressed == '\0')) {
         key_state = get_key_state(SCANCODE_CHEAT_1);
         if (key_state != '\0') {
             key_state = get_key_state(SCANCODE_CHEAT_2);
@@ -671,7 +671,7 @@ void show_pause_screen(void)
         do {
             key_state = get_key_state(SCANCODE_PAUSE);
         } while (key_state != '\0');
-        quit_pressed = fun_75a2_poll_action(0);
+        quit_pressed = read_input_action_byte(0);
     } while (quit_pressed != '\0');
 
     /* Build the restore-view descriptor (1:1 from decomp): source=0x9694:0x203b,

@@ -137,7 +137,9 @@ void play_contact_sound(void);           /* 1000:640c — PORTED (T4) */
 void play_exit_sound(void);              /* 1000:6305 — PORTED (T4) */
 void play_pickup_sound(void);            /* 1000:645d — PORTED (T4) */
 void play_event_sound_64c1(void);        /* 1000:64c1 — PORTED (T4) */
-void play_state_sound_79b9(void);        /* 1000:647e — PORTED (T4) */
+void play_state_sound_647e(void);        /* 1000:647e — PORTED (T4); name suffix corrected 2026-07-14
+                                             (was play_state_sound_79b9 — 0x79b9 is inside the
+                                             unrelated install_keyboard_isr, not this function). */
 
 /* PORTED (Phase-6 T4 — L2 device state machine). */
 void sound_select_device(void);                  /* 1000:6de3 — PORTED (T4) */

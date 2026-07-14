@@ -35,14 +35,14 @@
  * primitives").
  *
  * Ghidra provenance — palette pipeline:
- *   1000:7b93  fun_7b93_present_blank(buf_off, buf_seg, page)
+ *   1000:7b93  gfx_stage_image_palette_thunk(buf_off, buf_seg, page)
  *              thunk → 1ab9:0606 EGA / 0620 VGA palette-STAGE handler
  *              (palette_mode-dispatched via cmdvec_stage_palette_modes 0x5435).
  *              EGA: DS:SI = buf+0x23, rep movsw (8 words = 16 bytes, AC-index
  *              palette).  VGA: DS:SI = buf+0x33, ES:DI = *0x5311 + page*99 +
  *              0x33, rep movsw (0x18 words = 48 bytes).  Copies the
  *              decoded-image's graphics-overlay palette into the per-page slot.
- *   1000:7bca  fun_7bca_flip(page)
+ *   1000:7bca  gfx_upload_palette_to_dac_thunk(page)
  *              thunk → 1ab9:0662 EGA / 0677 VGA DAC/AC-UPLOAD handler
  *              (palette_mode-dispatched via cmdvec_upload_palette_modes 0x5441).
  *              EGA: INT 10h AX=1002h programs the 16 Attribute Controller
@@ -79,7 +79,7 @@ static u8 host_gfx_page_ac[2][16];
  * (VGA slot = null handler; see host_gfx_set_viewport).
  *
  * Declared here because these globals are only needed under #ifdef BUMPY_PLAYABLE:
- * the default BUMPY.EXE NOP stub for fun_7b4a never reaches them. */
+ * the default BUMPY.EXE NOP stub for gfx_set_viewport_thunk never reaches them. */
 u8 gfx_write_mode_flag_a;   /* DGROUP 0x541f */
 u8 gfx_write_mode_flag_b;   /* DGROUP 0x5420 */
 
@@ -98,7 +98,7 @@ u8 gfx_write_mode_flag_b;   /* DGROUP 0x5420 */
  * host_gfx_page_palette[page & 1] instead of the full descriptor slot — see
  * the fidelity note above.
  *
- * Called from fun_7b93_present_blank (screens.c) under #ifdef BUMPY_PLAYABLE. */
+ * Called from gfx_stage_image_palette_thunk (screens.c) under #ifdef BUMPY_PLAYABLE. */
 void host_gfx_stage_image_palette(u16 buf_off, u16 buf_seg, u16 page)
 {
     if (palette_mode == 1u) {                      /* EGA: 16 bytes from buf+0x23 */
@@ -145,7 +145,7 @@ void host_gfx_stage_image_palette(u16 buf_off, u16 buf_seg, u16 page)
  * The VGA (port,value) sequence is the hard contract the DAC port-write gate
  * validates; it must match vga_dac_upload_from_buffer (screens.c) byte-for-byte.
  *
- * Called from fun_7bca_flip (screens.c) under #ifdef BUMPY_PLAYABLE. */
+ * Called from gfx_upload_palette_to_dac_thunk (screens.c) under #ifdef BUMPY_PLAYABLE. */
 void host_gfx_upload_palette_to_dac(u16 page)
 {
     if (palette_mode == 1u) {
@@ -223,7 +223,7 @@ void host_gfx_upload_palette_to_dac(u16 page)
  * by an equivalent all-planes zero fill (Map-Mask=0x0F, write 0).  Recorded in docs/
  * reconstruction-fidelity.md ("playable host: graphics-overlay primitives").
  *
- * Called from fun_7b4a_view_blit (screens.c) under #ifdef BUMPY_PLAYABLE. */
+ * Called from gfx_set_viewport_thunk (screens.c) under #ifdef BUMPY_PLAYABLE. */
 void host_gfx_set_viewport(u8 __far *view, u16 seg)
 {
     u16 dx_t, dy_t, w_t, h_t;

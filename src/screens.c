@@ -155,13 +155,13 @@ void init_highscore_default_table(void)
  *  intentionally OMITTED (the player.c / items.c / anim.c / sound.c convention).
  *
  *  ── STUBBED LEAVES (faithful-signature; not re-driven here) ────────────────────
- *    FUN_1000_80ac (the unnamed B-side render leaf draw_hud_composite calls 7×) is
+ *    blit_view_masked (the unnamed B-side render leaf draw_hud_composite calls 7×) is
  *    already reconstructed as a faithful-signature stub in anim.c
- *    (anim_render_leaf_80ac) — the SAME engine function (1000:80ac); draw_hud_composite
+ *    (blit_view_masked) — the SAME engine function (1000:80ac); draw_hud_composite
  *    calls it through that symbol so BUMPY.EXE links it once (anim.obj).  Likewise
  *    blit_sprite (1000:942a) is anim.c's anim_blit_sprite_leaf.  The graphics-overlay
- *    text leaves draw_text_at forwards to — FUN_1000_9837 (1000:9837, a thunk to
- *    overlay 1ab9:1441 = SET TEXT POSITION) and FUN_1000_9804 (1000:9804, a thunk
+ *    text leaves draw_text_at forwards to — gfx_set_text_position_thunk (1000:9837, a thunk to
+ *    overlay 1ab9:1441 = SET TEXT POSITION) and draw_string_glyphs (1000:9804, a thunk
  *    to 1ab9:13ec = DRAW STRING / draw_string_glyphs) — are self-modifying overlay
  *    code with no decomp; the default build keeps faithful-signature no-op stubs
  *    HERE, the playable build routes them to host_render.c's host text model.
@@ -221,7 +221,7 @@ void level_intro_screen(void);              /* 1000:3852 (T5) */
 void show_level_intro_screen(void);         /* 1000:0d9d (T5) */
 u16  draw_name_entry_cursor(u8 col, u8 row, u16 frame, char do_blit); /* 1000:5fdb */
 
-/* render/text leaves (see header block).  FUN_80ac / blit_sprite are anim.c's
+/* render/text leaves (see header block).  blit_view_masked / blit_sprite are anim.c's
    faithful-signature stubs (the SAME engine fns); the graphics-overlay text leaves live here.
    (2026-07-02 misnomer fix: these were previously named text_clip_leaf_9837(clip_w,
    clip_h) / draw_string_glyphs_9804(x,y) — WRONG semantics.  The overlay disasm:
@@ -231,10 +231,10 @@ u16  draw_name_entry_cursor(u8 col, u8 row, u16 frame, char do_blit); /* 1000:5f
    bound at DGROUP 0x68a2 is blitted at the current text position, which advances
    by glyph width + font[4] per char).  The call-site arg ROUTING was already 1:1
    (9837 gets args 3/4, 9804 gets args 1/2) — only the names were wrong.) */
-void anim_render_leaf_80ac(u8 __far *view);       /* FUN_1000_80ac  1000:80ac (anim.obj) */
+void blit_view_masked(u8 __far *view);       /* blit_view_masked  1000:80ac (anim.obj) */
 void anim_blit_sprite_leaf(u16 obj_off, u16 obj_seg); /* blit_sprite 1000:942a (anim.obj) */
-void gfx_set_text_pos_9837(u16 x, u16 y);              /* 1000:9837 -> 1ab9:1441 */
-void gfx_draw_string_9804(u16 str_off, u16 str_seg);   /* 1000:9804 -> 1ab9:13ec */
+void gfx_set_text_position_thunk(u16 x, u16 y);              /* 1000:9837 -> 1ab9:1441 */
+void draw_string_glyphs(u16 str_off, u16 str_seg);   /* 1000:9804 -> 1ab9:13ec */
 
 #ifdef BUMPY_PLAYABLE
 /* Playable build: route to the host text primitives (host_render.c) — the text
@@ -244,14 +244,14 @@ void gfx_draw_string_9804(u16 str_off, u16 str_seg);   /* 1000:9804 -> 1ab9:13ec
  * colours 14/1, set by init_game_session_state via set_text_color / 1000:97c5). */
 extern void host_text_set_pos(u16 x, u16 y);              /* host/host_render.c */
 extern void host_text_draw_string(u16 str_off, u16 str_seg);
-void gfx_set_text_pos_9837(u16 x, u16 y)            { host_text_set_pos(x, y); }
-void gfx_draw_string_9804(u16 str_off, u16 str_seg) { host_text_draw_string(str_off, str_seg); }
+void gfx_set_text_position_thunk(u16 x, u16 y)            { host_text_set_pos(x, y); }
+void draw_string_glyphs(u16 str_off, u16 str_seg) { host_text_draw_string(str_off, str_seg); }
 #else
 /* RECONSTRUCTION FIDELITY: graphics-overlay text leaves — faithful-signature no-op stubs
    in the default build (self-modifying overlay; no clean decomp).  draw_text_at's
    call sites are preserved 1:1; the text pixels are the graphics overlay's. */
-void gfx_set_text_pos_9837(u16 x, u16 y)            { (void)x; (void)y; return; }
-void gfx_draw_string_9804(u16 str_off, u16 str_seg) { (void)str_off; (void)str_seg; return; }
+void gfx_set_text_position_thunk(u16 x, u16 y)            { (void)x; (void)y; return; }
+void draw_string_glyphs(u16 str_off, u16 str_seg) { (void)str_off; (void)str_seg; return; }
 #endif
 
 /* DS-stamped far-data segment for the HUD view descriptor (+0x12).  Default = the
@@ -269,16 +269,16 @@ extern u16 host_dgroup_seg(void);   /* host_render.c — loaded image's real DGR
 /* ════════════════════════════════════════════════════════════════════════════
  *  draw_text_at — 1000:07f0
  *  Render the NUL-terminated string at str_seg:str_off at text position (x, y):
- *  set the text position (FUN_9837 -> overlay 1ab9:1441, DGROUP 0x6942/0x6944)
- *  then draw the glyph string (FUN_9804 -> overlay 1ab9:13ec).  Disasm 07f0:
+ *  set the text position (gfx_set_text_position_thunk -> overlay 1ab9:1441, DGROUP 0x6942/0x6944)
+ *  then draw the glyph string (draw_string_glyphs -> overlay 1ab9:13ec).  Disasm 07f0:
  *  PUSH [BP+0xa];PUSH [BP+8];CALL 9837;  PUSH [BP+6];PUSH [BP+4];CALL 9804 —
  *  i.e. 9837(x=arg3, y=arg4) then 9804(str_off=arg1, str_seg=arg2).
  *  (Args 3/4 were previously misnamed clip_w/clip_h — see the leaf block above.)
  * ════════════════════════════════════════════════════════════════════════════ */
 void draw_text_at(u16 str_off, u16 str_seg, u16 x, u16 y)
 {
-    gfx_set_text_pos_9837(x, y);
-    gfx_draw_string_9804(str_off, str_seg);
+    gfx_set_text_position_thunk(x, y);
+    draw_string_glyphs(str_off, str_seg);
     return;
 }
 
@@ -372,7 +372,7 @@ void draw_number_sprites(u16 value_lo, u16 value_hi, u8 width, u16 base_x, u16 f
 /* ════════════════════════════════════════════════════════════════════════════
  *  draw_hud_composite — 1000:51d8
  *  Build the in-game status row (score / lives / level): fill the render_descriptor_ptr
- *  view struct (DAT_0574, 0x22 bytes; fields +2..+0x20) and call FUN_1000_80ac SEVEN
+ *  view struct (DAT_0574, 0x22 bytes; fields +2..+0x20) and call blit_view_masked SEVEN
  *  times — one 4-plane sprite-tile blit per HUD element.  The first fill sets all
  *  fields; each later fill mutates only the changed fields (src x/y at +6/+8, the
  *  tile-source far ptr at +0x10/+0x12, and the sub-extent / clip at +0x18/+0x1a /
@@ -398,14 +398,14 @@ void draw_hud_composite(void)
     d->subhandler = 0;                            /* subhandler (was mislabeled "clip x") */
     d->clip_w = 3;                            /* clip w */
     d->clip_h = 2;                            /* clip h */
-    anim_render_leaf_80ac(render_descriptor_ptr);
+    blit_view_masked(render_descriptor_ptr);
 
     /* fill 2 — src x=4, tile @0x9baf */
     d = (screen_view_desc __far *)render_descriptor_ptr;
     d->src_x = 4;
     d->blit_off = 0x9baf;
     d->blit_seg = SCREENS_DGROUP_RUNTIME_SEG;
-    anim_render_leaf_80ac(render_descriptor_ptr);
+    blit_view_masked(render_descriptor_ptr);
 
     /* fill 3 — src 0,8, tile @0x9eba, sub/clip 1×4 */
     d = (screen_view_desc __far *)render_descriptor_ptr;
@@ -417,14 +417,14 @@ void draw_hud_composite(void)
     d->sub_h = 4;
     d->clip_w = 1;
     d->clip_h = 4;
-    anim_render_leaf_80ac(render_descriptor_ptr);
+    blit_view_masked(render_descriptor_ptr);
 
     /* fill 4 — src y=3, tile @0x9fba */
     d = (screen_view_desc __far *)render_descriptor_ptr;
     d->src_y = 3;
     d->blit_off = 0x9fba;
     d->blit_seg = SCREENS_DGROUP_RUNTIME_SEG;
-    anim_render_leaf_80ac(render_descriptor_ptr);
+    blit_view_masked(render_descriptor_ptr);
 
     /* fill 5 — src 0,0xd, tile @0x8b88, sub/clip 6×2 */
     d = (screen_view_desc __far *)render_descriptor_ptr;
@@ -436,21 +436,21 @@ void draw_hud_composite(void)
     d->sub_h = 2;
     d->clip_w = 6;
     d->clip_h = 2;
-    anim_render_leaf_80ac(render_descriptor_ptr);
+    blit_view_masked(render_descriptor_ptr);
 
     /* fill 6 — src y=0x11, tile @0x824e */
     d = (screen_view_desc __far *)render_descriptor_ptr;
     d->src_y = 0x11;
     d->blit_off = 0x824e;
     d->blit_seg = SCREENS_DGROUP_RUNTIME_SEG;
-    anim_render_leaf_80ac(render_descriptor_ptr);
+    blit_view_masked(render_descriptor_ptr);
 
     /* fill 7 — src y=0x15, tile @0x8582 */
     d = (screen_view_desc __far *)render_descriptor_ptr;
     d->src_y = 0x15;
     d->blit_off = 0x8582;
     d->blit_seg = SCREENS_DGROUP_RUNTIME_SEG;
-    anim_render_leaf_80ac(render_descriptor_ptr);
+    blit_view_masked(render_descriptor_ptr);
     return;
 }
 
@@ -487,13 +487,13 @@ void draw_hud_composite(void)
  *  produced here and is the validated descriptor-level gate):
  *    restore_bg_view / present_frame / init_fullscreen_view_desc  (owned by
  *      gfx_overlay.c / game_stubs.c — extern, NOT redefined here);
- *    FUN_1000_7b93 / FUN_1000_7bca / FUN_1000_7b4a (the per-step view-blit) /
- *      FUN_1000_9410 (set_sprite_table_ptr trampoline) — graphics-overlay leaves, stubbed;
+ *    gfx_stage_image_palette_thunk / gfx_upload_palette_to_dac_thunk / gfx_set_viewport_thunk (the per-step view-blit) /
+ *      set_sprite_table_ptr (set_sprite_table_ptr trampoline) — graphics-overlay leaves, stubbed;
  *    blit_sprite (1000:942a) routed through anim.c's anim_blit_sprite_leaf (same
  *      engine fn, linked once in anim.obj — zero dup);
- *    wait_keypress / poll_input / FUN_1000_75a2 — input path (poll_input is input.c
- *      reconstructed; wait_keypress is game_stubs.c; FUN_75a2 stubbed here).  The host
- *      seeds the scripted input sequence (the captured FUN_75a2 return stream) so the
+ *    wait_keypress / poll_input / read_input_action_byte — input path (poll_input is input.c
+ *      reconstructed; wait_keypress is game_stubs.c; read_input_action_byte stubbed here).  The host
+ *      seeds the scripted input sequence (the captured read_input_action_byte return stream) so the
  *      menu / state-machine loops progress exactly as the engine did.
  *    show_highscore_screen / enter_password — TASK 5 (highscore); stubbed
  *      (show_highscore_screen owned by game_stubs.c — extern; enter_password
@@ -575,7 +575,7 @@ extern void present_frame(u8 page);                       /* game_stubs.c / host
 extern void init_fullscreen_view_desc(u8 mode, u8 flag);  /* game_stubs.c            */
 extern void wait_keypress(void);                          /* game_stubs.c 1000:328f  */
 extern void poll_input(void);                             /* input.c    1000:1dde    */
-extern char fun_75a2_poll_action(u8 arg);                 /* FUN_1000_75a2 (input.c/stub) */
+extern char read_input_action_byte(u8 arg);             /* 1000:75a2 (input.c/stub) */
 extern void set_resource_table(u16 off, u16 seg);         /* game_stubs.c            */
 
 /* ── unowned leaves (no other definition in the src tree) — faithful-signature stubs
@@ -586,10 +586,10 @@ u32  read_chunked(int handle, u16 buf_off, u16 buf_seg, u16 len_off, u16 len_seg
 void c_close(int handle);
 void vec_decode(u16 buf_off, u16 buf_seg, u32 size, u16 arg, u16 flag);
 void process_sprites(u16 buf_off, u16 buf_seg);
-void fun_7b93_present_blank(u16 buf_off, u16 buf_seg, u16 flag);  /* FUN_1000_7b93    */
-void fun_7bca_flip(u8 page);                              /* FUN_1000_7bca           */
-void fun_7b4a_view_blit(u8 __far *view, u16 seg);         /* FUN_1000_7b4a (per-step) */
-void fun_9410_set_sprite_table(u16 arg);                  /* FUN_1000_9410           */
+void gfx_stage_image_palette_thunk(u16 buf_off, u16 buf_seg, u16 flag);  /* gfx_stage_image_palette_thunk    */
+void gfx_upload_palette_to_dac_thunk(u8 page);                              /* gfx_upload_palette_to_dac_thunk           */
+void gfx_set_viewport_thunk(u8 __far *view, u16 seg);         /* gfx_set_viewport_thunk (per-step) */
+void set_sprite_table_ptr(u16 arg);                  /* set_sprite_table_ptr           */
 void play_intro_animation_loop(void);                     /* 1000:30dd (intro anim)  */
 void wait_50_frames(void);                                /* per-frame idle leaf     */
 void vga_dac_upload_from_buffer(u8 __far *img_buf);       /* mode-2 VGA-DAC handler   */
@@ -627,38 +627,38 @@ void process_sprites(u16 buf_off, u16 buf_seg) { sprite_proc_dispatch(buf_off, b
 #endif
 #ifdef BUMPY_PLAYABLE
 /* Playable build: route to host palette-stage primitive (host_gfx.c).
- * fun_7b93 thunk (1000:7b93) dispatches into graphics overlay 1ab9:0620, which
+ * gfx_stage_image_palette_thunk (1000:7b93) dispatches into graphics overlay 1ab9:0620, which
  * copies 48 bytes from [buf_seg:buf_off]+0x33 into the per-page palette slot.
  * 'flag' is the page index.  RECONSTRUCTION FIDELITY: see host/host_gfx.h. */
-void fun_7b93_present_blank(u16 buf_off, u16 buf_seg, u16 flag)
+void gfx_stage_image_palette_thunk(u16 buf_off, u16 buf_seg, u16 flag)
 { host_gfx_stage_image_palette(buf_off, buf_seg, flag); }
 #else
-void fun_7b93_present_blank(u16 buf_off, u16 buf_seg, u16 flag)
+void gfx_stage_image_palette_thunk(u16 buf_off, u16 buf_seg, u16 flag)
 { (void)buf_off; (void)buf_seg; (void)flag; }
 #endif
 #ifdef BUMPY_PLAYABLE
 /* Playable build: route to host DAC-upload primitive (host_gfx.c).
- * fun_7bca thunk (1000:7bca) dispatches into graphics overlay 1ab9:0677, which
+ * gfx_upload_palette_to_dac_thunk (1000:7bca) dispatches into graphics overlay 1ab9:0677, which
  * writes host_gfx_page_palette[page & 1] to VGA DAC ports 0x3c8/0x3c9.
  * RECONSTRUCTION FIDELITY: see host/host_gfx.h. */
-void fun_7bca_flip(u8 page) { host_gfx_upload_palette_to_dac(page); }
+void gfx_upload_palette_to_dac_thunk(u8 page) { host_gfx_upload_palette_to_dac(page); }
 #else
-void fun_7bca_flip(u8 page) { (void)page; }
+void gfx_upload_palette_to_dac_thunk(u8 page) { (void)page; }
 #endif
 #ifdef BUMPY_PLAYABLE
 /* Playable build: route to host clip/viewport primitive (host_gfx.c).
- * fun_7b4a thunk (1000:7b4a, Ghidra: gfx_set_viewport_thunk, formerly blit_view_step)
+ * gfx_set_viewport_thunk (1000:7b4a, formerly named blit_view_step)
  * dispatches into graphics overlay 1ab9:0179 (gfx_init_viewport): writes CONSTANT clip
  * extents view[+0x18]=0x14, view[+0x1a]=0x19; sets gfx_write_mode_flag_a=2/b=1;
  * VGA dispatch slot 0x4dda[2]=0x0000 -> NULL -> no pixel blit.
  * Called from the iris loop (play_iris_wipe_transition) and all screen builders;
  * on VGA the visible iris = timed hold + blank-palette upload, NOT a geometric shrink.
  * RECONSTRUCTION FIDELITY: see host/host_gfx.h (host_gfx_set_viewport). */
-void fun_7b4a_view_blit(u8 __far *view, u16 seg) { host_gfx_set_viewport(view, seg); }
+void gfx_set_viewport_thunk(u8 __far *view, u16 seg) { host_gfx_set_viewport(view, seg); }
 #else
-void fun_7b4a_view_blit(u8 __far *view, u16 seg) { (void)view; (void)seg; }
+void gfx_set_viewport_thunk(u8 __far *view, u16 seg) { (void)view; (void)seg; }
 #endif
-/* fun_9410_set_sprite_table (1000:9410 → 1cec:2dd2 set_sprite_table_ptr): select the
+/* set_sprite_table_ptr (1000:9410 → 1cec:2dd2 set_sprite_table_ptr): select the
  * sprite draw page — cur_sprite_data := &sprite_table_base[arg] (DGROUP 0x5415;
  * [0]=a200, [1]=a000, swapped by each present).  The UI screens bracket their draws
  * with (0)…(1): the menu/highscore/pause UI draws onto slot 0 — the page the mode-11
@@ -666,13 +666,13 @@ void fun_7b4a_view_blit(u8 __far *view, u16 seg) { (void)view; (void)seg; }
  * (the engine has NO cursor save-under).  Leaving this a NOP under the real
  * page-flip present re-baked the stale arrow every frame (2026-07-02 regression). */
 #ifdef BUMPY_PLAYABLE
-void fun_9410_set_sprite_table(u16 arg)
+void set_sprite_table_ptr(u16 arg)
 {
     extern void host_set_draw_page(u8 index);   /* host/host_render.c */
     host_set_draw_page((u8)arg);
 }
 #else
-void fun_9410_set_sprite_table(u16 arg) { (void)arg; }
+void set_sprite_table_ptr(u16 arg) { (void)arg; }
 #endif
 /* ── play_intro_animation_loop (1000:30dd) — title-screen music + wait-for-FIRE ─────
  *  Called by show_title_background (after it presents resource 2, the title image).  Loads
@@ -847,7 +847,7 @@ void vga_dac_upload_from_buffer(u8 __far *img_buf)
  *  handler is 2036:0015 — a VERTICAL-RETRACE (vsync) WAIT (`mov dx,0x3da; in al,dx;
  *  test al,8`: wait for the retrace to START, then to END).  It is NOT a DAC upload:
  *  the old names (upload_vga_dac_palette / dispatch_by_palette_mode) were MISNOMERS.
- *  The genuine DAC upload happens earlier via fun_7bca_flip -> host_gfx_upload_palette_
+ *  The genuine DAC upload happens earlier via gfx_upload_palette_to_dac_thunk -> host_gfx_upload_palette_
  *  to_dac (and the standalone modelled writer vga_dac_upload_from_buffer).
  *
  *  RECONSTRUCTION FIDELITY: the overlay handler table at 0x6976 is runtime-populated by
@@ -885,8 +885,8 @@ void wait_vretrace_thunk(void)
  *  stepping the blit-view rect inward (10 steps, 4 view-blits + 4 DAC uploads per
  *  step), then clear it.  The descriptor RECT SWEEP (fields +0x14/+0x16/+0x1e/+0x20
  *  and the +0xe/+0x1c/+0x22..+0x25 setup) is reconstructed 1:1; the per-step view-blit
- *  (FUN_7b4a) + present (FUN_7b93/7bca) are stubbed graphics-overlay leaves; the captured
- *  DAC sequence is emitted by FUN_7b4a's faded palette (see the carve-out note).
+ *  (gfx_set_viewport_thunk) + present (gfx_stage_image_palette_thunk/gfx_upload_palette_to_dac_thunk) are stubbed graphics-overlay leaves; the captured
+ *  DAC sequence is emitted by gfx_set_viewport_thunk's faded palette (see the carve-out note).
  * ════════════════════════════════════════════════════════════════════════════ */
 void play_iris_wipe_transition(void)
 {
@@ -911,20 +911,20 @@ void play_iris_wipe_transition(void)
         d->dest_y = (u16)step;
         d->clip_w = (u16)right_edge;
         d->clip_h = 1;
-        fun_7b4a_view_blit(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
+        gfx_set_viewport_thunk(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
         wait_vretrace_thunk();
         *(u16 __far *)(render_descriptor_ptr + 0x16) = 0x18 - (u16)step;
-        fun_7b4a_view_blit(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
+        gfx_set_viewport_thunk(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
         wait_vretrace_thunk();
         right_edge = right_edge - 2;
         d = (screen_view_desc __far *)render_descriptor_ptr;
         d->dest_y = (u16)step;
         d->clip_w = 1;
         d->clip_h = (u16)bottom_edge;
-        fun_7b4a_view_blit(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
+        gfx_set_viewport_thunk(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
         wait_vretrace_thunk();
         *(u16 __far *)(render_descriptor_ptr + 0x14) = 0x13 - (u16)step;
-        fun_7b4a_view_blit(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
+        gfx_set_viewport_thunk(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
         wait_vretrace_thunk();
         bottom_edge = bottom_edge - 2;
     }
@@ -933,14 +933,14 @@ void play_iris_wipe_transition(void)
         for (clear_idx = 0; clear_idx < 0x32; clear_idx = clear_idx + 1) {
             blank_tiles[clear_idx] = 0;
         }
-        /* FUN_7b93(&blank_tiles, SS, 0) — present the blanked tile strip.
+        /* gfx_stage_image_palette_thunk(&blank_tiles, SS, 0) — present the blanked tile strip.
            RECONSTRUCTION FIDELITY: the original passes the STACK segment (unaff_SS)
            for this stack-local buffer; passing DGROUP here read a garbage palette
            (blank_tiles' SS offset interpreted in DGROUP) so the iris fade staged a
            non-black palette.  Use blank_tiles' real far segment/offset. */
-        fun_7b93_present_blank(FP_OFF(blank_tiles), FP_SEG(blank_tiles), 0);
+        gfx_stage_image_palette_thunk(FP_OFF(blank_tiles), FP_SEG(blank_tiles), 0);
     }
-    fun_7bca_flip(0);
+    gfx_upload_palette_to_dac_thunk(0);
     wait_vretrace_thunk();
     return;
 }
@@ -1070,8 +1070,8 @@ void show_title_background(void)
     d->clip_w = 0x14;
     d->clip_h = 0x19;
     restore_bg_view(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
-    fun_7b93_present_blank(fullscreen_buf, fullscreen_buf_seg, 0);
-    fun_7bca_flip(0);
+    gfx_stage_image_palette_thunk(fullscreen_buf, fullscreen_buf_seg, 0);
+    gfx_upload_palette_to_dac_thunk(0);
     present_frame(1);
     wait_vretrace_thunk();
     play_intro_animation_loop();
@@ -1144,8 +1144,8 @@ void show_title_and_init(void)
     d->clip_w = 0x14;
     d->clip_h = 0x19;
     restore_bg_view(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
-    fun_7b93_present_blank(fullscreen_buf, fullscreen_buf_seg, 0);
-    fun_7bca_flip(0);
+    gfx_stage_image_palette_thunk(fullscreen_buf, fullscreen_buf_seg, 0);
+    gfx_upload_palette_to_dac_thunk(0);
     present_frame(1);
     wait_vretrace_thunk();
     input_state = 0;
@@ -1197,7 +1197,7 @@ u8 run_main_menu(void)
     if (palette_mode == 1) {
         patch_image_palette(dgroup_pal_patch_64a);
     }
-    fun_9410_set_sprite_table(0);
+    set_sprite_table_ptr(0);
     /* p1_sprite[3..4] = source far ptr (DAT_6c2c:6c2e) — the menu sprite source. */
     p = (u16 __far *)p1_sprite;
     p[3] = 0x6c2c;                      /* DAT_203b_6c2c (off; placeholder seed) */
@@ -1219,8 +1219,8 @@ u8 run_main_menu(void)
     d->clip_w = 0x14;
     d->clip_h = 0x19;
     restore_bg_view(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
-    fun_7b93_present_blank(fullscreen_buf, fullscreen_buf_seg, 0);
-    fun_7bca_flip(0);
+    gfx_stage_image_palette_thunk(fullscreen_buf, fullscreen_buf_seg, 0);
+    gfx_upload_palette_to_dac_thunk(0);
     while (selected_item == 0xff) {
         /* draw the option-2 sub-image strip (the cycling option's label). */
         d = (screen_view_desc __far *)render_descriptor_ptr;
@@ -1281,7 +1281,7 @@ u8 run_main_menu(void)
         }
         input_state = 0;
         do {
-            key = fun_75a2_poll_action(0);
+            key = read_input_action_byte(0);
         } while (key != '\0');
     }
     timing_flag_accumulator = menu_timing[menu_option2_setting];
@@ -1289,7 +1289,7 @@ u8 run_main_menu(void)
     p = (u16 __far *)p1_sprite;
     *(u16 __far *)(p1_sprite + 0x06) = 0xa0c6;                      /* off (placeholder) */
     *(u16 __far *)(p1_sprite + 0x08) = SCREENS_DGROUP_RUNTIME_SEG;  /* seg */
-    fun_9410_set_sprite_table(1);
+    set_sprite_table_ptr(1);
     return selected_item;
 }
 
@@ -1338,7 +1338,7 @@ void show_menu_select_screen(void)
     }
 #endif
     set_resource_table(0x928, SCREENS_DGROUP_RUNTIME_SEG);
-    fun_9410_set_sprite_table(0);
+    set_sprite_table_ptr(0);
     fullscreen_img_buf   = fullscreen_buf;
     highscore_bg_buf_seg = fullscreen_buf_seg;
     res_handle = open_resource(3, 4);
@@ -1348,8 +1348,8 @@ void show_menu_select_screen(void)
         patch_image_palette(dgroup_pal_patch_71e);
     }
     play_iris_wipe_transition();
-    fun_7b93_present_blank(fullscreen_buf, fullscreen_buf_seg, 0);
-    fun_7bca_flip(0);
+    gfx_stage_image_palette_thunk(fullscreen_buf, fullscreen_buf_seg, 0);
+    gfx_upload_palette_to_dac_thunk(0);
     wait_vretrace_thunk();
     /* show_menu_select composes NO background (unlike show_highscore_screen's
      * restore_bg_view): it draws "ENTER YOUR PASSWORD" + the entry field as sprite
@@ -1362,7 +1362,7 @@ void show_menu_select_screen(void)
      * the iris alone clears the code screen (nonzero VGA bytes 1799, vs 36921 for the
      * old un-cleared menu bleed).  (An earlier reconstruction inserted an invented
      * host_vga_clear_display() here on the mistaken premise that the iris was a
-     * palette-only blank and fun_7b4a a null no-op; the real primitive supersedes it.) */
+     * palette-only blank and gfx_set_viewport_thunk a null no-op; the real primitive supersedes it.) */
     /* row 1 (19 glyphs) at y=0x10. */
     col_pos = 0;
     p = (u16 __far *)p1_sprite;
@@ -1411,7 +1411,7 @@ void show_menu_select_screen(void)
     for (char_idx = 0; char_idx < 3; char_idx = char_idx + 1) {
         wait_50_frames();
     }
-    fun_9410_set_sprite_table(0);
+    set_sprite_table_ptr(0);
     return;
 }
 
@@ -1434,12 +1434,12 @@ void show_menu_select_screen(void)
  *
  *  ── NAME-ENTRY STATE MACHINES (the SEMANTIC gate) ──────────────────────────────
  *  highscore_enter_name (59d3) and enter_password (5c87) are the interactive
- *  text-input loops: each polls the engine's ONE input primitive FUN_1000_75a2
+ *  text-input loops: each polls the engine's ONE input primitive read_input_action_byte
  *  (DIRECTLY, not via poll_input), and on the action bits 1=left / 2=right (cycle the
  *  current letter through 0x1ad..0x1cf) / 4=prev char / 8=next char / 0x10=done builds
  *  the name buffer one cursor position at a time, drawing the blinking cursor via
- *  draw_name_entry_cursor (5fdb).  The host replays the captured FUN_75a2 return stream
- *  (the v3 input script) through fun_75a2_poll_action in FIFO lockstep — the engine's
+ *  draw_name_entry_cursor (5fdb).  The host replays the captured read_input_action_byte
+ *  return stream (the v3 input script) in FIFO lockstep — the engine's
  *  real input path — so the cursor walk + name-buffer edits reproduce host-side.  The
  *  validated SEMANTIC output is the screen-global SCRSNAP (incl. the 0x8f0 row-0 entry)
  *  + the AX return (enter_password's table-match index / void AL leftover).
@@ -1469,8 +1469,8 @@ void show_menu_select_screen(void)
  *  ── SEEDED resource load / STUBBED render leaves (as T4) ──────────────────────────
  *  open_resource / read_chunked / c_close / vec_decode are SEEDED faithful-signature
  *  stubs (already defined in the T4 block); the decoded image is host-seeded.  The
- *  per-screen builders' render-core leaves (restore_bg_view, FUN_7b93/7bca, present,
- *  blit_sprite via anim_blit_sprite_leaf, FUN_7b4a) stay stubbed; their observable
+ *  per-screen builders' render-core leaves (restore_bg_view, gfx_stage_image_palette_thunk/gfx_upload_palette_to_dac_thunk, present,
+ *  blit_sprite via anim_blit_sprite_leaf, gfx_set_viewport_thunk) stay stubbed; their observable
  *  output — the render_descriptor_ptr view struct + the p1_sprite descriptor — IS
  *  produced here and is the validated DESCRIPTOR-LEVEL gate.
  * ──────────────────────────────────────────────────────────────────────────────── */
@@ -1820,14 +1820,14 @@ void init_password_table(void)
  *  draw_name_entry_cursor — 1000:5fdb
  *  Position + draw the name-entry cursor sprite at (col,row) with glyph `frame`;
  *  optionally blit; advance 8 frames.  Disasm 5fdb: view[+0x14]=row;
- *  FUN_7b4a(view); p1[2]=frame; *p1=row<<4; p1[1]=col; if(do_blit) blit_sprite; run_n_frames(8).
+ *  gfx_set_viewport_thunk(view); p1[2]=frame; *p1=row<<4; p1[1]=col; if(do_blit) blit_sprite; run_n_frames(8).
  * ════════════════════════════════════════════════════════════════════════════ */
 u16 draw_name_entry_cursor(u8 col, u8 row, u16 frame, char do_blit)
 {
     u16 __far *p;
 
     *(u16 __far *)(render_descriptor_ptr + 0x14) = (u16)row;
-    fun_7b4a_view_blit(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
+    gfx_set_viewport_thunk(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
     p = (u16 __far *)p1_sprite;
     p[2] = frame;
     *(u16 __far *)p1_sprite = (u16)row << 4;
@@ -1848,7 +1848,7 @@ u16 draw_name_entry_cursor(u8 col, u8 row, u16 frame, char do_blit)
  *  highscore_enter_name — 1000:59d3
  *  The interactive 8-char name-entry state machine for table row `row`.  Sets up the
  *  name far ptr (highscore_entry_ptr -> 0x203b:(row*8+0x8f0)), seeds the first char to
- *  'A', then loops: poll FUN_75a2; bit 1=left/2=right cycle the current letter through
+ *  'A', then loops: poll read_input_action_byte; bit 1=left/2=right cycle the current letter through
  *  0x1ad..0x1cf (wrapping the gap at 0x1d0 -> 0x1a3, mapping '.' 0x2e -> '[' 0x5b for
  *  display); 4=prev char / 8=next char move the cursor (writing the chosen letter into
  *  the name buffer); else blink the cursor; 0x10=done exits.  Disasm 59d3.
@@ -1872,7 +1872,7 @@ void highscore_enter_name(u8 row)
     *(u16 __far *)(render_descriptor_ptr + 0x16) = (u16)row * 2 + 8;
     blink_counter = 0;
     draw_name_entry_cursor((u8)(row * 0x10 + 'A'), 0, letter_code, 1);
-    while ((input_flags = (u8)fun_75a2_poll_action(0)), (input_flags & 0x10) != 0x10) {
+    while ((input_flags = (u8)read_input_action_byte(0)), (input_flags & 0x10) != 0x10) {
         name = (u8 __far *)MK_FP(highscore_entry_ptr[1], highscore_entry_ptr[0]);
         if (((input_flags & 1) == 0) || ((int)letter_code < 0x1ad)) {
             if (((input_flags & 2) == 0) || (0x1cf < (int)letter_code)) {
@@ -1882,7 +1882,7 @@ void highscore_enter_name(u8 row)
                         if ((blink_counter & 8) == 0) {
                             anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
                         } else {
-                            fun_7b4a_view_blit(render_descriptor_ptr,
+                            gfx_set_viewport_thunk(render_descriptor_ptr,
                                                SCREENS_DGROUP_RUNTIME_SEG);
                         }
                         run_n_frames(1);
@@ -1969,7 +1969,7 @@ void render_highscore_table(void)
     u16 __far *p;
     u8 __far *name;
 
-    fun_9410_set_sprite_table(0);
+    set_sprite_table_ptr(0);
     qualified = '\0';
     insert_row = 0;
     for (row_idx = 0; row_idx < 7; row_idx = row_idx + 1) {
@@ -2029,7 +2029,7 @@ void render_highscore_table(void)
     } else {
         highscore_enter_name(insert_row);
     }
-    fun_9410_set_sprite_table(1);
+    set_sprite_table_ptr(1);
     return;
 }
 
@@ -2071,8 +2071,8 @@ void show_highscore_screen(void)
     d->clip_w = 0x14;
     d->clip_h = 0x19;
     restore_bg_view(render_descriptor_ptr, SCREENS_DGROUP_RUNTIME_SEG);
-    fun_7b93_present_blank(fullscreen_buf, fullscreen_buf_seg, 0);
-    fun_7bca_flip(0);
+    gfx_stage_image_palette_thunk(fullscreen_buf, fullscreen_buf_seg, 0);
+    gfx_upload_palette_to_dac_thunk(0);
     present_frame(1);
     wait_vretrace_thunk();
     d = (screen_view_desc __far *)render_descriptor_ptr;
@@ -2087,7 +2087,7 @@ void show_highscore_screen(void)
  *  enter_password — 1000:5c87
  *  The interactive 6-char menu-select name-entry state machine.  fmemcpy a 6-char
  *  SS-local buffer from DGROUP 0x256a (reconstructed as the module-static
- *  enter_name_buf), seeds it to 'A', then loops polling FUN_75a2 (same letter-cycle /
+ *  enter_name_buf), seeds it to 'A', then loops polling read_input_action_byte (same letter-cycle /
  *  cursor-move bits as highscore_enter_name, cursor max 5 here).  On 0x10=done it
  *  compares the 6-char buffer against the 8-entry name table at DGROUP 0x135c and
  *  returns the matched index + 2 (or 0).  Args: param_1=col (x), param_2=row (y).
@@ -2125,7 +2125,7 @@ u8 enter_password(u8 col, u8 row)
     *(u16 __far *)(render_descriptor_ptr + 0x16) = (u16)col << 1;
     draw_name_entry_cursor((u8)(col << 4), row, cur_letter, 1);
     while (1) {
-        input_flags = (u8)fun_75a2_poll_action(0);
+        input_flags = (u8)read_input_action_byte(0);
         if ((input_flags & 0x10) == 0x10) {
             break;
         }
@@ -2137,7 +2137,7 @@ u8 enter_password(u8 col, u8 row)
                         if ((blink_counter & 8) == 0) {
                             anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
                         } else {
-                            fun_7b4a_view_blit(render_descriptor_ptr,
+                            gfx_set_viewport_thunk(render_descriptor_ptr,
                                                SCREENS_DGROUP_RUNTIME_SEG);
                         }
                         run_n_frames(1);
@@ -2227,7 +2227,7 @@ u8 enter_password(u8 col, u8 row)
  *  show_level_intro_screen — 1000:0d9d
  *  Load + display the fullscreen image (resource 3), set the palette, render a name
  *  string (SS-local fmemcpy'd) + the current_level name (DGROUP table 0x1354) as sprite
- *  glyphs, then wait until input bit 0x10 (via FUN_75a2).  Disasm 0d9d.
+ *  glyphs, then wait until input bit 0x10 (via read_input_action_byte).  Disasm 0d9d.
  *
  *  RECONSTRUCTION FIDELITY: the row-1 name string + the per-level name table are engine
  *  DGROUP data (fmemcpy'd into SS-locals / read from 0x1354); reconstructed as module
@@ -2247,7 +2247,7 @@ void show_level_intro_screen(void)
     u8 __far *level_name;
 
     set_resource_table(0x928, SCREENS_DGROUP_RUNTIME_SEG);
-    fun_9410_set_sprite_table(0);
+    set_sprite_table_ptr(0);
     fullscreen_img_buf   = fullscreen_buf;
     highscore_bg_buf_seg = fullscreen_buf_seg;
     res_handle = open_resource(3, 4);
@@ -2257,8 +2257,8 @@ void show_level_intro_screen(void)
         patch_image_palette(dgroup_pal_patch_71e);
     }
     play_iris_wipe_transition();
-    fun_7b93_present_blank(fullscreen_img_buf, highscore_bg_buf_seg, 0);
-    fun_7bca_flip(0);
+    gfx_stage_image_palette_thunk(fullscreen_img_buf, highscore_bg_buf_seg, 0);
+    gfx_upload_palette_to_dac_thunk(0);
     wait_vretrace_thunk();
     /* row 1 (13 glyphs) at y=0x50, starting col 4. */
     col_pos = 4;
@@ -2286,9 +2286,9 @@ void show_level_intro_screen(void)
         col_pos = col_pos + 1;
     }
     do {
-        glyph_ch = (u8)fun_75a2_poll_action(0);
+        glyph_ch = (u8)read_input_action_byte(0);
     } while ((glyph_ch & 0x10) == 0);
-    fun_9410_set_sprite_table(0);
+    set_sprite_table_ptr(0);
     set_resource_table(0x90, SCREENS_DGROUP_RUNTIME_SEG);
     return;
 }
@@ -2347,18 +2347,18 @@ void level_intro_screen(void)
     }
 #ifdef BUMPY_PLAYABLE
     /* Draw the overworld-entry iris on the DISPLAYED slot (0), like every other iris
-     * (run_main_menu / show_menu_select_screen bracket theirs with fun_9410(0)).  Without
+     * (run_main_menu / show_menu_select_screen bracket theirs with set_sprite_table_ptr(0)).  Without
      * this the iris inherited the gameplay draw slot (1 = hidden) from run_main_menu's
-     * trailing fun_9410(1), so whether the wipe was visible depended on the host page-flip
+     * trailing set_sprite_table_ptr(1), so whether the wipe was visible depended on the host page-flip
      * parity (host_render.c host_fb_init re-anchors the CRTC display to slot 0 per level so
      * this is now deterministic).  Restore slot 1 immediately after so the composition +
      * overworld walk below (and the mode-11 view-sync at init_fullscreen_view_desc) run on
      * the gameplay draw page exactly as before — the view-sync freeze fix is untouched.
-     * Host-only: the default build's fun_9410 is a NOP, and the page model is host-specific;
+     * Host-only: the default build's set_sprite_table_ptr is a NOP, and the page model is host-specific;
      * gated so the faithful decomp stays byte-identical.  RECONSTRUCTION FIDELITY noted. */
-    fun_9410_set_sprite_table(0);
+    set_sprite_table_ptr(0);
     play_iris_wipe_transition();
-    fun_9410_set_sprite_table(1);
+    set_sprite_table_ptr(1);
 #else
     play_iris_wipe_transition();
 #endif
@@ -2380,13 +2380,13 @@ void level_intro_screen(void)
     draw_icon_row();
     play_anim_sequence();
     current_entity_index = saved_entity_index;
-    fun_7b93_present_blank(fullscreen_buf, fullscreen_buf_seg, 0);
+    gfx_stage_image_palette_thunk(fullscreen_buf, fullscreen_buf_seg, 0);
     p1_pixel_x = p1_start_x;
     p1_pixel_y = p1_start_y;
     p1_move_anim = 0x21;
     init_fullscreen_view_desc(1, 0);
     draw_p1_sprite();
-    fun_7bca_flip(0);
+    gfx_upload_palette_to_dac_thunk(0);
     present_frame(1);
     wait_vretrace_thunk();
     p1_update_grid_cell();

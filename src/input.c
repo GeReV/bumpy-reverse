@@ -16,7 +16,7 @@
  * The engine path this module documents (per tick, driven by the game loop):
  *     input_state_clear();              // 1000:65d2  input_state = 0
  *     ... poll_input();                 // 1000:1dde  read action -> input_state
- * where poll_input -> read_input_action (FUN_1000_75a2, 1000:75a2) interprets a
+ * where poll_input -> read_input_action (1000:75a2) interprets a
  * per-joystick action-bytecode script that ORs key-down output values together.
  *
  * ── RECONSTRUCTION FIDELITY (module-wide deviations) ────────────────────────────
@@ -449,7 +449,7 @@ void poll_joystick_state(void)
 
 
 /*
- * read_input_action — FUN_1000_75a2 @ 1000:75a2
+ * read_input_action — 1000:75a2
  *
  * Interprets the per-joystick action-bytecode script g_joystick_handler_table[idx]
  * (a far pointer).  Two phases:
@@ -560,12 +560,12 @@ void wait_keypress(void)
     }
 }
 
-/* ── fun_75a2_poll_action (1000:75a2) ───────────────────────────────────────────
- * fun_75a2_poll_action IS read_input_action — exposed under the Ghidra-address
- * carve-out name that screens.c / game_stubs.c reference.  Routes to the faithful
+/* ── read_input_action_byte (1000:75a2) ─────────────────────────────────────────
+ * u8/char-width adapter over read_input_action (same engine address) for the
+ * narrower callers in screens.c / game_stubs.c.  Routes to the faithful
  * interpreter; for all existing call sites arg is effectively 0 (handler 0 = the
  * keyboard script). */
-char fun_75a2_poll_action(u8 arg)
+char read_input_action_byte(u8 arg)
 {
     return (char)read_input_action((u16)arg);
 }

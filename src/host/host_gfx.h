@@ -31,7 +31,7 @@
  * (16-colour 6-bit palette) from [buf_seg:buf_off]+0x33 into
  * host_gfx_page_palette[page & 1].
  *
- * Called from fun_7b93_present_blank (screens.c) under #ifdef BUMPY_PLAYABLE.
+ * Called from gfx_stage_image_palette_thunk (screens.c) under #ifdef BUMPY_PLAYABLE.
  * RECONSTRUCTION FIDELITY: the engine slots the palette into *0x5311+page*99+
  * 0x23 (EGA) / +0x33 (VGA); the host uses two-entry side-stores instead (see
  * host_gfx.c). */
@@ -45,7 +45,7 @@ void host_gfx_stage_image_palette(u16 buf_off, u16 buf_seg, u16 page);
  * [page & 1] and emits the canonical VGA-DAC write sequence (OUT 0x3c8=0,
  * 8×RGB; OUT 0x3c8=0x10, 8×RGB).
  *
- * Called from fun_7bca_flip (screens.c) under #ifdef BUMPY_PLAYABLE.
+ * Called from gfx_upload_palette_to_dac_thunk (screens.c) under #ifdef BUMPY_PLAYABLE.
  * The VGA (port,value) sequence is the hard contract the DAC gate validates. */
 void host_gfx_upload_palette_to_dac(u16 page);
 
@@ -75,7 +75,7 @@ extern u8 gfx_write_mode_flag_b;   /* DGROUP 0x5420 */
  * per-step iris rect unconsumed on VGA; iris visible via timed hold + palette path.
  * Deviation recorded in docs/reconstruction-fidelity.md + faithfulness-gap-audit.md §1.
  *
- * Called from fun_7b4a_view_blit (screens.c) under #ifdef BUMPY_PLAYABLE.
+ * Called from gfx_set_viewport_thunk (screens.c) under #ifdef BUMPY_PLAYABLE.
  * `seg` is the DGROUP segment (already encoded in the far ptr `view`; unused here). */
 void host_gfx_set_viewport(u8 __far *view, u16 seg);
 

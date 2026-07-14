@@ -41,8 +41,12 @@ midi_emit_voice_msg_w{2,1,3} · `922c` seq_set_channel_param · `8ea3` opl_event
 
 ### Display / render / engine glue
 `9804` draw_string_glyphs · `9814` set_active_display_page · `9821` set_crtc_window ·
-`97c5` set_palette_display_mode · `97a4`/`97f1` init_display_controller_{a,b} ·
-`80ac` blit_view_masked · `7b4a` blit_view_step · `9410` set_sprite_table_ptr ·
+`97c5` set_palette_display_mode · `97a4` sound_device_select_screen_thunk (thunk into
+`202c:0000` sound_device_select_screen — NOT a display/video function; corrected
+2026-07-14, was misattributed as init_display_controller_a/detect_video_adapter) ·
+`97f1` gfx_draw_sequence_thunk (was init_display_controller_b) ·
+`80ac` blit_view_masked · `7b4a` gfx_set_viewport_thunk (was blit_view_step) ·
+`9410` set_sprite_table_ptr ·
 `7563` init_sound_tables · `75a2` read_input_action · `629c` game_post_present ·
 `233a` game_post_input · `7fef` timer_teardown_restore.
 
@@ -66,7 +70,9 @@ dos_select_disk_wrap · `74c3` dos_chdir_wrap · `74d4` noop_empty_74d4.
 `809e` overlay_thunk_cd82 (→ `1cd5`) · `93a4` prng_seed_thunk · `93c8` gfx_set_mode_11_thunk ·
 `93e2`/`93f2`/`93fc`/`9406` palette_dispatch_*_thunk · `941a` prepare_sprite_frames_thunk ·
 `9424` build_bit_reverse_lut_thunk · `97d5` gfx_set_current_object_thunk ·
-`97f7` draw_char_glyph_thunk · `9837` gfx_text_clip_thunk · `9854` measure_string_width_thunk ·
+`97f7` draw_char_glyph_thunk · `9837` gfx_set_text_position_thunk (was gfx_text_clip_thunk —
+corrected 2026-07-14; forwards to gfx_set_text_position, does not clip) ·
+`9854` measure_string_width_thunk ·
 `9438` ret_thunk_9438 · `9376`/`9390` `maybe_`overlay_thunk (→ unanalyzed `1cda` targets) ·
 `9847` `maybe_`gfx_text_thunk_1458.
 

@@ -325,10 +325,10 @@ u8  p1_latched_action;   /* DGROUP — latched action index into the land-sound 
  *   0x05 move_walk_right_anim_step(0x2423) 0x0a enter_mode_0b_jump_start(0x2470)
  *   0x0b move_anim_step_to_mode0c(0x248e)  0x0c move_step_check_walkable(0x24d7)
  *   0x0d move_step_dispatch_input(0x250a)  0x0e teleport_to_next_exit_tile(0x25ad)
- *   0x10,0x2c FUN_1000_22b0(0x22b0, T4)    0x1c p1_input_dispatch_bit10(0x4344)
- *   0x1d..0x20 FUN_1000_4437(0x4437)       0x2d run_physics_settle_wrap(0x22c1, T4)
+ *   0x10,0x2c game_mode_handler_idx10(0x22b0, T4)    0x1c p1_input_dispatch_bit10(0x4344)
+ *   0x1d..0x20 game_mode_handler_idx1d(0x4437)       0x2d run_physics_settle_wrap(0x22c1, T4)
  *   0x2e advance_physics_freeze(0x22d2)    0x2f land_on_tile_below(0x2810)
- *   0x30 FUN_1000_1e3d(0x1e3d)
+ *   0x30 game_mode_handler_idx30(0x1e3d)
  *
  * RECONSTRUCTION FIDELITY: the engine stores 2-byte NEAR code offsets (the table
  * is in the same code segment as the handlers).  We reconstruct it as a C array
@@ -355,7 +355,7 @@ void (*game_mode_handlers[64])(void) = {
     /* 0x0d */ move_step_dispatch_input,       /* → T6c */
     /* 0x0e */ teleport_to_next_exit_tile,     /* → T6c */
     /* 0x0f */ gamemode_03_move,
-    /* 0x10 */ FUN_1000_22b0,                  /* → T6c */
+    /* 0x10 */ game_mode_handler_idx10,                  /* → T6c */
     /* 0x11 */ gamemode_default_idle,
     /* 0x12 */ gamemode_default_idle,
     /* 0x13 */ gamemode_default_idle,
@@ -368,10 +368,10 @@ void (*game_mode_handlers[64])(void) = {
     /* 0x1a */ gamemode_default_idle,
     /* 0x1b */ gamemode_default_idle,
     /* 0x1c */ p1_input_dispatch_bit10,        /* → T6c */
-    /* 0x1d */ FUN_1000_4437,                  /* → T6c */
-    /* 0x1e */ FUN_1000_4437,                  /* → T6c */
-    /* 0x1f */ FUN_1000_4437,                  /* → T6c */
-    /* 0x20 */ FUN_1000_4437,                  /* → T6c */
+    /* 0x1d */ game_mode_handler_idx1d,                  /* → T6c */
+    /* 0x1e */ game_mode_handler_idx1d,                  /* → T6c */
+    /* 0x1f */ game_mode_handler_idx1d,                  /* → T6c */
+    /* 0x20 */ game_mode_handler_idx1d,                  /* → T6c */
     /* 0x21 */ gamemode_21_start,
     /* 0x22 */ gamemode_22,
     /* 0x23 */ gamemode_23_walk,
@@ -383,11 +383,11 @@ void (*game_mode_handlers[64])(void) = {
     /* 0x29 */ gamemode_default_idle,
     /* 0x2a */ gamemode_default_idle,
     /* 0x2b */ gamemode_default_idle,
-    /* 0x2c */ FUN_1000_22b0,                  /* → T6c */
+    /* 0x2c */ game_mode_handler_idx10,                  /* → T6c */
     /* 0x2d */ run_physics_settle_wrap,        /* 1000:22c1 (Phase-2 T4) */
     /* 0x2e */ advance_physics_freeze,         /* → T6c */
     /* 0x2f */ land_on_tile_below,             /* → T6c */
-    /* 0x30 */ FUN_1000_1e3d,                  /* → T6c */
+    /* 0x30 */ game_mode_handler_idx30,                  /* → T6c */
     /* 0x31 */ gamemode_default_idle,
     /* 0x32 */ gamemode_default_idle,
     /* 0x33 */ gamemode_default_idle,
@@ -1018,7 +1018,7 @@ void move_down(void)
  * --------------------------------------------------------------------------
  * Final left/right/down dispatch from idle: left(4)→p1_move_left; right(8)→
  * p1_move_right; else branch on the pending tile action — 0x0a→p1_handle_move_input,
- * 0x0f→FUN_1000_4802, else check_tile_below_ladder_or_land.  All of the called
+ * 0x0f→move_step_teleport_exit, else check_tile_below_ladder_or_land.  All of the called
  * leaves READ the tilemap to resolve the move → Task 6c.
  */
 void handle_move_input(void)
@@ -1028,7 +1028,7 @@ void handle_move_input(void)
             if (p1_pending_action == 0x0a) {
                 p1_handle_move_input();
             } else if (p1_pending_action == 0x0f) {
-                FUN_1000_4802();
+                move_step_teleport_exit();
             } else {
                 check_tile_below_ladder_or_land();
             }
@@ -1761,7 +1761,7 @@ void check_tile_below_ladder_or_land(void)
  *    - apply_cell_animation (1000:69aa)      — anim-channel / FX allocator  (→ Phase 5)
  *    - play_sound (1000:6e11)                — sound playback                (→ Phase 6)
  *    - apply_contact_action                  — contact sound + anim-slot     (→ Phase 5/6)
- *    - FUN_1000_4802 / FUN_1000_22b0         — teleport / settle-wrap leaves (extern)
+ *    - move_step_teleport_exit / game_mode_handler_idx10         — teleport / settle-wrap leaves (extern)
  *    - read_tile_at_cell / read_tile_layer_contact — tile leaves (already in T6c)
  *  Each remains an extern declared in player.h; the physics globals each substate
  *  writes (px/py/anim/mode/cell/input/steps) are reconstructed 1:1, which is what
@@ -2037,10 +2037,10 @@ void run_physics_settle_wrap(void)
     return;
 }
 
-/* FUN_1000_22b0 — 1000:22b0   (game_mode_handlers[0x10]/[0x2c]; also called by
+/* game_mode_handler_idx10 — 1000:22b0   (game_mode_handlers[0x10]/[0x2c]; also called by
  * move_down_step for pending-action 0x12/0x1f).  Byte-identical to
  * run_physics_settle_wrap: calls run_physics_settle, discards the return. */
-void FUN_1000_22b0(void)
+void game_mode_handler_idx10(void)
 {
     run_physics_settle();
     return;
@@ -2937,8 +2937,8 @@ void p1_exec_pending_action(void)
  * jump_step_counter (== move_step_count, DGROUP 0x824c); on the 9th step relocate
  * the view cell-8 and trigger FX 0x24, then enter mode 0x0d and dispatch.
  *
- * RECONSTRUCTION FIDELITY: FUN_1000_4802 (pending==0x0f teleport leaf) and
- * FUN_1000_22b0 (settle-wrap) stay extern stubs; the trailing dispatch_move_step()
+ * RECONSTRUCTION FIDELITY: move_step_teleport_exit (pending==0x0f teleport leaf) and
+ * game_mode_handler_idx10 (settle-wrap) stay extern stubs; the trailing dispatch_move_step()
  * call-through routes a RAW engine offset on the host, so the harness drives this
  * substate via its delegate-route accounting, not a host call-through of dispatch. */
 void move_down_step(void)
@@ -2946,9 +2946,9 @@ void move_down_step(void)
     u8 sound_id;
 
     if (p1_pending_action == 0x0f) {
-        FUN_1000_4802();
+        move_step_teleport_exit();
     } else if (p1_pending_action == 0x12 || p1_pending_action == 0x1f) {
-        FUN_1000_22b0();
+        game_mode_handler_idx10();
     }
     input_state_mask_1d();
     if (sound_device_state == 4) {
@@ -3002,7 +3002,7 @@ void (*move_step_handler_for_offset(u16 off))(void)
     case 0x6372: return check_exit_tile_vert;
     case 0x640c: return play_contact_sound;
     case 0x645d: return play_pickup_sound;
-    case 0x647e: return play_state_sound_79b9;
+    case 0x647e: return play_state_sound_647e;
     case 0x64c1: return play_event_sound_64c1;
     case 0x64e2: return cursor_move_up;
     case 0x64ff: return cursor_move_down;
@@ -3700,7 +3700,7 @@ void p1_try_move_down(void)
  * p1_try_move_left — 1000:44c0
  * --------------------------------------------------------------------------
  * P1 move-left handler.  At the left edge of the row (column counter == 0)
- * there is no cell to the left, so route to FUN_1000_43ef (the try-right /
+ * there is no cell to the left, so route to p1_input_router_bit08 (the try-right /
  * settle-idle input router).  Otherwise look at the cell to the left
  * (cell - 1): if that cell is solid, OR it has ground support one row below,
  * commit the step (p1_commit_left); if it is free AND unsupported, start the
@@ -3718,7 +3718,7 @@ void p1_try_move_left(void)
     u8 left_solid;
 
     if (p1_step_col_count == 0) {                            /* 0x855e */
-        FUN_1000_43ef();
+        p1_input_router_bit08();
     } else {
         left_solid = p1_cell_solid((u8)(p1_cell + 0xff));       /* cell - 1 */
         if (left_solid == 0) {
@@ -3878,7 +3878,7 @@ void p1_input_dispatch_bit04(void)
  * --------------------------------------------------------------------------
  * Reached from p1_input_dispatch_bit02 once down(2) is clear.  If left(4) is
  * held, commit a left move (p1_try_move_left); otherwise fall through to the
- * ladder terminal FUN_1000_43ef (checks right(8) → p1_try_move_right, else
+ * ladder terminal p1_input_router_bit08 (checks right(8) → p1_try_move_right, else
  * settles idle via p1_settle_idle).  Pure dispatch — touches only input_state.
  *
  * (Borland stack-check prologue omitted — non-semantic compiler guard.)
@@ -3886,7 +3886,7 @@ void p1_input_dispatch_bit04(void)
 void p1_input_dispatch_bit04b(void)
 {
     if ((input_state & 4) == 0) {
-        FUN_1000_43ef();
+        p1_input_router_bit08();
     } else {
         p1_try_move_left();
     }
@@ -3894,17 +3894,16 @@ void p1_input_dispatch_bit04b(void)
 }
 
 /*
- * FUN_1000_43ef — 1000:43ef   (P1 input ladder tail: right/idle router)
+ * p1_input_router_bit08 — 1000:43ef   (P1 input ladder tail: right/idle router)
  * --------------------------------------------------------------------------
  * Final rung of the P1 input-dispatch ladder (reached from p1_input_dispatch_bit04b
  * when the left bit is clear, and from p1_try_move_left at the left edge).  If the
  * right bit (input_state & 8) is clear there is no held direction -> settle to idle
  * (p1_settle_idle, 1000:440c); otherwise attempt the right step (p1_try_move_right,
- * 1000:4532).  Unnamed in the Ghidra corpus; kept as FUN_1000_43ef since the
- * reconstructed callers reference it by that label.
+ * 1000:4532).
  * (Borland stack-check prologue omitted — non-semantic compiler guard.)
  */
-void FUN_1000_43ef(void)
+void p1_input_router_bit08(void)
 {
     if ((input_state & 8) == 0) {
         p1_settle_idle();

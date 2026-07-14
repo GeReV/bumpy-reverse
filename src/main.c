@@ -70,7 +70,7 @@
  * title appears), which writes palette_mode and only then drops into mode 0x0D.
  * The playable host now calls that same gfx_driver_init() FIRST (see below),
  * so an F2 (EGA, palette_mode=1) or F3 (VGA, palette_mode=2) choice is live
- * and carries through to gameplay.  init_display_97a4 (host_video.c) only
+ * and carries through to gameplay.  sound_device_select_screen_thunk (host_video.c) only
  * GUARDS the selection: it sets palette_mode = 2 (VGA) solely as the default
  * when nothing has selected it yet, and never overwrites a live F2/EGA choice.
  * VGA remains the default and the most-validated path; EGA is reachable via F2.

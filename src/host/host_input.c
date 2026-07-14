@@ -13,7 +13,7 @@
  *
  *   host_keyboard_isr    — real INT9 handler: fills g_key_state_table
  *   wait_keypress        — spin on poll_input() until input_state != 0
- *   fun_75a2_poll_action — action-poll primitive (calls read_input_action(0))
+ *   read_input_action_byte — action-poll primitive (calls read_input_action(0))
  *   restore_keyboard_isr — teardown: restore the old INT9 vector
  *
  * RECONSTRUCTION FIDELITY — INT9 ISR (HOST CHOSEN, DOCUMENTED DEVIATION)
@@ -128,7 +128,7 @@ void restore_keyboard_isr(void)
     }
 }
 
-/* wait_keypress (1000:1de1) and fun_75a2_poll_action (1000:75a2) are engine input
+/* wait_keypress (1000:1de1) and read_input_action_byte (1000:75a2) are engine input
  * logic, not host platform glue — relocated to src/input.c (next to poll_input /
  * read_input_action, which they call). */
 

@@ -12,8 +12,9 @@
  * ============================================================================
  *
  * Implements the hardware init leaves that were skeletons in the Task-1 stub:
- *   init_display_97a4   — int 10h VGA mode 0x0D set
- *   init_display_97f1   — CRTC window + palette init (post mode-set fixup)
+ *   sound_device_select_screen_thunk — int 10h VGA mode 0x0D set (see its own note:
+ *                          real engine target is the sound-device menu, not video)
+ *   gfx_draw_sequence_thunk  — CRTC window + palette init (post mode-set fixup)
  *   init_crtc_window    — program CRTC Start Address for two-page layout
  *   set_display_page    — CRTC Start Address page flip (0=page0, 1=page1)
  *   clear_viewport      — zero host_framebuffer + both VGA pages
@@ -67,29 +68,36 @@
 #define CRTC_PAGE0_ADDR  0x0000u
 #define CRTC_PAGE1_ADDR  0x2000u
 
-/* ── init_display_97a4 (1000:97a4) ─────────────────────────────────────────────
+/* ── sound_device_select_screen_thunk (1000:97a4) ──────────────────────────────
  * Set VGA video mode 0x0D (320×200×16, 4-plane EGA/VGA) via BIOS int 10h.
  * AH=0x00, AL=0x0D → mode set; clears display + resets CRTC.
  *
- * RECONSTRUCTION FIDELITY — ATTRIBUTION CORRECTED (audit 2026-06-28):
- * 1000:97a4 (FUN_1000_97a4) is NOT a BIOS mode-set — it is a near-thunk to
- * detect_video_adapter (202c:0000), an adapter PROBE (int 10h/int 21h + the
- * DAT_203b_689e capability flags) that stores an adapter/mode code (0x8000/0/1/4)
- * at ram 0x26c4c, selecting the CGA vs EGA/VGA branch.  In the real engine the
- * VGA mode-0x0D set is done by the graphics overlay's init, and the probe/driver
- * init establishes palette_mode (DGROUP 0x541d) — runtime capture: 2 (EGA/VGA).
+ * RECONSTRUCTION FIDELITY — ATTRIBUTION CORRECTED (audit 2026-06-28; NAME
+ * CORRECTED 2026-07-14):
+ * 1000:97a4 is NOT a BIOS mode-set — it is a near-thunk to sound_device_select_screen
+ * (202c:0000), the F5..F8 "NO SOUND / PC BASE / ADLIB / MT32" boot menu that stores
+ * the chosen sound_device_state (0x8000/0/1/4).  The 2026-06-28 audit correctly
+ * identified this as a thunk to something other than a BIOS mode-set, but
+ * misattributed the target as a "detect_video_adapter" adapter probe — it is the
+ * sound-device menu (same {0x8000,0,1,4} value set the old note misread as a video
+ * adapter/mode code); config_screens.c's sound_device_select_screen is the real 1:1
+ * reconstruction, called directly from main.c, not through this thunk slot.
+ * Video-adapter/palette_mode selection is a SEPARATE engine screen, gfx_driver_init
+ * (1ab9:02ce, sound_device_select_screen's "twin"), also called from main.c — this
+ * thunk slot never reaches it.
  * The host folds the platform mode-0x0D set into this boot slot as a NECESSITY
- * (there is no live BIOS/graphics-overlay init to do it); the probe itself is a
- * no-op on the host.  UPDATED 2026-07-11 (Task 6): palette_mode=2 is no longer
- * forced unconditionally here — the playable's gfx_driver_init() (config_screens.c)
- * now runs earlier in boot and sets a live palette_mode from the player's F2/F3
- * choice (1=EGA, 2=VGA); this slot only supplies 2 as the DEFAULT when nothing
- * selected it yet, so it never overwrites that choice.  (palette_mode was previously set —
- * to 14! — by the misnomered set_palette_mode/97c5, which is really the graphics-overlay
+ * (there is no live BIOS/graphics-overlay init to do it); the real sound-device
+ * menu is a no-op on this slot (it already ran earlier via main.c).  UPDATED
+ * 2026-07-11 (Task 6): palette_mode=2 is no longer forced unconditionally here —
+ * the playable's gfx_driver_init() (config_screens.c) now runs earlier in boot and
+ * sets a live palette_mode from the player's F2/F3 choice (1=EGA, 2=VGA); this slot
+ * only supplies 2 as the DEFAULT when nothing selected it yet, so it never
+ * overwrites that choice.  (palette_mode was previously set — to 14! — by the
+ * misnomered set_palette_mode/97c5, which is really the graphics-overlay
  * set-text-colour op; see set_text_color below.)  NOTE: this INT 10h mode set
  * resets the CRTC start address to 0 — the boot page parity is programmed
- * AFTER it, by init_display_97f1 (host_crtc_set_start). */
-void init_display_97a4(void)
+ * AFTER it, by gfx_draw_sequence_thunk (host_crtc_set_start). */
+void sound_device_select_screen_thunk(void)
 {
     union REGS r;
     r.h.ah = 0x00u;
@@ -113,7 +121,7 @@ void init_display_97a4(void)
  * (DGROUP 0x6936/0x6938/0x693a/0x693c = x0,y0,x1,y1).  It does NOT touch the
  * CRTC.  A prior host body programmed the CRTC Start Address here — that was an
  * invention, and FATAL for the boot page parity: init_game_session_state calls
- * this with (0, 0, 0x13f, 199) AFTER init_display_97f1, so the invented
+ * this with (0, 0, 0x13f, 199) AFTER gfx_draw_sequence_thunk, so the invented
  * `start = arg b = 0` write clobbered the 0x2000 boot-parity start and inverted
  * `displayed == page[table[0]]` for the whole session (the §8.1 menu-arrow
  * hidden-page bug).  Host: the clip window is not modelled (the reconstructed
@@ -163,7 +171,7 @@ static void host_crtc_set_start(u16 start)
  * MISNOMER CORRECTED: this function was previously named `set_palette_mode`
  * and its host body wrote `palette_mode = mode` (= 14!) — 97c5 never touches
  * palette_mode (DGROUP 0x541d; runtime capture shows 2, written by the graphics-overlay
- * init — see init_display_97a4).  That mismodel is what made the host
+ * init — see sound_device_select_screen_thunk).  That mismodel is what made the host
  * glyph blitter assume white (15) — near-BLACK in the world-1 level palette —
  * for the pause-overlay score (§8.2).  Host: store the colours for the
  * host_text_* glyph path (host_render.c). */
@@ -239,7 +247,7 @@ void load_palette(u16 src_off, u16 src_seg)
 
     cur = level_packed_palette();
     if (cur == (const u8 __far *)0) {
-        return;   /* no level loaded yet (e.g. boot-time init_display_97f1) — faithful NOP */
+        return;   /* no level loaded yet (e.g. boot-time gfx_draw_sequence_thunk) — faithful NOP */
     }
 
     if (palette_mode == 1u) {
@@ -290,7 +298,7 @@ void apply_level_palette(void)
     load_palette(0x578u, ENGINE_STATIC_DGROUP_SEG);
 }
 
-/* ── init_display_97f1 (1000:97f1) ─────────────────────────────────────────────
+/* ── gfx_draw_sequence_thunk (1000:97f1) ─────────────────────────────────────────────
  * Post-mode-set video fixup: establishes the CRTC two-page window and uploads
  * the initial DAC palette (so the screen is not black on first entry).
  * Calls init_crtc_window with page0=0x0000, page1=0x2000 to set up the double-
@@ -317,7 +325,7 @@ static void host_set_gfx_attribute_palette(void)
     outp(ATTR_PORT, 0x20u);            /* bit5=1: re-enable video output */
 }
 
-void init_display_97f1(void)
+void gfx_draw_sequence_thunk(void)
 {
     /* Engine 1000:97f1 → overlay 1ab9:137b gfx_draw_sequence (runtime-relocated
      * disasm, 2026-07-03): text pos = (10,10) [op 1441]; clip window

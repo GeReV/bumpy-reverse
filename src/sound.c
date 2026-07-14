@@ -550,10 +550,10 @@ u16 schedule_timer_callback_c(u16 param_1, u16 param_2)
  *  0x276e/0x278e/0x26ce/0x26fe).  Owned here; no other TU defines them.
  *
  *  STILL-STUBBED callees these wrappers reach (faithful-signature, not validated state):
- *    FUN_1000_6183 (1000:6183) — an out-of-scope entity-management sweep play_contact_sound
+ *    sweep_active_entities (1000:6183) — an out-of-scope entity-management sweep play_contact_sound
  *        calls for contact codes 0xe..0x11; not a sound fn (→ entity subsystem).  STUBBED.
  *    p1_try_trigger_pending_action (1000:654e) — RECONSTRUCTED in player.c (Phase-2);
- *        play_state_sound_79b9 calls it (not stubbed — the real symbol links).
+ *        play_state_sound_647e calls it (not stubbed — the real symbol links).
  *
  *  L2 DEVICE STATE.  sound_select_device -> snddrv_init (guard sound_init_state 0x557a)
  *  -> select_sound_device_from_mask scans the detected-device bitmask and latches the
@@ -682,13 +682,13 @@ u16 snddrv_init_substep(void)
  *  opl_set_note_params (1000:9241, reconstructed below) tail-calls it before storing the
  *  note params.  All four already carry canonical Ghidra names from a prior naming pass;
  *  none is reconstructed here (genuinely out of scope — separate future MIDI-engine
- *  work), matching the FUN_1000_6183 / pit_set_counter0 precedent. */
+ *  work), matching the sweep_active_entities / pit_set_counter0 precedent. */
 extern void seq_set_channel_param(void);     /* 1000:922c — OPL/PC-spk program-change (carve) */
 extern void midi_emit_voice_msg_w1(void);    /* 1000:8b81 — OPL program-change entry (carve), reached from opl_set_note_params (D1) */
 extern void midi_emit_voice_msg_w3(void);    /* 1000:8e93 — OPL program-change fwd chain (carve) */
 extern void opl_event_note_on(void);         /* 1000:8ea3 — OPL note-on -> opl_play_note (carve) */
 
-extern void FUN_1000_6183(void);          /* 1000:6183   out-of-scope entity sweep (→ entity) */
+extern void sweep_active_entities(void);          /* 1000:6183   out-of-scope entity sweep (→ entity) */
 
 /* ── timer_teardown_restore (1000:7fef) — PORTED (Task A3): int-8/int-0Fh vector teardown ─
  *  Register-entry (no stack args — confirmed via disasm: AX/CX/DX are read directly,
@@ -1171,7 +1171,7 @@ void play_action_sound(void)
 
 /* ── play_contact_sound (1000:640c) ──────────────────────────────────────────────
  *  Look up the sound id for p1_contact_code (OPL table 0x276e if device==4 else std
- *  0x278e); if non-zero, play it.  For contact codes 0xe..0x11 also runs FUN_1000_6183
+ *  0x278e); if non-zero, play it.  For contact codes 0xe..0x11 also runs sweep_active_entities
  *  (an out-of-scope entity sweep, STUBBED). */
 void play_contact_sound(void)
 {
@@ -1186,7 +1186,7 @@ void play_contact_sound(void)
         play_sound(sound_id);
     }
     if ((0xd < p1_contact_code) && (p1_contact_code < 0x12)) {
-        FUN_1000_6183();
+        sweep_active_entities();
     }
 }
 
@@ -1232,11 +1232,11 @@ void play_event_sound_64c1(void)
     play_sound(sound_id);
 }
 
-/* ── play_state_sound_79b9 (1000:647e) ───────────────────────────────────────────
+/* ── play_state_sound_647e (1000:647e) ───────────────────────────────────────────
  *  Look up the sound id for the tile-below-player state (OPL table 0x26ce if device==4
  *  else std 0x26fe), indexed by tile_below_player; if non-zero, play it; then run
  *  p1_try_trigger_pending_action (1000:654e, RECONSTRUCTED in player.c). */
-void play_state_sound_79b9(void)
+void play_state_sound_647e(void)
 {
     u8 sound_id;
 

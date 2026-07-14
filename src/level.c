@@ -606,11 +606,11 @@ const u8 __far *level_packed_palette(void)
        The old deferral rationale ("shared with the overworld palette, which runs
        before cur_level_ptr is set") was wrong: this accessor's ONLY caller is
        host_video.c load_palette, reached from (a) apply_level_palette in the round
-       loop — always AFTER load_current_level_data — and (b) init_display_97f1 at
+       loop — always AFTER load_current_level_data — and (b) gfx_draw_sequence_thunk at
        boot, where cur_level_ptr is still NULL and the NULL guard below no-ops
        exactly as it did for the old g_dec_buf==NULL case.  The overworld/world-map
-       palette flows through host_gfx_stage_image_palette + fun_7bca_flip instead
-       and never touches this accessor. */
+       palette flows through host_gfx_stage_image_palette + gfx_upload_palette_to_dac_thunk
+       instead and never touches this accessor. */
     if (cur_level_ptr == (u8 __far *)0) {
         return (const u8 __far *)0;
     }

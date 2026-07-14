@@ -332,7 +332,7 @@ void step_anim_channels_b(void)
  *
  *  RECONSTRUCTION FIDELITY: the engine leaves are real far-call wrappers —
  *    restore_bg_view  (1000:80bc), render_player_view (1000:93b8),
- *    blit_sprite      (1000:942a), and the unnamed B-side render leaf FUN_1000_80ac
+ *    blit_sprite      (1000:942a), and the unnamed B-side render leaf blit_view_masked
  *    (1000:80ac) — each taking ONE far-ptr / a (off,seg) pair on the engine stack
  *    (e.g. draw_a: `PUSH [0x8d6]; PUSH [0x8d4]; CALL 0x80bc`).  Phase-0 already
  *    reconstructed restore_bg_view / render_player_view as BEHAVIOR-FAITHFUL
@@ -347,13 +347,13 @@ void step_anim_channels_b(void)
  *    output of the four wrappers — the VIEW-DESCRIPTOR field writes and the
  *    p1_sprite (0x792e pointee) blit-descriptor bytes — IS produced here and is the
  *    validated descriptor-level gate (tools/anim_chan_ctest.c §DESCRIPTOR, over the
- *    already plane-exact blitter underneath).  FUN_1000_80ac stays a faithful-
+ *    already plane-exact blitter underneath).  blit_view_masked stays a faithful-
  *    signature stub of the unnamed B-side render leaf (no clean decomp; do not
  *    invent a body).  Phase-0 render core is left UNTOUCHED. */
 void anim_restore_bg_view_leaf(u8 __far *view);   /* restore_bg_view   1000:80bc */
 void anim_render_view_leaf(u8 __far *view);       /* render_player_view 1000:93b8 */
 void anim_blit_sprite_leaf(u16 obj_off, u16 obj_seg); /* blit_sprite   1000:942a */
-void anim_render_leaf_80ac(u8 __far *view);       /* FUN_1000_80ac     1000:80ac */
+void blit_view_masked(u8 __far *view);       /* blit_view_masked     1000:80ac */
 
 #ifdef BUMPY_PLAYABLE
 /* Faithful layer-B masked save-under (host_render.c, task B): erase each channel-B
@@ -376,7 +376,7 @@ void anim_blit_sprite_leaf(u16 obj_off, u16 obj_seg)
 {
     (void)obj_off; (void)obj_seg; return;
 }
-void anim_render_leaf_80ac(u8 __far *view)     { (void)view; return; }
+void blit_view_masked(u8 __far *view)     { (void)view; return; }
 #endif /* !BUMPY_PLAYABLE */
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -468,7 +468,7 @@ void draw_anim_channels_a(void)
  *  work-buffer ptr (channel_idx*0x100)+0x7e3e.  The if/else shadow alternation is
  *  ported VERBATIM (cell&1 selects which order the 0x9eba/0x9fba pre-pass runs).
  *
- *  NOTE (B view0 0x8c8): the engine pre-renders view0 with FUN_1000_80ac BEFORE
+ *  NOTE (B view0 0x8c8): the engine pre-renders view0 with blit_view_masked BEFORE
  *  writing view1; view1 (0x8cc) is then written multiply with leaf calls between.
  *  Each [+2]/[+4] far-data write + leaf call mirrors the asm exactly.
  *  See the LEAF-stub FIDELITY note above.
@@ -497,7 +497,7 @@ void draw_anim_channels_b(void)
             view = anim_b_view0;
             *(u16 __far *)(view + 6) = x;
             *(u16 __far *)(view + 8) = y;
-            anim_render_leaf_80ac(anim_b_view0);
+            blit_view_masked(anim_b_view0);
 
             /* ── view1 (0x8cc) shadow/mask pre-pass (cell&1 selects order) ─────── */
             view = anim_b_view1;
@@ -509,13 +509,13 @@ void draw_anim_channels_b(void)
                 view = anim_b_view1;
                 *(u16 __far *)(view + 2) = 0x9eba;
                 *(u16 __far *)(view + 4) = ANIM_DGROUP_RUNTIME_SEG;
-                anim_render_leaf_80ac(anim_b_view1);
+                blit_view_masked(anim_b_view1);
                 view = anim_b_view1;
                 *(u16 __far *)(view + 2) = 0x9fba;
             } else {
                 *(u16 __far *)(view + 2) = 0x9fba;
                 *(u16 __far *)(view + 4) = ANIM_DGROUP_RUNTIME_SEG;
-                anim_render_leaf_80ac(anim_b_view1);
+                blit_view_masked(anim_b_view1);
                 view = anim_b_view1;
                 *(u16 __far *)(view + 2) = 0x9eba;
             }

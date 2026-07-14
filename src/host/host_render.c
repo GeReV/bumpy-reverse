@@ -786,7 +786,7 @@ void anim_restore_bg_view_leaf(u8 __far *view)
                whose EXTENT is view+0x0a (width) × view+0x0c (height) tiles and whose SOURCE is a
                pre-composited layer-B shadow (DGROUP 0x9eba/0x9fba for the sprite pass, 0x8888 for
                the bg pass — see gfx_overlay.c restore_bg_view).  The host never populates those
-               shadows: the render/mask pass anim_render_leaf_80ac (blit_view_masked/gfx_set_mode_00)
+               shadows: the render/mask pass blit_view_masked (thunks to gfx_set_mode_00)
                is a NOP because the engine's composited double-buffer is single-page-vestigial here.
                With no shadow to blit, the host instead REPAINTS THE CLEAN TILE BACKGROUND over the
                B cell — the SAME mechanism the layer-A erase (anim_a_erase_view) uses — restoring the
@@ -963,13 +963,15 @@ void host_compose_bg_view(u8 __far *view)
 }
 
 /* ── Out-of-scope HUD / text render leaves (faithful-signature stubs) ───────────
- *   FUN_1000_80ac (B-side render leaf, no clean decomp) has no reconstructed
- *   work-buffer body; the engine's HUD/text path is out of scope for the keystone
- *   gameplay compose.  Kept a faithful NOP so the screens.c / anim.c call sites
- *   stay byte-faithful (same convention as the default build's game_stubs leaves).
- *   The graphics-overlay text leaves (gfx_set_text_pos_9837 / gfx_draw_string_9804) live in
- *   screens.c — NOPs in the default build, routed to host_text_* below when playable. */
-void anim_render_leaf_80ac(u8 __far *view)        { (void)view; }
+ *   blit_view_masked (1000:80ac, a thunk into gfx_set_mode_00 — the self-modifying
+ *   masked-composite mode dispatcher) has no reconstructed work-buffer body; the
+ *   engine's HUD/text path is out of scope for the keystone gameplay compose.  Kept
+ *   a faithful NOP so the screens.c / anim.c call sites stay byte-faithful (same
+ *   convention as the default build's game_stubs leaves).
+ *   The graphics-overlay text leaves (gfx_set_text_position_thunk / draw_string_glyphs)
+ *   live in screens.c — NOPs in the default build, routed to host_text_* below when
+ *   playable. */
+void blit_view_masked(u8 __far *view)        { (void)view; }
 
 /* ── Menu / level-select cursor bank (FLECHE.BIN) ──────────────────────────────
  *   The menu cursor arrow is a SEPARATE sprite resource (engine resource 9 ->
