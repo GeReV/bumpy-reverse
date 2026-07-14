@@ -25,6 +25,7 @@ note in [formats/README.md](formats/README.md).
 |-----|-------|
 | [tinyprog.md](tinyprog.md) | The TinyProg executable-packing format (CRC-keyed anti-tamper + LZSS) |
 | [copy-protection.md](copy-protection.md) | The copy-protection mechanism (platform-number challenge + protection data files) |
+| [building.md](building.md) | Building the reconstruction — the Open Watcom toolchain, the faithful `BUMPY.EXE` and playable `BUMPYP.EXE` targets, and the build harness |
 | [data-files.md](data-files.md) | Data-file inventory, resource descriptor tables, and the load pipeline |
 | [engine.md](engine.md) | Engine internals: game loop, two-player pipeline, physics state machine, anim channels |
 | [rendering-pipeline.md](rendering-pipeline.md) | The graphics-overlay dispatch, the VGA double-buffer, and the background/sprite/entity blit paths |

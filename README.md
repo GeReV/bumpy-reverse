@@ -46,12 +46,13 @@ Requires the Open Watcom 16-bit DOS toolchain vendored under
 
 ```sh
 src/build.sh          # builds the playable BUMPYP.EXE
-src/build.sh BUMPY     # builds the faithful, non-running BUMPY.EXE
+src/build.sh all      # builds the faithful, non-running BUMPY.EXE (+ asset tools)
 ```
 
-See [`docs/playable-dos.md`](docs/playable-dos.md) for running `BUMPYP.EXE` under
-DOSBox, and [`docs/engine.md`](docs/engine.md) for the engine internals the
-reconstruction documents.
+See [`docs/building.md`](docs/building.md) for detailed build instructions (toolchain
+setup, targets, output paths, troubleshooting), [`docs/playable-dos.md`](docs/playable-dos.md)
+for running `BUMPYP.EXE` under DOSBox, and [`docs/engine.md`](docs/engine.md) for the
+engine internals the reconstruction documents.
 
 See [`docs/`](docs/README.md) for the file-format references and the game's
 data/resource and copy-protection systems.

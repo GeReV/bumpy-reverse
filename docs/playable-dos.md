@@ -56,8 +56,8 @@ wmake play          # compiles every TU -dBUMPY_PLAYABLE into play/, links -k0x4
 ```
 
 `wmake all` (the default target) builds the faithful, non-running `BUMPY.EXE`; the two
-targets do not share objects, so the default build stays byte-identical
-(`md5 cac9ff236a832284fec6fafff2d8602b`).
+targets do not share objects, so building the playable side leaves the faithful build's
+byte image untouched. See [`building.md`](building.md) for the full build reference.
 
 > zsh note: the interactive shell shadows `make`/`wmake` with an autoload stub — use
 > `command wmake play` (or run from bash) if `wmake` no-ops.
