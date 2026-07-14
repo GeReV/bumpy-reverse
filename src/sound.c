@@ -1792,7 +1792,20 @@ void mpu401_settle_delay(void)
  *  status reads (the data-write settle).  asm 1000:9007: shadow MOV [0x80cc+AH],AL;
  *  XCHG AH,AL; OUT 0x388,AL; 6x IN 0x388; INC DX; OUT 0x389,AL; DEC DX; 35x IN 0x388.
  *  reg/val arrive in registers; on the host they are staged through opl_write_reg's args
- *  (the harness recovers them from the record's two OUT events). */
+ *  (the harness recovers them from the record's two OUT events).
+ *
+ *  RECONSTRUCTION FIDELITY: the real asm brackets this ENTIRE body in PUSHF;CLI
+ *  (1000:9007-9008) ... POPF;RET (9054-9055) — confirmed via raw disasm past
+ *  Ghidra's own (under-scoped) function boundary, which cuts off mid-settle-loop
+ *  at 903f and hides the POPF/RET entirely; the true end is 9055, and the 6/35
+ *  settle-read counts above match exactly.  This masks interrupts across the
+ *  whole two-port OUT/settle/OUT/settle sequence, presumably so a concurrent
+ *  ISR OPL write (e.g. the tempo-ISR path) cannot interleave and corrupt it.
+ *  Same class of decompiler-invisible-but-real timing scaffolding as
+ *  read_joystick_axes (input.c) — documented here, not reproduced in the
+ *  active code, per that file's established precedent: this matters only if
+ *  two OPL writers can genuinely race on this host, which the current single-
+ *  threaded replay does not model either way. */
 void opl_write_reg(u8 reg, u8 val)
 {
     int i;
@@ -1840,6 +1853,15 @@ void opl_play_note(u8 key_on_bit, u8 attenuation, u16 chan_index, u16 note_index
        carry (0x33 < fnum) reconstruct the absolute offset 0x80cc + fnum, so the array
        index is fnum — NOT the bare low byte (fnum - 0x34), which was the prior off-by. */
     shadow = opl_reg_shadow_80cc[fnum];
+    /* RECONSTRUCTION FIDELITY: SUB DH,[BP+6] at 1000:9098 — DH is never explicitly
+       zeroed anywhere in this function or in opl_write_reg (which PUSHes/POPs DX,
+       so it can't reset DH either); traced back through opl2_all_notes_off (the
+       one reconstructed caller), which also never touches DX, so DH's value here
+       is genuinely ambient, carried in from whatever called INTO this chain.
+       "DH starts 0" is an ASSUMPTION, not independently confirmed — same
+       documented "genuinely uncontrolled/ambient register content" class as the
+       rest of this function (see the L4 dispatch-backends note above); no SND_SNAP
+       capture exists to check it against. Kept as the simplest faithful guess. */
     dh = (u8)((u8)(0 - attenuation) >> 4);                /* SUB DH,[BP+6]; SHR x4 (DH starts 0) */
     dh &= 0x3f;
     level = (u8)(0x20 - dh);                              /* MOV AH,0x20; SUB AH,DH */

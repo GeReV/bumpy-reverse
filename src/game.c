@@ -73,7 +73,13 @@ u8 session_continue_flag;    /* DGROUP 0x856d (DAT_856d) */
 u8 frame_abort_flag;         /* DGROUP 0x928d (DAT_203b_928d) */
 
 /* ── game_loop / init game-state globals OWNED here (no single module home) ──── */
-u8  current_level_index;     /* DGROUP 0x7310 — 0-based level index (= current_level-1) */
+/* RECONSTRUCTION FIDELITY (verified 2026-07-14): DGROUP 0x7310 is a genuine 16-bit
+ * field — every asm access (1000:030b/030d init-zero, 1000:0c72..0c78 game_loop,
+ * 1000:03b1/03cb + 1000:32bc/32d6 load_current_level_data) loads/stores the full AX,
+ * with an explicit `MOV AH,0` zero-extend from the byte source, never a lone byte
+ * MOV.  Typed u16 here (not u8) for signature fidelity; harmless in practice since
+ * every real level index is 0-8. */
+u16 current_level_index;     /* DGROUP 0x7310 — 0-based level index (= current_level-1) */
 u8  palette_loaded;          /* DGROUP — set 0 by init, by apply_level_palette later   */
 u8  menu_option2_setting;    /* game_loop menu scratch */
 u8  settle_countdown;        /* DGROUP 0x791a — ONE engine byte, four users (unified
@@ -460,7 +466,7 @@ LAB_0c2c:
                         show_text_screen();
                         goto LAB_0c2c;
                     }
-                    current_level_index = (u8)(current_entity_index - 1);
+                    current_level_index = (u16)(current_entity_index - 1);
                     play_iris_wipe_transition();
                     reset_game_state();
                     p2_set_move_state(p2_move_state);

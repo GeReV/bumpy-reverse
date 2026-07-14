@@ -553,6 +553,17 @@ static void op4_handler(u16 payload_len)
     in_end  = stream + vsav;
     n       = in_end - in_base;          /* compressed payload length */
 
+    /* RECONSTRUCTION FIDELITY: g_op4_scratch is a RECON INVENTION with no engine
+     * counterpart (op12_port.py's reference snapshots into an unbounded Python
+     * bytearray slice — see its op4_handler docstring).  Clamp n to the scratch
+     * buffer's real size before the snapshot loop below so a larger-than-expected
+     * vsav (data-derived, not independently bounds-checked elsewhere) can't
+     * static-buffer-overflow g_op4_scratch; every real game VEC/PAV/DEC/BUM stream
+     * stays well under OP12_ARENA_SIZE, so this is a no-op in practice. */
+    if (n > OP12_ARENA_SIZE) {
+        n = OP12_ARENA_SIZE;
+    }
+
     /* Snapshot the compressed payload before the decode overwrites it. */
     for (j = 0; j < n; j++) {
         g_op4_scratch[(u16)j] = mrd(in_base + j);

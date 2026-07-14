@@ -206,10 +206,15 @@ void game_mode_handler_idx30(void)
  *     Sized 0x40 modes × 4 bytes/entry. */
 u8 mode_script_tbl[0x40 * 4] = { 0 };
 
-/* (5) dos_abort — input.c declares `extern int dos_abort(void)` for the faithful
- *     control flow of its stack-check / abort path (the engine calls the CRT
- *     abort thunk).  In the linked build it is never reached on the boot path. */
-int dos_abort(void)                         { return 0; }
+/* (5) dos_abort (1000:762a) — input.c's read_input_action jumps here (not a CALL —
+ *     the caller preloads DX with a DS:DX-relative error-string offset) on its
+ *     bad-handler-index / null-table-entry error paths.  RECONSTRUCTION FIDELITY
+ *     (verified 2026-07-14, raw disasm): the real body is `MOV AX,CS; MOV DS,AX;
+ *     MOV AH,9; INT 0x21` (DOS print-string, DS:DX) `; JMP $` (infinite self-loop)
+ *     — a genuine noreturn halt, NOT an int-returning function; the earlier
+ *     `return 0` was fabricated.  Modelled void here (never reached on the boot
+ *     path — no call site here can actually observe non-return). */
+void dos_abort(void)                        { }
 
 
 /* ── A. init_game_session_state (1000:0282) setup callees — HARDWARE-INIT CARVE-OUT
@@ -446,9 +451,10 @@ void apply_level_palette(void)       {}
 void present_frame(u8 page)          { (void)page; }
 #endif /* !BUMPY_PLAYABLE */
 
-/* run_n_frames — CARVE-OUT (int8-timing): block for N frame ticks driven by the int8
-   timer the L5 ISR services.  Timing leaf, no-op stub.
-   BUMPY_PLAYABLE: owned by src/host/host_timer.c in the playable build. */
+/* run_n_frames — CARVE-OUT for the default (byte-compared, never-executed) build only:
+   no-op stub here.  BUMPY_PLAYABLE: RECONSTRUCTED with a real body in game.c (1000:05e7,
+   relocated from src/host/host_timer.c — stale ownership note corrected 2026-07-14),
+   guarded #ifdef BUMPY_PLAYABLE there so the two definitions stay mutually exclusive. */
 #ifndef BUMPY_PLAYABLE
 void run_n_frames(u8 n)              { (void)n; }
 #endif /* !BUMPY_PLAYABLE */
@@ -487,9 +493,10 @@ void wait_keypress(void)             {}
    are RECONSTRUCTED in player2.c (Phase-4 T5 / Phase-9 T3 — both write the pvp bbox
    words player2.c owns); their stubs are removed (dup-symbol once player2.obj links). */
 
-/* rotate_timing_flags_and_wait — CARVE-OUT (int8-timing): rotate the timing flags and
-   block for the frame tick (the per-tick int8 wait at the bottom of game_loop).
-   BUMPY_PLAYABLE: owned by src/host/host_timer.c in the playable build. */
+/* rotate_timing_flags_and_wait — CARVE-OUT for the default (byte-compared, never-
+   executed) build only: no-op stub here.  BUMPY_PLAYABLE: RECONSTRUCTED with a real
+   body in game.c (1000:1349, relocated from src/host/host_timer.c — stale ownership
+   note corrected 2026-07-14), guarded #ifdef BUMPY_PLAYABLE there. */
 #ifndef BUMPY_PLAYABLE
 void rotate_timing_flags_and_wait(void) {}
 #endif /* !BUMPY_PLAYABLE */

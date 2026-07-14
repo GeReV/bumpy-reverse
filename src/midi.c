@@ -570,9 +570,7 @@ void seq_normalize_far_ptr(void)
  *  branch's anomaly noted next.
  *
  *  RECONSTRUCTION FIDELITY (4-byte branch bit-layout anomaly, DISCOVERED this task):
- *  the 1/2/3-byte branches are clean, standard MSB-first VLQ decodes (verified
- *  numerically against 3 independent hand test-vectors, cross-checked two ways:
- *  literal instruction transliteration vs. the decompile's CONCAT expressions).  The
+ *  the 1- and 2-byte branches are clean, standard MSB-first VLQ decodes.  The
  *  4-byte branch does NOT extend that same clean pattern — e.g. bytes `81 80 80 7F`
  *  (a textbook 4-byte VLQ encoding 0x20007F per the standard MSB-first formula)
  *  decodes here to DX:AX = `0x001F:0xC0C0`, NOT `0x0002:0x007F`.  This was verified
@@ -584,7 +582,26 @@ void seq_normalize_far_ptr(void)
  *  in practice (>2 million ticks between events) and the Task C2 oracle capture (54
  *  midi_read_varlen records off the REAL Bumpy.mid) may not exercise this branch at
  *  all — reproduced faithfully as-is either way, per "adhere to the binary, never
- *  invent". See docs/reconstruction-fidelity.md. */
+ *  invent". See docs/reconstruction-fidelity.md.
+ *
+ *  RECONSTRUCTION FIDELITY (3-byte branch has the SAME class of quirk — CORRECTED
+ *  2026-07-14: an earlier version of this note overclaimed the 3-byte branch was
+ *  clean; it is not, in general).  A 2026-07-14 review traced bytes `81 80 7F`
+ *  (textbook 3-byte VLQ = 0x0000407F) through this branch by hand against the live
+ *  Ghidra disasm (1000:88aa-88c4) and got `0x0000403F` — off by exactly 0x40 — then
+ *  confirmed the src.c code below reproduces the identical 0x403F.  A follow-up
+ *  instruction-level simulation of the exact asm sequence against 2000 randomized
+ *  3-byte inputs found the discrepancy is fully deterministic: it triggers if and
+ *  only if bit 6 of the THIRD byte is set (`b3 & 0x40 != 0`), independent of b1/b2,
+ *  and is always exactly -0x40 when it fires (roughly half of all possible 3-byte
+ *  deltas). Root cause (from the instruction trace): the two-round SHL/SHR/RCR
+ *  carry-propagation sequence (88b8-88c2) drops the carry bit 6 of the final byte
+ *  should contribute, the same general class of bug as the documented 4-byte
+ *  anomaly above.  Same verdict: a genuine, deterministic bug in the ORIGINAL
+ *  1992 binary's VLQ decoder, faithfully reproduced here — not a transcription
+ *  error.  3-byte SMF deltas ARE common in practice (unlike 4-byte), so this one
+ *  is very likely exercised by real BUMPY.MID playback; it affects note timing
+ *  identically in the original and this reconstruction either way. */
 u32 midi_read_varlen(void)
 {
     u16 ax, dx, t16;

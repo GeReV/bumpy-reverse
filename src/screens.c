@@ -582,6 +582,13 @@ extern void set_resource_table(u16 off, u16 seg);         /* game_stubs.c       
  *    reconstructed HERE so screens.c's 1:1 call sites resolve at the BUMPY.EXE link;
  *    RECONSTRUCTION FIDELITY: file-I/O / decode / graphics-overlay leaves, not game logic. */
 int  open_resource(u16 res_idx, u16 mode);
+/* RECONSTRUCTION FIDELITY (verified 2026-07-14): every asm call site (e.g. 1000:2fcd..2fe1,
+ * 1000:30fd..3111, 1000:312d..3141) pushes a leading `XOR AX,AX; PUSH AX` word BEFORE these
+ * 5 args (6 words total, ADD SP,0xc cleanup) — but read_chunked's own prologue (1000:745e)
+ * only ever reads [BP+4]..[BP+0xc], i.e. exactly these 5.  The 6th pushed word is dead: never
+ * read by the callee, always a literal 0 at every call site, no corresponding named concept.
+ * Modelled here as the true observable 5-arg contract; the extra slot is a provably inert
+ * original-binary vestige, not a missing argument. */
 u32  read_chunked(int handle, u16 buf_off, u16 buf_seg, u16 len_off, u16 len_seg);
 void c_close(int handle);
 void vec_decode(u16 buf_off, u16 buf_seg, u32 size, u16 arg, u16 flag);
@@ -1198,7 +1205,17 @@ u8 run_main_menu(void)
         patch_image_palette(dgroup_pal_patch_64a);
     }
     set_sprite_table_ptr(0);
-    /* p1_sprite[3..4] = source far ptr (DAT_6c2c:6c2e) — the menu sprite source. */
+    /* p1_sprite[3..4] = source far ptr (DAT_6c2c:6c2e) — the menu sprite source.
+       RECONSTRUCTION FIDELITY (verified 2026-07-14 against raw disasm 1000:3665-
+       3674): the real asm does MOV AX,[0x6c2e]; MOV DX,[0x6c2c] — a genuine memory
+       READ of two DGROUP variables, not the literal addresses 0x6c2c/0x6c2e. This
+       port intentionally writes the ADDRESS instead, matching host_render.c's
+       hr_blit_obj, which special-cases the literal 0x6c2c (FTBL_OFF_MENU_CURSOR) as
+       a sentinel to route the menu cursor through host_blit_cursor's own cursor-
+       bank path instead of the normal frametable resolution — see that function's
+       header comment for the full rationale (an earlier attempt to model the real
+       variable's value caused wild sprite-culling offsets and blank front-end
+       glyphs). Deliberate and load-bearing, not a bug. */
     p = (u16 __far *)p1_sprite;
     p[3] = 0x6c2c;                      /* DAT_203b_6c2c (off; placeholder seed) */
     p[4] = SCREENS_DGROUP_RUNTIME_SEG;  /* DAT_203b_6c2e (seg) */
@@ -1285,7 +1302,14 @@ u8 run_main_menu(void)
         } while (key != '\0');
     }
     timing_flag_accumulator = menu_timing[menu_option2_setting];
-    /* p1_sprite[+6/+8] = the in-game sprite source far ptr (DAT_a0c6:a0c8). */
+    /* p1_sprite[+6/+8] = the in-game sprite source far ptr (DAT_a0c6:a0c8).
+       RECONSTRUCTION FIDELITY (verified 2026-07-14 against raw disasm 1000:3824-
+       3833): the real asm does MOV AX,[0xa0c8]; MOV DX,[0xa0c6] — a genuine memory
+       READ of screen_sprite_buf_off/_seg, not the literal addresses. Same
+       deliberate deviation as the pre-loop write above: host_render.c's
+       hr_blit_obj treats a ftbl_lin below hr_bank_base_lin (which the literal
+       0xa0c6/0xa0c8 pair always is) as "front-end screen glyph, route through the
+       host main bank" — see that function's header comment. Not a bug. */
     p = (u16 __far *)p1_sprite;
     *(u16 __far *)(p1_sprite + 0x06) = 0xa0c6;                      /* off (placeholder) */
     *(u16 __far *)(p1_sprite + 0x08) = SCREENS_DGROUP_RUNTIME_SEG;  /* seg */

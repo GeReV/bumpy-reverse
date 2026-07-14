@@ -1174,7 +1174,7 @@ void load_current_level_data(void)
     extern u8 __far *cur_level_ptr;   /* game.c — DGROUP level block cursor      */
     extern u8 __far *level_src_ptr;   /* game.c 0x75d0 — level header source      */
     extern u8 __far *tilemap;         /* game.c 0xa0d8 — working tilemap far ptr   */
-    extern u8        current_level_index;  /* game.c — engine _current_level_index (block) */
+    extern u16       current_level_index;  /* game.c — engine _current_level_index (block) */
 
     /* Faithful 1000:32b0 pointer setup.  Without it
        tilemap / level_src_ptr / cur_level_ptr stay NULL, so spawn_and_draw_level_entities

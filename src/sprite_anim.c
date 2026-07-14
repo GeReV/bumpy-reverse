@@ -117,8 +117,14 @@ void sprite_prepare_frame(u8 __far *obj, u8 __huge *bank, u32 bank_base_lin)
 u8 __far *sprite_expand_frame(u8 __far *frame, u8 __far *scratch,
                               const u8 __far *bitrev, u8 path, u16 mode)
 {
-    u8 width = frame[-4];
-    u8 height = frame[-2];
+    /* RECONSTRUCTION FIDELITY (verified 2026-07-14, raw disasm at 1cec:2ee9/2ef5):
+     * the engine reads these as full 16-bit words (`MOV CX, word ptr [BX-4]` /
+     * `[BX-2]`), not single bytes — an earlier u8 transcription silently truncated
+     * any width/height >= 256 to its low byte.  Harmless for BUMSPJEU (all real
+     * sprite dimensions are well under 256; this whole path is dead/UNVALIDATED —
+     * see the function banner), but corrected here for signature/data fidelity. */
+    u16 width = (u16)frame[-4] | ((u16)frame[-3] << 8);
+    u16 height = (u16)frame[-2] | ((u16)frame[-1] << 8);
     u16 count = (u16)((u16)(width >> 2) * (u16)height);
     const u8 __far *ctrl_p = frame;                 /* bx: control bytes      */
     const u8 __far *src_p = frame + count;          /* si: packed pixel bytes */

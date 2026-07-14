@@ -40,12 +40,13 @@
  *    from the resolved T2 scancode->input_state spec.
  */
 
-/* dos_abort (FUN near the CRT exit path): read_input_action calls it on an
-   out-of-range handler index or a null script entry.  It is a CRT terminate, not
-   reachable on a valid script, and is provided elsewhere in the link (engine CRT)
-   / by the host ctest.  Declared extern here so the faithful control flow stays
-   intact without pulling in the CRT. */
-extern int dos_abort(void);
+/* dos_abort (1000:762a): read_input_action jumps here on an out-of-range handler
+   index or a null script entry.  RECONSTRUCTION FIDELITY (verified 2026-07-14, raw
+   disasm): DOS print-string (INT 0x21 AH=9) + an infinite `JMP $` — a genuine
+   noreturn halt, not an int-returning function (see game_stubs.c).  Not reachable
+   on a valid script; provided elsewhere in the link (game_stubs.c) / by the host
+   ctest. */
+extern void dos_abort(void);
 
 /* ── DGROUP globals ─────────────────────────────────────────────────────────── */
 
@@ -477,12 +478,14 @@ u16 read_input_action(u16 handler_idx)
     u8 __far *script_ptr;
 
     if ((handler_idx & 0xff) > 0xf) {
-        return (u16)dos_abort();
+        dos_abort();          /* real path: prints + hangs, never returns */
+        return 0;
     }
 
     script_ptr = g_joystick_handler_table[handler_idx & 0xff];
     if (script_ptr == (u8 __far *)0) {
-        return (u16)dos_abort();
+        dos_abort();          /* real path: prints + hangs, never returns */
+        return 0;
     }
 
     accum = 0;
