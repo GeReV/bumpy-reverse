@@ -31,3 +31,9 @@ note in [formats/README.md](formats/README.md).
 | [reconstruction-fidelity.md](reconstruction-fidelity.md) | Per-module audit of where `src/` deviates from the original's structure, and why |
 | [playable-dos.md](playable-dos.md) | Building and running the playable `BUMPYP.EXE` host build under DOSBox |
 | [ghidra-symbol-map.md](ghidra-symbol-map.md) | Symbol map for the BumpyDecomp Ghidra project — names + identities of every function and the named data labels |
+
+## Narrative
+
+| Doc | Topic |
+|-----|-------|
+| [an-account.md](an-account.md) | A firsthand account of the reversing and reconstruction — the tooling built and the problems solved, from the model's perspective. Companion to the reference docs above. |
