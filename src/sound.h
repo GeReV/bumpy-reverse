@@ -122,13 +122,14 @@ extern u8 contact_sound_lut_std_278e[0x100];  /* DGROUP 0x278e */
  *  in Phase-6 T4–T6 and move here. */
 void play_sound(u8 sound_id);            /* 1000:6e11 — PORTED (T3) */
 void play_sound_effect(u8 effect_id);    /* 1000:6e30 — PORTED (T3) */
-u16  schedule_timer_callback_a(u16 param_1, u16 param_2, u16 param_3, u16 param_4,
-                               u16 param_5, u16 param_6, u16 param_7, u16 param_8);
+u16  schedule_timer_callback_a(u16 status_arg, u16 lifetime_count, u16 pitch_reload,
+                               u16 step_value, u16 pitch_increment, u16 ch2_reload_current,
+                               u16 subsweep_value, u16 ch2_reload_increment);
                                          /* 1000:9488 — PORTED (T3) */
-u16  schedule_timer_callback_b(u16 param_1, u16 param_2, u16 param_3, u16 param_4,
-                               u16 param_5, u16 param_6);
+u16  schedule_timer_callback_b(u16 status_arg, u16 lifetime_count, u16 pitch_reload,
+                               u16 ch2_reload_current, u16 subsweep_value, u16 ch2_reload_increment);
                                          /* 1000:9502 — PORTED (T3) */
-u16  schedule_timer_callback_c(u16 param_1, u16 param_2);
+u16  schedule_timer_callback_c(u16 status_arg, u16 pitch_reload);
                                          /* 1000:956d — PORTED (T3) */
 /* PORTED (Phase-6 T4 — L1 event wrappers): each reads a per-device LUT -> sound id ->
  *  play_sound.  PORTED in sound.c. */
@@ -203,7 +204,7 @@ void snd_emit_raw_sample(u8 sample_lo, u8 sample_hi); /* 1000:8a07 — PORTED (T
 void mpu401_settle_delay(void);                    /* 1000:8ad0 — PORTED (T5) MPU settle  */
 void opl2_all_notes_off(void);                     /* 1000:8e2f — PORTED (T5) OPL all-off (excl) */
 void opl_write_reg(u8 reg, u8 val);               /* 1000:9007 — PORTED (T5) OPL reg write */
-void opl_play_note(u8 param_1, u8 param_2, u16 param_3, u16 param_4); /* 1000:905d (excl) */
+void opl_play_note(u8 key_on_bit, u8 attenuation, u16 chan_index, u16 note_index); /* 1000:905d (excl) */
 
 /* ── PORTED (Task D1 — OPL2 register-level driver leaves) ────────────────────────────
  *  See the per-fn RECONSTRUCTION FIDELITY notes at each definition in sound.c. */

@@ -212,7 +212,7 @@ void record_min_status_code(u16 status)
 
 /* set_timer_slot_raw (1000:7df9) — the L3 timer-slot-table writer the schedulers tail
  *  into (BX=channel, AX=value, CX:DX=far cb).  PORTED below (T4); the schedulers call it
- *  with their faithful register setup (channel 2, value=param_5, far cb 0x9631/.. :0x1000). */
+ *  with their faithful register setup (channel 2, value=the ch2-reload arg, far cb 0x9631/.. :0x1000). */
 int set_timer_slot_raw(int channel, int value, u16 cb_off, u16 cb_seg);
 
 /* Modelled entry-CPU-carry for the schedulers (see FIDELITY note above): 0 = clear,
@@ -260,15 +260,15 @@ void play_sound(u8 sound_id)
  *  engine (schedule_timer_callback_a / _b).  In OPL mode (sound_device_state == 4)
  *  emit a raw two-byte sample from table 0x27ae via snd_emit_raw_sample (PORTED T5).
  *  Switch ported VERBATIM from the decomp (cases NOT collapsed); the goto LAB_70d6
- *  tail (cases 1/9/0xc/0x10/0x15 share `uVar3=1; tone_arg2=0x1e`) is preserved 1:1. */
+ *  tail (cases 1/9/0xc/0x10/0x15 share `subsweep_value=1; tone_arg2=0x1e`) is preserved 1:1. */
 void play_sound_effect(u8 effect_id)
 {
     u16 tone_arg3;
     u16 tone_arg2;
-    u16 uVar1;
-    u16 uVar2;
-    u16 uVar3;
-    u16 uVar4;
+    u16 pitch_increment;
+    u16 ch2_reload_current;
+    u16 subsweep_value;
+    u16 ch2_reload_increment;
 
     if (sound_device_state == 4) {
         snd_emit_raw_sample(snd_opl_sample_table[effect_id].note,
@@ -277,78 +277,78 @@ void play_sound_effect(u8 effect_id)
     }
     switch (effect_id) {
     case 0x01:
-        uVar4 = 1;
-        uVar2 = 0x1c2;
-        uVar1 = 10;
+        ch2_reload_increment = 1;
+        ch2_reload_current = 0x1c2;
+        pitch_increment = 10;
         tone_arg3 = 1000;
         goto LAB_1000_70d6;
     case 0x02:
-        uVar4 = 1;
-        uVar3 = 1;
-        uVar2 = 0x1c2;
-        uVar1 = 0xfff6;
+        ch2_reload_increment = 1;
+        subsweep_value = 1;
+        ch2_reload_current = 0x1c2;
+        pitch_increment = 0xfff6;
         tone_arg3 = 800;
         tone_arg2 = 0x28;
         break;
     case 0x03:
-        uVar4 = 0xffff;
-        uVar3 = 4;
-        uVar2 = 499;
-        uVar1 = 0xffff;
+        ch2_reload_increment = 0xffff;
+        subsweep_value = 4;
+        ch2_reload_current = 499;
+        pitch_increment = 0xffff;
         tone_arg3 = 0x1b8;
         tone_arg2 = 400;
         break;
     case 0x04:
-        uVar4 = 4;
-        uVar3 = 1;
-        uVar2 = 100;
-        uVar1 = 0xffff;
+        ch2_reload_increment = 4;
+        subsweep_value = 1;
+        ch2_reload_current = 100;
+        pitch_increment = 0xffff;
         tone_arg3 = 0xdc;
         tone_arg2 = 0x5a;
         break;
     case 0x05:
-        uVar4 = 2;
-        uVar3 = 1;
-        uVar2 = 0x1b8;
-        uVar1 = 10;
+        ch2_reload_increment = 2;
+        subsweep_value = 1;
+        ch2_reload_current = 0x1b8;
+        pitch_increment = 10;
         tone_arg3 = 1000;
         tone_arg2 = 0x19;
         break;
     case 0x06:
-        uVar4 = 5;
-        uVar3 = 2;
-        uVar2 = 0x1b8;
-        uVar1 = 10;
+        ch2_reload_increment = 5;
+        subsweep_value = 2;
+        ch2_reload_current = 0x1b8;
+        pitch_increment = 10;
         tone_arg3 = 0x44c;
         tone_arg2 = 0x14;
         break;
     case 0x07:
-        uVar4 = 3;
-        uVar3 = 1;
-        uVar2 = 0x1b8;
-        uVar1 = 10;
+        ch2_reload_increment = 3;
+        subsweep_value = 1;
+        ch2_reload_current = 0x1b8;
+        pitch_increment = 10;
         tone_arg3 = 0x4b0;
         tone_arg2 = 0xf;
         break;
     case 0x08:
-        uVar4 = 5;
-        uVar3 = 1;
-        uVar2 = 100;
-        uVar1 = 0xfffb;
+        ch2_reload_increment = 5;
+        subsweep_value = 1;
+        ch2_reload_current = 100;
+        pitch_increment = 0xfffb;
         tone_arg3 = 0xdc;
         tone_arg2 = 0x28;
         break;
     case 0x09:
-        uVar4 = 1;
-        uVar2 = 0x1c2;
-        uVar1 = 0x14;
+        ch2_reload_increment = 1;
+        ch2_reload_current = 0x1c2;
+        pitch_increment = 0x14;
         tone_arg3 = 0x32;
         goto LAB_1000_70d6;
     case 0x0a:
-        uVar4 = 10;
-        uVar3 = 1;
-        uVar2 = 0x15d;
-        uVar1 = 0x32;
+        ch2_reload_increment = 10;
+        subsweep_value = 1;
+        ch2_reload_current = 0x15d;
+        pitch_increment = 0x32;
         tone_arg3 = 200;
         tone_arg2 = 0xf;
         break;
@@ -356,39 +356,39 @@ void play_sound_effect(u8 effect_id)
         schedule_timer_callback_b(2, 0x28, 0x14, 499, 1, 0xfffc);
         return;
     case 0x0c:
-        uVar4 = 2;
-        uVar2 = 0x1a4;
-        uVar1 = 10;
+        ch2_reload_increment = 2;
+        ch2_reload_current = 0x1a4;
+        pitch_increment = 10;
         tone_arg3 = 0x4b0;
         goto LAB_1000_70d6;
     case 0x0d:
-        uVar4 = 0xf;
-        uVar3 = 2;
-        uVar2 = 0x15d;
-        uVar1 = 0x32;
+        ch2_reload_increment = 0xf;
+        subsweep_value = 2;
+        ch2_reload_current = 0x15d;
+        pitch_increment = 0x32;
         tone_arg3 = 200;
         tone_arg2 = 0x14;
         break;
     case 0x0e:
-        uVar4 = 0;
-        uVar3 = 10;
-        uVar2 = 200;
-        uVar1 = 4;
+        ch2_reload_increment = 0;
+        subsweep_value = 10;
+        ch2_reload_current = 200;
+        pitch_increment = 4;
         tone_arg3 = 10;
         tone_arg2 = 0x32;
         break;
     case 0x0f:
-        uVar4 = 1;
-        uVar3 = 2;
-        uVar2 = 100;
-        uVar1 = 2;
+        ch2_reload_increment = 1;
+        subsweep_value = 2;
+        ch2_reload_current = 100;
+        pitch_increment = 2;
         tone_arg3 = 300;
         tone_arg2 = 400;
         break;
     case 0x10:
-        uVar4 = 2;
-        uVar2 = 0x1a4;
-        uVar1 = 10;
+        ch2_reload_increment = 2;
+        ch2_reload_current = 0x1a4;
+        pitch_increment = 10;
         tone_arg3 = 0x4b0;
         goto LAB_1000_70d6;
     case 0x11:
@@ -398,34 +398,34 @@ void play_sound_effect(u8 effect_id)
         schedule_timer_callback_b(2, 0x50, 0x1e, 499, 2, 0xfffc);
         return;
     case 0x13:
-        uVar4 = 1;
-        uVar3 = 2;
-        uVar2 = 100;
-        uVar1 = 1;
+        ch2_reload_increment = 1;
+        subsweep_value = 2;
+        ch2_reload_current = 100;
+        pitch_increment = 1;
         tone_arg3 = 300;
         tone_arg2 = 800;
         break;
     case 0x14:
-        uVar4 = 0;
-        uVar3 = 10;
-        uVar2 = 200;
-        uVar1 = 4;
+        ch2_reload_increment = 0;
+        subsweep_value = 10;
+        ch2_reload_current = 200;
+        pitch_increment = 4;
         tone_arg3 = 10;
         tone_arg2 = 0x32;
         break;
     case 0x15:
-        uVar4 = 1;
-        uVar2 = 0x1c2;
-        uVar1 = 10;
+        ch2_reload_increment = 1;
+        ch2_reload_current = 0x1c2;
+        pitch_increment = 10;
         tone_arg3 = 600;
 LAB_1000_70d6:
-        uVar3 = 1;
+        subsweep_value = 1;
         tone_arg2 = 0x1e;
         break;
     default:
         goto switchD_1000_6e7e_default;
     }
-    schedule_timer_callback_a(2, tone_arg2, tone_arg3, 1, uVar1, uVar2, uVar3, uVar4);
+    schedule_timer_callback_a(2, tone_arg2, tone_arg3, 1, pitch_increment, ch2_reload_current, subsweep_value, ch2_reload_increment);
 switchD_1000_6e7e_default:
     return;
 }
@@ -433,47 +433,48 @@ switchD_1000_6e7e_default:
 /* ── schedule_timer_callback_a (1000:9488) — L3 tone-submit (8-arg frame) ─────────
  *  Records prior CPU-flags status, then (if carry clear) fills the 10-word tone param
  *  frame snd_param_frame[0..9] (CODE 0x9788..0x979a) from the args and installs the far
- *  callback ptr 1000:9631.  param_2..param_8 are the frame words.  Frame-offset →
- *  snd_param_frame[] index map:
+ *  callback ptr 1000:9631.  lifetime_count..ch2_reload_increment are the frame words.
+ *  Frame-offset → snd_param_frame[] index map:
  *    0x9788→[0] 0x978a→[1] 0x978c→[2] 0x978e→[3] 0x9790→[4]
  *    0x9792→[5] 0x9794→[6] 0x9796→[7] 0x9798→[8] 0x979a→[9] (byte 0x0f, low half).
  *  NOTE on the record_min_status_code arg: the ORIGINAL (decomp 1000:9488) does NOT pass
- *  param_1 — it passes the PACKED ENTRY-FLAGS word, the bit-OR of the CPU flags captured at
+ *  status_arg — it passes the PACKED ENTRY-FLAGS word, the bit-OR of the CPU flags captured at
  *  entry: (in_NT<<14)|(in_OF<<11)|(in_IF<<9)|(in_TF<<8)|(in_SF<<7)|(in_ZF<<6)|(in_AF<<4)|
  *  (in_PF<<2)|in_CF.  record_min_status_code is PORTED (records into CS:[0x946c] via
  *  last_status_code, not part of any validated frame/port sequence), so we hand it the
- *  available value (param_1) in lieu of reconstructing the host-absent FLAGS register —
+ *  available value (status_arg) in lieu of reconstructing the host-absent FLAGS register —
  *  observationally identical.
  *  Deeper callee set_timer_slot_raw (1000:7df9, PORTED T4); speaker_gate_reset PORTED T5. */
-u16 schedule_timer_callback_a(u16 param_1, u16 param_2, u16 param_3, u16 param_4,
-                              u16 param_5, u16 param_6, u16 param_7, u16 param_8)
+u16 schedule_timer_callback_a(u16 status_arg, u16 lifetime_count, u16 pitch_reload,
+                              u16 step_value, u16 pitch_increment, u16 ch2_reload_current,
+                              u16 subsweep_value, u16 ch2_reload_increment)
 {
     u16 ret_status;
     u8  in_CF = snd_sched_carry_in;   /* modelled entry carry (see FIDELITY note) */
 
-    record_min_status_code(param_1);  /* ORIGINAL: packed entry-FLAGS word (in_NT..in_CF
-                                        *  bit-OR); param_1 stands in for it (callee is PORTED) */
+    record_min_status_code(status_arg);  /* ORIGINAL: packed entry-FLAGS word (in_NT..in_CF
+                                           *  bit-OR); status_arg stands in for it (callee is PORTED) */
     ret_status = 0xffff;
     if (!in_CF) {
-        SND_PF->lifetime_count       = param_2;   /* DAT_1000_9788 */
-        SND_PF->pitch_reload         = param_3;   /* DAT_1000_978a */
-        SND_PF->step_current         = param_4;   /* DAT_1000_9796 */
-        SND_PF->step_reload          = param_4;   /* DAT_1000_978c */
-        SND_PF->pitch_increment      = param_5;   /* DAT_1000_978e */
-        SND_PF->ch2_reload_current   = param_6;   /* DAT_1000_9790 */
-        SND_PF->subsweep_reload      = param_7;   /* DAT_1000_9792 */
-        SND_PF->subsweep_current     = param_7;   /* DAT_1000_9798 */
-        SND_PF->ch2_reload_increment = param_8;   /* DAT_1000_9794 */
+        SND_PF->lifetime_count       = lifetime_count;        /* DAT_1000_9788 */
+        SND_PF->pitch_reload         = pitch_reload;           /* DAT_1000_978a */
+        SND_PF->step_current         = step_value;             /* DAT_1000_9796 */
+        SND_PF->step_reload          = step_value;             /* DAT_1000_978c */
+        SND_PF->pitch_increment      = pitch_increment;        /* DAT_1000_978e */
+        SND_PF->ch2_reload_current   = ch2_reload_current;     /* DAT_1000_9790 */
+        SND_PF->subsweep_reload      = subsweep_value;         /* DAT_1000_9792 */
+        SND_PF->subsweep_current     = subsweep_value;         /* DAT_1000_9798 */
+        SND_PF->ch2_reload_increment = ch2_reload_increment;   /* DAT_1000_9794 */
         SND_PF->marker               = 0xf;       /* DAT_1000_979a (byte 0x0f) */
         snd_timer_cb_off = 0x9631;      /* timer_callback_off (CODE 0x97a1) */
         snd_timer_cb_seg = 0x1000;      /* timer_callback_seg (CODE 0x979f) */
         /* The decomp renders this tail as a void set_timer_slot_raw() call; the disassembly
-         *  (1000:94ec MOV AX,[BP+0xe]=param_6; MOV BX,0x2=channel; CALL 0x7df9, with
+         *  (1000:94ec MOV AX,[BP+0xe]=ch2_reload_current; MOV BX,0x2=channel; CALL 0x7df9, with
          *  CX=0x9631=cb_off / DX=0x1000=cb_seg already loaded) shows it is the timer-slot
-         *  writer set_timer_slot_raw(channel=2, value=param_6, cb_off=0x9631, cb_seg=0x1000)
-         *  — the register-passed args the void rendering hides.  Ported faithfully to the
-         *  asm (T4) so the 0x549c slot-table install is reproduced + validated. */
-        set_timer_slot_raw(2, (int)param_6, 0x9631, 0x1000);
+         *  writer set_timer_slot_raw(channel=2, value=ch2_reload_current, cb_off=0x9631,
+         *  cb_seg=0x1000) — the register-passed args the void rendering hides.  Ported
+         *  faithfully to the asm (T4) so the 0x549c slot-table install is reproduced + validated. */
+        set_timer_slot_raw(2, (int)ch2_reload_current, 0x9631, 0x1000);
         speaker_gate_reset();
         ret_status = 0;
     }
@@ -482,28 +483,30 @@ u16 schedule_timer_callback_a(u16 param_1, u16 param_2, u16 param_3, u16 param_4
 
 /* ── schedule_timer_callback_b (1000:9502) — L3 tone-submit (6-arg frame) ─────────
  *  As _a but a smaller frame, installs the far callback 1000:96c4.  Frame words written:
- *    [0]=param_2 [1]=param_3 [4]=param_4 [5]=param_5 [8]=param_5 [6]=param_6 [9]=0x0f. */
-u16 schedule_timer_callback_b(u16 param_1, u16 param_2, u16 param_3, u16 param_4,
-                              u16 param_5, u16 param_6)
+ *    [0]=lifetime_count [1]=pitch_reload [4]=ch2_reload_current [5]=subsweep_value
+ *    [8]=subsweep_value [6]=ch2_reload_increment [9]=0x0f. */
+u16 schedule_timer_callback_b(u16 status_arg, u16 lifetime_count, u16 pitch_reload,
+                              u16 ch2_reload_current, u16 subsweep_value, u16 ch2_reload_increment)
 {
     u16 ret_status;
     u8  in_CF = snd_sched_carry_in;
 
-    record_min_status_code(param_1);    /* ORIGINAL: packed entry-FLAGS word (record_min_status_code is PORTED) */
+    record_min_status_code(status_arg);    /* ORIGINAL: packed entry-FLAGS word (record_min_status_code is PORTED) */
     ret_status = 0xffff;
     if (!in_CF) {
-        SND_PF->lifetime_count       = param_2;   /* DAT_1000_9788 */
-        SND_PF->pitch_reload         = param_3;   /* DAT_1000_978a */
-        SND_PF->ch2_reload_current   = param_4;   /* DAT_1000_9790 */
-        SND_PF->subsweep_reload      = param_5;   /* DAT_1000_9792 */
-        SND_PF->subsweep_current     = param_5;   /* DAT_1000_9798 */
-        SND_PF->ch2_reload_increment = param_6;   /* DAT_1000_9794 */
+        SND_PF->lifetime_count       = lifetime_count;        /* DAT_1000_9788 */
+        SND_PF->pitch_reload         = pitch_reload;           /* DAT_1000_978a */
+        SND_PF->ch2_reload_current   = ch2_reload_current;     /* DAT_1000_9790 */
+        SND_PF->subsweep_reload      = subsweep_value;         /* DAT_1000_9792 */
+        SND_PF->subsweep_current     = subsweep_value;         /* DAT_1000_9798 */
+        SND_PF->ch2_reload_increment = ch2_reload_increment;   /* DAT_1000_9794 */
         SND_PF->marker               = 0xf;       /* DAT_1000_979a (byte 0x0f) */
         snd_timer_cb_off = 0x96c4;      /* timer_callback_off (CODE 0x97a1) */
         snd_timer_cb_seg = 0x1000;      /* timer_callback_seg (CODE 0x979f) */
-        /* asm 1000:9557 MOV AX,[BP+0xa]=param_4; MOV BX,0x2; CALL 0x7df9 -> the writer
-         *  with channel=2, value=param_4, cb_off=0x96c4, cb_seg=0x1000 (see _a note). */
-        set_timer_slot_raw(2, (int)param_4, 0x96c4, 0x1000);
+        /* asm 1000:9557 MOV AX,[BP+0xa]=ch2_reload_current; MOV BX,0x2; CALL 0x7df9 -> the
+         *  writer with channel=2, value=ch2_reload_current, cb_off=0x96c4, cb_seg=0x1000
+         *  (see _a note). */
+        set_timer_slot_raw(2, (int)ch2_reload_current, 0x96c4, 0x1000);
         speaker_gate_reset();
         ret_status = 0;
     }
@@ -514,16 +517,16 @@ u16 schedule_timer_callback_b(u16 param_1, u16 param_2, u16 param_3, u16 param_4
  *  As _a/_b but installs the far callback 1000:95b5 with a single frame word
  *  (snd_param_frame[1]) + the 0x0f marker.  No caller in this task's scope reaches it,
  *  but it ports here with the rest of the L3 tone-submit trio. */
-u16 schedule_timer_callback_c(u16 param_1, u16 param_2)
+u16 schedule_timer_callback_c(u16 status_arg, u16 pitch_reload)
 {
     u16 ret_status;
     u8  in_CF = snd_sched_carry_in;
 
-    record_min_status_code(param_1);    /* ORIGINAL: packed entry-FLAGS word (record_min_status_code is PORTED) */
+    record_min_status_code(status_arg);    /* ORIGINAL: packed entry-FLAGS word (record_min_status_code is PORTED) */
     ret_status = 0xffff;
     if (!in_CF) {
         SND_PF->marker       = 0xf;      /* DAT_1000_979a (byte 0x0f) */
-        SND_PF->pitch_reload = param_2;  /* DAT_1000_978a */
+        SND_PF->pitch_reload = pitch_reload;  /* DAT_1000_978a */
         snd_timer_cb_off = 0x95b5;      /* timer_callback_off (CODE 0x97a1) */
         snd_timer_cb_seg = 0x1000;      /* timer_callback_seg (CODE 0x979f) */
         /* asm 1000:959f MOV AX,[BP+0x8]; MOV BX,0x2; CALL 0x7df9.  [BP+0x8] is a THIRD
@@ -1327,9 +1330,9 @@ u16 snddrv_init(void)
  *  returned.  If no bit is set, reset the timer slot (the asm's set_timer_slot_raw call
  *  with channel=1, value=0x64, cb=0x9136:0x1000), clear the select scratch (0x83ee/83ef),
  *  and clear the selection.  Returns the selected device (or -1 if state != 1). */
-int select_sound_device_from_mask(u16 param_1)
+int select_sound_device_from_mask(u16 mask)
 {
-    u16 uVar1;
+    u16 bit_set;
     int bit_index;
 
     bit_index = -1;
@@ -1337,9 +1340,9 @@ int select_sound_device_from_mask(u16 param_1)
         sound_init_state = 2;
         bit_index = 0;
         do {
-            uVar1 = param_1 & 1;
-            param_1 = param_1 >> 1;
-            if (uVar1 != 0) {
+            bit_set = mask & 1;
+            mask = mask >> 1;
+            if (bit_set != 0) {
                 snddrv_mode = (u16)(1 << ((u8)bit_index & 0x1f));
                 sound_init_state = 2;
                 sound_active_device_mask = snddrv_mode;
@@ -1810,12 +1813,12 @@ void opl_write_reg(u8 reg, u8 val)
  *    (3) reg 0xA0+chan: F-number low              — from DGROUP word table 0x559c indexed
  *        by 0x5614[chan], masked 0x3ff.
  *    (4) reg 0xB0+chan: key-on/block/F-number high — block from 0x55b4[chan]-1, F-hi bits.
- *  Args (from the asm stack/regs): param_1=[BP+4] key/feedback byte, param_2=[BP+6]
- *  attenuation, param_3=[BP+8] channel index, param_4=[BP+0xa] note index.  The freq
+ *  Args (from the asm stack/regs): key_on_bit=[BP+4] key/feedback byte, attenuation=[BP+6],
+ *  chan_index=[BP+8] channel index, note_index=[BP+0xa] note index.  The freq
  *  tables (0x5593/0x559c/0x55b4/0x5614) are RUNTIME-populated and NOT in the SND_SNAP, so
  *  this fn's exact note OUTs are a documented port-write-gate exclusion (registered
  *  UNPORTED); it is ported 1:1 here for faithfulness + the BUMPY.EXE link. */
-void opl_play_note(u8 param_1, u8 param_2, u16 param_3, u16 param_4)
+void opl_play_note(u8 key_on_bit, u8 attenuation, u16 chan_index, u16 note_index)
 {
     u8  fnum;          /* DL : 0x5593[note] + 0x43 (register index for step 2)            */
     u8  shadow;        /* AL : CODE 0x80cc[fnum + 0xf - ...]; top-2-bits carry into level */
@@ -1827,30 +1830,30 @@ void opl_play_note(u8 param_1, u8 param_2, u16 param_3, u16 param_4)
 
     opl_write_reg(0x08, 0x00);                            /* (1) */
 
-    fnum = (u8)(opl_fnum_lo_5593[param_4 & 0xff] + 0x43); /* DL = [0x5593+note]+0x43 */
+    fnum = (u8)(opl_fnum_lo_5593[note_index & 0xff] + 0x43); /* DL = [0x5593+note]+0x43 */
     /* CODE 0x80cc shadow byte at *(0x80cc + fnum).  The decomp forms the address as
        CONCAT11((0x33 < fnum) - 0x80, fnum + 0xcc): the low byte (fnum + 0xcc) and the
        carry (0x33 < fnum) reconstruct the absolute offset 0x80cc + fnum, so the array
        index is fnum — NOT the bare low byte (fnum - 0x34), which was the prior off-by. */
     shadow = opl_reg_shadow_80cc[fnum];
-    dh = (u8)((u8)(0 - param_2) >> 4);                    /* SUB DH,[BP+6]; SHR x4 (DH starts 0) */
+    dh = (u8)((u8)(0 - attenuation) >> 4);                /* SUB DH,[BP+6]; SHR x4 (DH starts 0) */
     dh &= 0x3f;
     level = (u8)(0x20 - dh);                              /* MOV AH,0x20; SUB AH,DH */
     level &= 0x3f;
     level |= (u8)(shadow & 0xc0);                         /* AND AL,0xc0; OR DH,AL */
     opl_write_reg(fnum, level);                           /* (2) reg=0x43+tbl, val=level */
 
-    block_chan = (u8)(opl_chan_data_55b4[param_3 & 0xff] - 1);   /* CL = [0x55b4+chan]-1 */
-    fword = (u16)(opl_fnum_hi_559c[(u8)(opl_chan_idx_5614[param_3 & 0xff] * 2)] |
-                  (opl_fnum_hi_559c[(u8)(opl_chan_idx_5614[param_3 & 0xff] * 2) + 1] << 8));
+    block_chan = (u8)(opl_chan_data_55b4[chan_index & 0xff] - 1);   /* CL = [0x55b4+chan]-1 */
+    fword = (u16)(opl_fnum_hi_559c[(u8)(opl_chan_idx_5614[chan_index & 0xff] * 2)] |
+                  (opl_fnum_hi_559c[(u8)(opl_chan_idx_5614[chan_index & 0xff] * 2) + 1] << 8));
     fword &= 0x3ff;
-    opl_write_reg((u8)(0xa0 + (u8)param_4), (u8)(fword & 0xff));  /* (3) reg=0xA0+chan-ish */
+    opl_write_reg((u8)(0xa0 + (u8)note_index), (u8)(fword & 0xff));  /* (3) reg=0xA0+chan-ish */
 
     ah = (u8)(fword >> 8);
     ah &= 0x3;                                            /* AND AL,0x3 (F-hi bits)  */
     ah = (u8)(ah + (u8)((block_chan & 7) << 2));          /* + (CL&7)<<2 (block)     */
-    ah = (u8)(ah + param_1);                              /* + [BP+4] (key-on bit)   */
-    opl_write_reg((u8)(0xb0 + (u8)param_4), ah);          /* (4) reg=0xB0+chan, key-on */
+    ah = (u8)(ah + key_on_bit);                           /* + [BP+4] (key-on bit)   */
+    opl_write_reg((u8)(0xb0 + (u8)note_index), ah);       /* (4) reg=0xB0+chan, key-on */
 }
 
 /* ── opl2_all_notes_off (1000:8e2f) — OPL2 all-notes-off ─────────────────────────────
