@@ -2,20 +2,33 @@
 
 One per level: `D1.PAV`–`D9.PAV`. Uses the shared
 [container format](README.md#the-shared-container-vecpavdecbum) and the same
-`vec_run` interpreter as `.VEC` — the level playfield is stored as a **vector
-command stream**, not a tilemap array. These are the largest per-level files and
-the most opcode-rich, consistent with the main level geometry.
+`vec_run` interpreter as `.VEC`. Despite the shared container's vector-stream
+framing, the confirmed decode (`tools/extract/op12_port.py`, byte-exact against
+the emulator oracle) is a single `op4` RLE-decompress straight into the
+320×192 4-plane **brush/tile atlas raster** — see [LEVELS.md](LEVELS.md) for how
+`.DEC` places atlas tiles onto the per-level grid. It is not drawn from line/fill
+primitives; see the opcode-coverage note below.
 
 The 8-byte big-endian header is standard (`w0=0`, `w1=decoded_size`,
-`w2`/`w3`=checksums). The body is a big-endian opcode/coordinate token stream;
-see [VEC.md](VEC.md) for the record layout and interpreter.
+`w2`/`w3`=checksums). See [VEC.md](VEC.md) for the record layout and interpreter,
+and its "Opcode coverage" note on why the table below over-counts opcodes.
 
-Decoded by `tools/extract/vec_records.py` (record walker) and
-`tools/extract/container.py` (header + opcode histogram).
+Decoded by `tools/extract/vec_records.py` (raw-byte record walker, pre-decompress)
+and `tools/extract/container.py` (header + opcode histogram); rendered by
+`tools/extract/render_levels.py`.
 
 ## Files
 
-| File | Bytes | `decoded_size` | Distinct opcodes | Coord words |
+**Caveat:** the `Distinct opcodes`/`Coord words` columns below come from
+`vec_records.py` scanning the still-RLE-compressed file bytes directly (it has no
+decompressor), using only the 16-bit XOR checksum to find "record" boundaries.
+Across thousands of word-aligned scan positions in compressed data, spurious
+checksum matches are expected, so most of these opcode hits are scanner noise,
+not real interpreter dispatch — the real, oracle-validated decode dispatches only
+`op4` for every `.PAV` file (see [VEC.md](VEC.md#opcode-coverage-what-the-python-code-actually-dispatches)).
+Kept here as raw empirical data, not as evidence of line-art content.
+
+| File | Bytes | `decoded_size` | Distinct opcodes (raw-byte scan, likely noise) | Coord words |
 |------|------:|---------------:|-----------------:|------------:|
 | D1.PAV | 15071 | 0x3e7f | 15 | 7205 |
 | D2.PAV | 19937 | 0x56fc | 15 | 9572 |
@@ -26,6 +39,3 @@ Decoded by `tools/extract/vec_records.py` (record walker) and
 | D7.PAV | 16526 | 0x460f | 15 | 7890 |
 | D8.PAV | 12186 | 0x3245 | 12 | 5733 |
 | D9.PAV | 25475 | 0x672e | 14 | 12048 |
-
-Opcode 1 dominates several levels (e.g. D6 op1×620, D3 op1×252), consistent
-with the primary line/segment draw for the playfield outline.

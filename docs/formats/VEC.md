@@ -84,13 +84,40 @@ Key DGROUP globals used by the interpreter:
 
 ## Opcode handlers
 
-Opcodes confirmed in the title/HUD render path:
-
 | Opcode | Behaviour |
 |-------:|-----------|
 | 4 | **op4 RLE decompressor** — reads a byte from the stream as the escape byte, then decompresses the inline payload in place (see below) |
 | 12 | **op12 masked blit** — composites the decompressed planar image into the output buffer using a per-pixel mask stream |
-| others (1–3, 5–11, 13–15) | additional draw primitives present in `.PAV`/`.DEC` level files; operand layouts (line vs. fill vs. blit) are determined by opcode-specific handlers in other render paths |
+| others (1–3, 5–11, 13–15) | slots exist in the binary's opcode dispatch table (`0x4e37`, index `opcode-1`), but are **not implemented in the Python code and not confirmed to be exercised by any real file** — see "Opcode coverage" below |
+
+## Opcode coverage: what the Python code actually dispatches
+
+The production decoder (`tools/extract/op12_port.py`, imported by
+`render_levels.py` and `vec_to_png.py`) implements exactly two opcodes — its
+`vec_run` dispatch loop is `if op == 12: ... elif op == 4: ...` and nothing
+else; any other opcode value falls through with no handler. This is validated
+byte-exact against the DOSBox/emulator oracle for **every** real `.VEC`,
+`.PAV`, `.DEC`, and `.BUM` file in the game — i.e. `op4` (RLE decompress) and
+`op12` (masked blit) are sufficient to reproduce 100% of the shipped assets.
+
+This contradicts the opcode histograms quoted in `PAV.md`/`DEC.md`/`BUM.md`
+("15 distinct opcodes", "opcode 1 dominates... line/segment draw", etc.). Those
+numbers come from `vec_records.py`, a *different* tool that walks the **raw
+on-disk file bytes directly** — before `op4` decompression — using only the
+16-bit XOR checksum (`w5 = w0^w1^w2^w3^w4`) to find "record" boundaries. `.PAV`
+bodies are thousands of words of still-RLE-compressed data, so a 1-in-65536
+coincidental checksum match at word-aligned scan positions is expected to
+produce a stream of spurious "opcode" hits. Since the byte-exact decoder never
+needs those opcodes to reproduce any real game file, the evidence is that
+those histograms are scanner noise, not real interpreter dispatch — the
+"line/segment draw" interpretation in the per-format docs was a wrong
+inference and has been corrected there.
+
+Net effect: despite the container format nominally supporting up to 63
+primitive opcodes, every shipped `.VEC`/`.PAV`/`.DEC`/`.BUM` file appears to
+reduce to "RLE-decompress a fixed-size raster, optionally masked-blit another
+one on top" — there is no confirmed live vector geometry (lines/polygons/fills)
+anywhere in the real data, only compressed-then-composited bitmaps.
 
 ## op4 RLE decompression algorithm
 
@@ -144,5 +171,8 @@ op4 + op12 implementation).
 - `w1 decoded_size` tracks file size and approaches `~0x7d00` (≈32 000 =
   320×200×4 bpp/2) for full-screen `TITRE`.
 - `SCORE.VEC` is the outlier (`w1=0`, checksums `0`) — stored pre-decoded.
-- Bodies are coordinate-dense (5–10 k coordinate words) with opcodes interspersed,
-  consistent with filled polygon / polyline world art.
+- Bodies are coordinate-dense (5–10 k coordinate words) with opcodes
+  interspersed **when scanned pre-decompression** by `vec_records.py`/
+  `container.py` — per the "Opcode coverage" section above this is scanning
+  still-RLE-compressed bytes and is not evidence of live polygon/polyline
+  drawing; the confirmed decode is `op4`/`op12` only.

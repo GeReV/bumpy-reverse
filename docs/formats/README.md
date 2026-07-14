@@ -19,7 +19,13 @@ Extraction scripts live in `tools/extract/`.
 | `.MID` | no | **Standard MIDI** (format 1, 7 trk, 192 tpqn) | — | [MID.md](MID.md) |
 
 `.VEC/.PAV/.DEC/.BUM` are the **same container** (below), all consumed by the same
-interpreter (`vec_run`, overlay segment `1c28`). `.BNK` is the published AdLib Inc.
+interpreter (`vec_run`, overlay segment `1c28`). Despite the "vector stream" naming,
+every real shipped file is confirmed to decode using only two of the interpreter's
+opcodes — `op4` (RLE decompress) and `op12` (masked blit) — into fixed-size raster
+buffers; see
+[VEC.md's opcode-coverage note](VEC.md#opcode-coverage-what-the-python-code-actually-dispatches)
+before relying on any other opcode's inline-length/behaviour claims elsewhere in
+these docs. `.BNK` is the published AdLib Inc.
 instrument-bank format readable by AdPlug/adplug and other OPL2 tools (see
 [BNK.md](BNK.md) for the header/name-index layout and the `rol0NN` instrument
 naming). `.MID` is a standard MIDI file — play or convert with timidity,

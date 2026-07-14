@@ -2,18 +2,29 @@
 
 One per level: `D1.BUM`–`D9.BUM`. Uses the shared
 [container format](README.md#the-shared-container-vecpavdecbum) and the same
-`vec_run` interpreter as `.VEC`. These are the **smallest** per-level files.
+`vec_run` interpreter as `.VEC`. These are the **smallest** per-level files. The
+confirmed decode (`tools/extract/op12_port.py`, byte-exact against the emulator
+oracle) is an `op4`/`op12` `vec_run` stream into the **per-level map-header
+table** (2 + 15×`0xc2` bytes) — see
+[LEVELS.md](LEVELS.md#per-level-header-0xc2-bytes) for the decoded layout.
 
-The 8-byte big-endian header is standard; the body is the big-endian
-opcode/coordinate token stream — see [VEC.md](VEC.md) for the record layout and
-interpreter.
+The 8-byte big-endian header is standard; see [VEC.md](VEC.md) for the record
+layout and interpreter.
 
-Decoded by `tools/extract/vec_records.py` (record walker) and
-`tools/extract/container.py` (header + opcode histogram).
+Decoded by `tools/extract/vec_records.py` (raw-byte record walker, pre-decompress)
+and `tools/extract/container.py` (header + opcode histogram); rendered by
+`tools/extract/render_levels.py`.
 
 ## Files
 
-| File | Bytes | `decoded_size` | Distinct opcodes | Coord words |
+**Caveat:** as with `.PAV`/`.DEC`, the `Distinct opcodes`/`Coord words` columns
+below come from `vec_records.py` scanning the still-RLE-compressed file bytes
+directly, before `op4` decompression — most of the extra opcode hits are
+checksum-collision scanner noise, not real dispatch. The real,
+oracle-validated decode dispatches only `op4`/`op12` for every `.BUM` file (see
+[VEC.md](VEC.md#opcode-coverage-what-the-python-code-actually-dispatches)).
+
+| File | Bytes | `decoded_size` | Distinct opcodes (raw-byte scan, likely noise) | Coord words |
 |------|------:|---------------:|-----------------:|------------:|
 | D1.BUM | 686 | 0x0369 | 4 | 334 |
 | D2.BUM | 1120 | 0x0b60 | 1 | 551 |
@@ -27,7 +38,8 @@ Decoded by `tools/extract/vec_records.py` (record walker) and
 
 ## Sub-shape variants
 
-Two structural variants are visible in the data:
+Two structural variants are visible in the raw-byte scan (see caveat above —
+this describes scanner output, not necessarily real dispatched content):
 
 - **Sparse** (`D1`–`D5`, `D7`, `D8`): one or two opcodes (often just `op12`)
   followed by a long coordinate run — a single masked shape, object sprite, or

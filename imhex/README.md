@@ -28,9 +28,13 @@ Notes per format:
 - **container** — decodes the documented 8-byte header and overlays record 0 (always
   `op4`, with `w1 == decoded_size`) using the reusable `VecRecord` type. The body from
   `0x0D` is `op4`-RLE-compressed and is shown as an opaque `compressed_body` blob; the
-  escape byte is at `0x0C`. Walking the decompressed record stream is done in pure Python
-  by `tools/extract/vec_records.py` — see "RLE" below for why that decode is not in the
-  pattern.
+  escape byte is at `0x0C`. `tools/extract/vec_records.py` walks that raw, still-compressed
+  body directly (a checksum-only scan, no decompression) and is useful for empirical byte
+  accounting, but most "records" it finds past record 0 are coincidental checksum hits in
+  the compressed data, not real dispatched opcodes — see
+  `docs/formats/VEC.md#opcode-coverage-what-the-python-code-actually-dispatches`. The
+  actual post-decompression decode (confirmed to need only `op4`/`op12`) lives in
+  `tools/extract/op12_port.py`; see "RLE" below for why that decode is not in the pattern.
 - **bin** — walks the frame-offset table until an entry points past EOF, then lays a
   `Frame` (header + `width_words * height` planar `u16`s) at each `0x800 + offset - 0xC`.
   The mask-RLE pixel variant (`ctrl & 0x40`) is flagged in a comment but not expanded.
