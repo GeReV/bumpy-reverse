@@ -269,8 +269,19 @@ int open_resource(u16 res_idx, u16 mode)
     return -1;
 }
 
-/* Read the whole file into the far buffer in ≤64000-byte chunks; return the total.
- * (.VEC files are all < 64 KB so this is a single chunk in practice.) */
+/* dosio_read/read() return a plain (16-bit, this target) signed int (see dosio.c);
+ * a single DOS INT21h/AH=3Fh transfer of >32767 bytes comes back with its high bit
+ * set, which a signed int reads as negative — read_chunked's `if (n <= 0) break`
+ * would then misclassify a real, successful read as EOF/error and stop early
+ * (2026-07-14: found independently by two review passes; the SMF load actually hits
+ * this — BUMPY.MID is 35141 B against a 36864-byte single-shot request). Cap every
+ * individual dosio_read request below the signed 16-bit boundary so the returned
+ * count can never appear negative; the existing total/short-read loop logic already
+ * handles multiple chunks correctly. */
+#define HR_MAX_READ_CHUNK 0x7a00u   /* 31232 < 32767; comfortably under INT16_MAX */
+
+/* Read the whole file into the far buffer in ≤HR_MAX_READ_CHUNK-byte chunks; return
+ * the total. (.VEC files are all < 64 KB so this is 1-2 chunks in practice.) */
 u32 read_chunked(int handle, u16 buf_off, u16 buf_seg, u16 len_lo, u16 len_hi)
 {
     u8 __far *buf = (u8 __far *)MK_FP(buf_seg, buf_off);
@@ -290,8 +301,10 @@ u32 read_chunked(int handle, u16 buf_off, u16 buf_seg, u16 len_lo, u16 len_hi)
             dst = host_intro_smf_fp;
             if (dst != (u8 __far *)0) {
                 for (;;) {
-                    u16 room = (total < (u32)HR_SMF_BUF_BYTES)
-                             ? (u16)((u32)HR_SMF_BUF_BYTES - total) : 0u;
+                    u32 remaining = (total < (u32)HR_SMF_BUF_BYTES)
+                                  ? (u32)HR_SMF_BUF_BYTES - total : 0u;
+                    u16 room = (remaining > (u32)HR_MAX_READ_CHUNK)
+                             ? HR_MAX_READ_CHUNK : (u16)remaining;
                     if (room == 0u) {
                         break;                                  /* buffer full (SMF < buffer, so unreached) */
                     }
@@ -323,16 +336,16 @@ u32 read_chunked(int handle, u16 buf_off, u16 buf_seg, u16 len_lo, u16 len_hi)
     }
 
     for (;;) {
-        n = dosio_read(handle, buf, 0xFA00u);   /* 64000 */
+        n = dosio_read(handle, buf, HR_MAX_READ_CHUNK);
         if (n <= 0) {
             break;
         }
         total += (u32)n;
-        if (n < 0xFA00) {
+        if (n < (int)HR_MAX_READ_CHUNK) {
             break;
         }
-        /* advance the far pointer by 64000 bytes (segment carry) for >64KB reads. */
-        buf = (u8 __far *)(buf + 0xFA00u);
+        /* advance the far pointer by the chunk size (segment carry) for >64KB reads. */
+        buf = (u8 __far *)(buf + HR_MAX_READ_CHUNK);
     }
     return total;
 }

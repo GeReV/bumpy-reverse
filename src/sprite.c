@@ -68,12 +68,15 @@ static void sprite_frame_transform(u8 __far *pix, u8 palette_mode)
     pix[-2] = b1; pix[-1] = b0;    /* swap -> proper value                          */
     h = (u16)(((u16)b0 << 8) | b1);
     if ((s8)b0 >= 0 && h != 0) {
-        /* byte-swap header words [-2],[-3],[-4],[-6] and [-5] */
-        b0 = pix[-4];  b1 = pix[-3];  pix[-4] = b1;  pix[-3] = b0;   /* w */
-        b0 = pix[-6];  b1 = pix[-5];  pix[-6] = b1;  pix[-5] = b0;
-        b0 = pix[-8];  b1 = pix[-7];  pix[-8] = b1;  pix[-7] = b0;
-        b0 = pix[-12]; b1 = pix[-11]; pix[-12] = b1; pix[-11] = b0;
-        b0 = pix[-10]; b1 = pix[-9];                                 /* word[-5] */
+        /* byte-swap header words [-2],[-3],[-4],[-6] and [-5]. Labels per
+           sprite_anim.h's frame-header legend: height=[-2] (h, above),
+           width=[-4], X-anchor=[-6], Y-anchor=[-8], sub-header count=[-12],
+           ctrl byte=[-10] (hdr5, below). */
+        b0 = pix[-4];  b1 = pix[-3];  pix[-4] = b1;  pix[-3] = b0;   /* w (width) */
+        b0 = pix[-6];  b1 = pix[-5];  pix[-6] = b1;  pix[-5] = b0;   /* X-anchor */
+        b0 = pix[-8];  b1 = pix[-7];  pix[-8] = b1;  pix[-7] = b0;   /* Y-anchor */
+        b0 = pix[-12]; b1 = pix[-11]; pix[-12] = b1; pix[-11] = b0;  /* sub-header count */
+        b0 = pix[-10]; b1 = pix[-9];                                 /* word[-5]: ctrl byte */
         hdr5 = (u16)((u16)b0 | ((u16)b1 << 8));                      /* original value */
         pix[-10] = b1; pix[-9] = b0;
         if ((hdr5 & 0xC000u) == 0u) {
@@ -92,11 +95,18 @@ static void sprite_frame_transform(u8 __far *pix, u8 palette_mode)
                     p[1] = o2; p[2] = o4; p[3] = o6;
                     p[4] = o1; p[5] = o3; p[6] = o5;
                     if (palette_mode == 0u) {
-                        /* CGA: bit-reverse words 0,2; zero words 1,3 (unvalidated). */
+                        /* CGA: bit-reverse words 0,2; zero words 1,3 (unvalidated).
+                           Store order (asm 1cec:0d48/0d4a, 0d8f/0d91): the accumulator
+                           is built in BX via 16x SHL+RCL, then XCHG BL,BH swaps it
+                           before the little-endian word store — so the HIGH byte of
+                           the accumulator lands at the LOWER address, not the low
+                           byte (verified 2026-07-14: traced the full 16-bit rotate
+                           chain bit-for-bit against sprite_bitrev_block's v layout;
+                           the earlier p[0]=v&0xFF/p[1]=v>>8 form had this backwards). */
                         u16 v0 = sprite_bitrev_block(p[0], p[1]);
                         u16 v2 = sprite_bitrev_block(p[4], p[5]);
-                        p[0] = (u8)(v0 & 0xFF); p[1] = (u8)(v0 >> 8);
-                        p[4] = (u8)(v2 & 0xFF); p[5] = (u8)(v2 >> 8);
+                        p[0] = (u8)(v0 >> 8); p[1] = (u8)(v0 & 0xFF);
+                        p[4] = (u8)(v2 >> 8); p[5] = (u8)(v2 & 0xFF);
                         p[2] = 0; p[3] = 0;     /* piVar8[1] = 0 */
                         p[6] = 0; p[7] = 0;     /* piVar8[3] = 0 */
                     }
@@ -116,7 +126,8 @@ void sprite_bank_load_transform(u8 __far *bank, u8 palette_mode)
     u32 off;
     u8 __far *pix;
 
-    for (i = 0; i < 512u; i++) {
+    for (i = 0; i < 512u; i++) {   /* 512 = 0x800 / 4: the BE32 offset-table region
+                                       (sprite.h) is 0x800 bytes of 4-byte entries */
         e = bank_ptr(bank, (u32)i * 4u);
         off = ((u32)e[0] << 24) | ((u32)e[1] << 16) | ((u32)e[2] << 8) | (u32)e[3];
         if (off == 0u) {
