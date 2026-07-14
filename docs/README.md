@@ -23,6 +23,7 @@ note in [formats/README.md](formats/README.md).
 
 | Doc | Topic |
 |-----|-------|
+| [tools.md](tools.md) | The `tools/` extraction, rendering, and unpacking scripts — what each one reads and produces |
 | [tinyprog.md](tinyprog.md) | The TinyProg executable-packing format (CRC-keyed anti-tamper + LZSS) |
 | [copy-protection.md](copy-protection.md) | The copy-protection mechanism (platform-number challenge + protection data files) |
 | [building.md](building.md) | Building the reconstruction — the Open Watcom toolchain, the faithful `BUMPY.EXE` and playable `BUMPYP.EXE` targets, and the build harness |
