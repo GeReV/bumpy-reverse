@@ -31,7 +31,7 @@
  *
  * RECONSTRUCTION FIDELITY — the stack-overflow guard:
  *   Every original function begins with
- *       if (stack_check_limit <= &stack0xfffe) FUN_1000_ab83();
+ *       if (stack_check_limit <= &stack0xfffe) borland_stack_overflow();
  *   which is the Turbo C near-stack-check prologue (calls the stack-overflow
  *   abort thunk).  This is CRT scaffolding, not game logic; it is intentionally
  *   omitted here (the Open Watcom CRT performs its own stack checking).  Noted
@@ -152,15 +152,17 @@ u8        deferred_contact_buf[16];    /* DGROUP 0x0886 — the event buffer (he
  *       invent structure the binary does not document.
  *   (2) The hardware-setup sub-calls (init_timer_resource_table=7bad,
  *       init_sound_tables=7563, sound_device_select_screen_thunk=97a4 / gfx_draw_sequence_thunk=97f1,
- *       init_crtc_window=set_crtc_window 9821, set_display_page=9814,
+ *       init_crtc_window=9821, set_display_page=9814,
  *       set_text_color=97c5, set_resource_table, install_interrupt_handler,
  *       init_joystick_handlers, mouse_reset, set_disk_swap_callback) are audio/CRTC/
  *       resource hardware init that cannot run without the full game data + real DOS;
  *       they are genuine HARDWARE-INIT CARVE-OUT stubs in game_stubs.c.
  *       install_keyboard_isr is the one REAL reconstructed call (input.c).
  *
- * Boot deviation: the original sets the display via set_crtc_window's (1000:9821)
- * CRTC block; here we additionally call video_set_mode_0d() so the T3 boot harness can assert
+ * Boot deviation: the original's boot-time mode set lives in the graphics-overlay
+ * init (absent from the corpus) — NOT in init_crtc_window (1000:9821), which only
+ * stores a clip-window record and never touches the CRTC (see host_video.c); here
+ * we additionally call video_set_mode_0d() so the T3 boot harness can assert
  * VGA mode 0x0D is set (the only externally observable boot effect).  DEVIATION.
  * ============================================================================ */
 void init_game_session_state(void)
@@ -197,8 +199,18 @@ void init_game_session_state(void)
     /* The named, in-scope session-default resets (decomp lines 448-494). */
     current_level_index = 0;
     palette_loaded      = 0;
-    cur_level_ptr       = (u8 __far *)0;   /* engine: cur_level_ptr = DAT_6bd2 */
-    level_src_ptr       = (u8 __far *)0;   /* engine: level_src_ptr = DAT_6bf2 */
+
+    /* engine (1000:03b1-03e1): cur_level_ptr = DAT_6bd2 + current_level_index*0x32c;
+       level_src_ptr = DAT_6bf2 + current_level_index*0xc2 — a real per-level table
+       lookup (DAT_6bd2/DAT_6bf2 are the level-archive base pointers set by
+       load_current_level_data, see level.c). NOT a literal NULL in general — but this
+       is the ONE call site (init_game_session_state has a single caller, the program
+       bootstrap, so this always runs before any level has ever loaded) where both the
+       index (just zeroed above) AND the table bases themselves are 0: DAT_6bd2/DAT_6bd4
+       and DAT_6bf2/DAT_6bf4 are compiled as 00 00 00 00 in the binary (verified via raw
+       file bytes, 2026-07-14), so the formula evaluates to exactly NULL here. */
+    cur_level_ptr       = (u8 __far *)0;
+    level_src_ptr       = (u8 __far *)0;
 
     /* The ~46 remaining UNNAMED opaque DGROUP resets — see (1) above. */
     reset_opaque_session_globals();
@@ -776,6 +788,22 @@ void run_n_frames(unsigned char n)
  *       in the engine; owned + named here (see the extern block above).
  * The field offsets/values are verbatim from the asm (LES BX,[view]; MOV ES:[BX+N],V).
  * ============================================================================ */
+/* Recurring view-descriptor field offset legend (mirrors anim.c's writers for the
+ * same descriptor layout — see draw_anim_channels_a/b for the per-field breakdown
+ * cited inline there):
+ *   +0x00       flag word (1 = active/in-use)
+ *   +0x02/+0x04 far-data source (some descriptors only)
+ *   +0x06/+0x08 sprite-sheet/screen_sprite_buf far ptr (some descriptors only)
+ *   +0x0a       flags byte (some descriptors only)
+ *   +0x0c       additional per-descriptor field, view-type dependent (some
+ *               descriptors only; exact role not independently identified here)
+ *   +0x0e       sub-handler tag (some descriptors only)
+ *   +0x10/+0x12 work-buffer far ptr off/seg
+ *   +0x14/+0x16 rect origin x/y
+ *   +0x18/+0x1a rect width/height
+ *   +0x1e/+0x20 alternate rect origin (some descriptors only)
+ *   +0x1c       sub-handler tag / trailer byte
+ * Each block below sets only the subset a given descriptor actually uses. */
 void init_view_anim_descriptors(void)
 {
     u8 __far *v;

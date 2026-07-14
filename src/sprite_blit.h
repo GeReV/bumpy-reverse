@@ -3,6 +3,14 @@
 
 #include "bumpy.h"
 
+/* Linear address of VGA segment 0xA000:0000 (20-bit real-mode linear = seg<<4).
+   Named so callers computing voff = dst_seg*16+dst_off-VGA_SEG_A000_LIN don't
+   repeat the bare 0xA0000UL literal (see host.h's VGA_SEG_PAGE0_LIN for the
+   playable-host-only equivalent — this one has no host.h dependency, for
+   engine-side callers like entity.c that build in the default, non-playable
+   image too). */
+#define VGA_SEG_A000_LIN 0xA0000UL
+
 /* Faithful C port of the planar-VGA masked sprite blitter sprite_blit_planar_vga
    (overlay 1cec:10e1).  The engine programs the VGA Graphics/Sequencer registers
    (GC Mode/Data-Rotate, Seq Map-Mask, GC Bit-Mask) and writes the prepared frame

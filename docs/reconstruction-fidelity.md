@@ -815,14 +815,54 @@ body now, not a stub).
 (dispatch + device + tone-engine + hardware drivers + ISR sequencer + the MIDI dispatch
 backends) AND the full MIDI/SMF sequencer (parser + sequencer driver + tempo timer +
 MIDI-to-OPL2 voice dispatch) are now reconstructed and validated (L1–L4 + the MIDI
-parser/driver) / documented (L5 + the tempo-ISR carve-out). The ONLY remaining MIDI-module
-gap is `midi_install_tempo_timer`'s per-PIT-tick playback loop (w above) — a documented,
-permanent carve-out in the same class as the L5 tone-sequencer, not a deferral. The
+parser/driver) / documented (L5 + the tempo-ISR carve-out). At the time this closeout was
+written, the ONLY remaining MIDI-module gap was `midi_install_tempo_timer`'s per-PIT-tick
+playback loop (w above) — see the CARVE-OUT (w) LIFTED note below: this was subsequently
+reconstructed as `midi_tempo_tick` (2026-07-13) and its Ghidra-sync gap closed (2026-07-14).
+The
 **int8-synced end-to-end gate** remains the standing project-wide deferral (the Unicorn
 capture granularity does not match the engine's physics-frame rate; a frame-accurate
 DOSBox-path capture is needed before the full game loop can be replay-validated
 tick-for-tick — unchanged from Phases 2/3/4/5/6), alongside the separate CODES.EXE
 registration RE.
+
+### CARVE-OUT (w) LIFTED — `midi_tempo_tick` reconstructed (2026-07-13), Ghidra-sync gap closed (2026-07-14)
+
+The tempo-ISR carve-out (w) above described the state as of the Task E2 closeout: the
+per-PIT-tick SMF-advance loop `midi_install_tempo_timer` installs at `0x864c` had no
+`src/midi.c` body. It was reconstructed the same day (commit `fd4b12b`) as
+`midi_tempo_tick` — every callee it needs (`midi_parse_file`, `snddrv_dispatch_a`,
+`midi_process_event`, `set_timer_slot_reg`) and every table it walks
+(`midi_track_count`, `midi_track_ptr_table`, `midi_track_time_table`, `midi_data_seg`,
+`midi_aux_ptr_off`/`_seg`) was already reconstructed, so the playable build's host INT8
+ISR can drive it via `snd_timer_slot_sweep`'s `0x864c` dispatch and produce audible MIDI
+music. It runs entirely in ISR context (int-8 entry already clears IF, so the asm's own
+`pushf;cli … popf` bracket around the parse call is ambient scaffolding, modelled as
+direct calls per this file's convention) and is a real x86 `LOOP` over the active-track
+count, equivalent to the reconstructed `while (count != 0)`.
+
+This one was flagged in a 2026-07-14 review for lacking a live Ghidra counterpart — the
+address had no defined function (an indirect-call-only target reached solely via the
+far-pointer timer-slot install `midi_install_tempo_timer` performs, so it has no static
+call-graph edge and Ghidra's auto-analysis never walked into it, the same situation as
+the L5 tone-sequencer callbacks). Resolved by direct verification rather than trust on
+either side: parsing the unpacked EXE's own MZ header (`e_cparhdr = 0x109` paragraphs)
+gives `file_offset = 0x1090 + (seg−0x1000)×16 + off`, confirmed against three independent
+known Ghidra string addresses (`BUMPY.MID`, `BUMPYOBJ.VEC`, the copyright banner); the
+raw bytes at `1000:8600`–`8721` disassemble (`tools/disasm16.py`) to an exact,
+instruction-for-instruction match against `src/midi.c`'s `midi_tempo_tick` and every
+address its header comment cites, and confirm `snddrv_dispatch_d` genuinely ends in
+`RET` at `864b` with zero padding before `864c` begins. A function was then defined at
+`1000:864c` in the live Ghidra project, named `midi_tempo_tick`, typed `void(void)`, and
+most locals renamed (`track_ptr`, `active_count`, `delta_lo`, `new_delta`) to match; the
+time-hi local resisted the MCP rename tool for unexplained reasons (reports success but
+the decompile keeps showing `iVar1` — left as-is rather than spend further tool calls on
+a cosmetic issue). One decompiler-mismodeled variable (the far-pointer write-back
+after the `midi_process_event` call, which the decompiler renders as copying back a
+stale pre-call snapshot rather than the post-call live SI/DS) is left un-renamed with an
+explanatory decompiler comment at `1000:86c5` instead, since `src/midi.c`'s
+register-level reasoning is the trustworthy version there, not Ghidra's pseudocode.
+`docs/ghidra-symbol-map.md`'s MIDI section should be updated to include this symbol.
 
 ## Phase-7 module audit (front-end + in-game HUD — `src/screens.c`)
 
@@ -1374,6 +1414,17 @@ carve-out boundary mechanically gated.
     `validate_sprites` PASS (sprite-bank transform 87068 B byte-exact).
   - `BUMPY.EXE` links clean (233 230 B, Open Watcom 16-bit DOS, no duplicate symbols).
 
+**UPDATE (2026-07-14): the "58 carve-outs" figure above is a Phase-9 T4 (2026-06-21)
+snapshot, kept as history — it does not reflect the current count.** Subsequent phases
+(the audio subsystem, `player2.c`, `anim.c`, `screens.c` promotion passes) un-stubbed
+most of the original 58 into real reconstructions. Recounted directly against
+`src/game_stubs.c` (2026-07-14): **35 total function symbols, of which 3 contain
+verified real logic** kept in this file only for link-ordering (`move_step_teleport_exit`,
+`game_mode_handler_idx1d`, `game_mode_handler_idx30`, each checked against Ghidra —
+no divergence found) **— 32 genuine unreconstructed carve-outs.** `tools/validate_integration.sh`'s
+allowlist check (see finding above) validates against whatever the file's real symbol set is at
+build time, so the *gate* was never stale — only this doc's narrated numbers were.
+
 **Deferred from Phase 9 (the remaining open items):**
 
 1. **int8-synced end-to-end (tick-for-tick) gate** — **RESOLVED** (int8-snap, Task 7; see the
@@ -1633,9 +1684,13 @@ documented CORE render divergence:**
 
 - **`mouse_reset` — benign no-op.** INT 33h AX=0 not issued.  Keyboard-only host.
 
-- **`init_sound_tables` — SILENT SOUND (Tier 1).** Engine body (1000:7563)
-  installs a sound-driver far-fn pointer into the joystick handler table.
-  Benign no-op in the host.  Sound output is Plan B / Tier 2.
+- **`init_sound_tables` — benign no-op, unrelated to audio playback.** Engine body
+  (1000:7563) installs a sound-driver far-fn pointer into the joystick handler
+  table — despite the name, this is a joystick-slot install, not audio output.
+  Benign no-op in the host either way. (UPDATED 2026-07-14: the audio subsystem
+  — `src/sound.c`/`src/midi.c` — was completed and merged 2026-07-13 and is
+  driven for real via `host_timer.c`'s INT8 ISR; the playable build has audio.
+  This leaf's no-op is unaffected — it was never on the audio path.)
 
 - **`set_disk_swap_callback` — benign no-op.** INT 24h critical-error handler not
   installed (single-mount Tier-1 run; no disk-swap prompt needed).
@@ -2234,9 +2289,9 @@ shortcuts to a static filename table + direct dosio open (data is mounted, no co
 RECONSTRUCTION FIDELITY divergence — intro-SMF (BUMPY.MID) buffer lifetime (host memory
 constraint, 2026-07-13): play_intro_animation_loop reads resource 5 (the 35 KB SMF) through the
 0xa0c8 screen-sprite target and plays it via the tempo ISR.  In the engine that target is
-screen_sprite_buf — a SHARED session buffer alloc_level_buffers (1000:0492) allocates ONCE
+screen_sprite_buf — a SHARED session buffer alloc_level_buffers (1000:0416) allocates ONCE
 (malloc 0x5c70 = 23,664 B) and gameplay REUSES for each level's sprite bank (release_level_buffers
-1000:05ad frees it only at exit); so the SMF is transient scratch, overwritten by the first
+1000:0569 frees it only at exit); so the SMF is transient scratch, overwritten by the first
 level's sprite load, never resident during play — the engine pays NO dedicated MIDI memory.  The
 host does not model screen_sprite_buf (its sprite reads drain to VGA/discard — process_sprites is a
 NOP), so it stages the SMF in a PRIVATE _fmalloc (host_intro_smf_fp).  It is FREED when the intro

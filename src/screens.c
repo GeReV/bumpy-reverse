@@ -1057,7 +1057,7 @@ void show_title_background(void)
     }
     play_iris_wipe_transition();
     d = (screen_view_desc __far *)render_descriptor_ptr;
-    d->image_off = fullscreen_buf + 99;
+    d->image_off = fullscreen_buf + 99;          /* image off (+99, skips the decoded-image header) */
     d->image_seg = fullscreen_buf_seg;
     d->src_x = 0;
     d->src_y = 0;
@@ -1131,7 +1131,7 @@ void show_title_and_init(void)
     }
     play_iris_wipe_transition();
     d = (screen_view_desc __far *)render_descriptor_ptr;
-    d->image_off = fullscreen_buf + 99;
+    d->image_off = fullscreen_buf + 99;          /* image off (+99, skips the decoded-image header) */
     d->image_seg = fullscreen_buf_seg;
     d->src_x = 0;
     d->src_y = 0;
@@ -1174,7 +1174,7 @@ u8  menu_timing_table[4] = { 0xff, 0xaa, 0x00, 0x00 };   /* DGROUP 0x11b2 */
  * ════════════════════════════════════════════════════════════════════════════ */
 u8 run_main_menu(void)
 {
-    int  iVar3;
+    int  res_handle;
     char key;
     screen_view_desc __far *d;
     u16 __far *p;
@@ -1190,9 +1190,9 @@ u8 run_main_menu(void)
     for (k = 0; k < 4; k = k + 1) {
         menu_timing[k] = menu_timing_table[k];
     }
-    iVar3 = open_resource(0x12, 4);
-    bytes_read = read_chunked(iVar3, fullscreen_buf, fullscreen_buf_seg, 0x09e2, 0x09e4);
-    c_close(iVar3);
+    res_handle = open_resource(0x12, 4);
+    bytes_read = read_chunked(res_handle, fullscreen_buf, fullscreen_buf_seg, 0x09e2, 0x09e4);
+    c_close(res_handle);
     vec_decode(fullscreen_buf, fullscreen_buf_seg, bytes_read, 0x7d63, 0);
     if (palette_mode == 1) {
         patch_image_palette(dgroup_pal_patch_64a);
@@ -1206,7 +1206,7 @@ u8 run_main_menu(void)
     input_state = 0;
     play_iris_wipe_transition();
     d = (screen_view_desc __far *)render_descriptor_ptr;
-    d->image_off = fullscreen_buf + 99;
+    d->image_off = fullscreen_buf + 99;          /* image off (+99, skips the decoded-image header) */
     d->image_seg = fullscreen_buf_seg;
     d->src_x = 0;
     d->src_y = 0;
@@ -1313,7 +1313,7 @@ void show_menu_select_screen(void)
 {
     u16 __far *p;
     int  res_handle;
-    u8   bVar1;
+    u8   glyph_ch;
     u8   char_idx;
     u8   col_pos;
     const u8 *third_row;
@@ -1368,10 +1368,10 @@ void show_menu_select_screen(void)
     p = (u16 __far *)p1_sprite;
     p[1] = 0x10;
     for (char_idx = 0; char_idx < 0x13; char_idx = char_idx + 1) {
-        bVar1 = menu_select_row1[char_idx];
-        ((u16 __far *)p1_sprite)[2] = (u16)bVar1 + GLYPH_FRAME_BIAS;
+        glyph_ch = menu_select_row1[char_idx];
+        ((u16 __far *)p1_sprite)[2] = (u16)glyph_ch + GLYPH_FRAME_BIAS;
         *(u16 __far *)p1_sprite = (u16)col_pos << 4;
-        if (bVar1 != 0x20) {
+        if (glyph_ch != 0x20) {
             anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
         }
         col_pos = col_pos + 1;
@@ -1400,10 +1400,10 @@ void show_menu_select_screen(void)
     col_pos = 3;
     ((u16 __far *)p1_sprite)[1] = 0x60;
     for (char_idx = 0; char_idx < 0x0e; char_idx = char_idx + 1) {
-        bVar1 = third_row[char_idx];
-        ((u16 __far *)p1_sprite)[2] = (u16)bVar1 + GLYPH_FRAME_BIAS;
+        glyph_ch = third_row[char_idx];
+        ((u16 __far *)p1_sprite)[2] = (u16)glyph_ch + GLYPH_FRAME_BIAS;
         *(u16 __far *)p1_sprite = (u16)col_pos << 4;
-        if (bVar1 != 0x20) {
+        if (glyph_ch != 0x20) {
             anim_blit_sprite_leaf(0x792e, SCREENS_DGROUP_RUNTIME_SEG);
         }
         col_pos = col_pos + 1;
@@ -1864,7 +1864,7 @@ void highscore_enter_name(u8 row)
     char_idx = 0;
     /* highscore_entry_ptr -> the 8-byte entry at row*8+0x8f0; the name CHARS are at
        MK_FP(entry[1], entry[0]) (the entry's name far ptr). */
-    highscore_entry_ptr = (u16 __far *)&highscore_name_buf[(u16)row * 8];
+    highscore_entry_ptr = (u16 __far *)&highscore_name_buf[(u16)row * HIGHSCORE_NAME_LEN];
     name = (u8 __far *)MK_FP(highscore_entry_ptr[1], highscore_entry_ptr[0]);
     letter_code = 0x1b6;
     name[0] = 0x41;                                  /* name[0] = 'A' */
@@ -1972,39 +1972,40 @@ void render_highscore_table(void)
     set_sprite_table_ptr(0);
     qualified = '\0';
     insert_row = 0;
-    for (row_idx = 0; row_idx < 7; row_idx = row_idx + 1) {
-        /* entry = highscore_name_buf[row*8]: {u16 name_off, u16 name_seg, u16 score_lo,
-           u16 score_hi}.  highscore_entry_ptr -> that entry; name chars = MK_FP(seg,off). */
-        highscore_entry_ptr = (u16 __far *)&highscore_name_buf[(u16)row_idx * 8];
+    for (row_idx = 0; row_idx < HIGHSCORE_TABLE_ROWS; row_idx = row_idx + 1) {
+        /* entry = highscore_name_buf[row*HIGHSCORE_NAME_LEN]: {u16 name_off, u16 name_seg,
+           u16 score_lo, u16 score_hi}.  highscore_entry_ptr -> that entry; name chars =
+           MK_FP(seg,off). */
+        highscore_entry_ptr = (u16 __far *)&highscore_name_buf[(u16)row_idx * HIGHSCORE_NAME_LEN];
         if ((highscore_entry_ptr[3] <= score_hi) &&
             (((highscore_entry_ptr[3] < score_hi) ||
               (highscore_entry_ptr[2] < score_lo)) &&
              (qualified == '\0'))) {
             qualified = '\x01';
             insert_row = row_idx;
-            /* shift the lower entries down (rows row_idx+1..6 <- row_idx..5). */
-            for (shift_idx = 6; row_idx < shift_idx; shift_idx = shift_idx - 1) {
-                u16 __far *dst = (u16 __far *)&highscore_name_buf[(u16)shift_idx * 8];
-                u16 __far *src = (u16 __far *)&highscore_name_buf[(u16)shift_idx * 8 - 8];
+            /* shift the lower entries down (rows row_idx+1..last <- row_idx..last-1). */
+            for (shift_idx = HIGHSCORE_TABLE_ROWS - 1; row_idx < shift_idx; shift_idx = shift_idx - 1) {
+                u16 __far *dst = (u16 __far *)&highscore_name_buf[(u16)shift_idx * HIGHSCORE_NAME_LEN];
+                u16 __far *src = (u16 __far *)&highscore_name_buf[(u16)shift_idx * HIGHSCORE_NAME_LEN - HIGHSCORE_NAME_LEN];
                 dst[0] = src[0];
                 dst[1] = src[1];
                 dst[2] = src[2];
                 dst[3] = src[3];
             }
-            /* insert the placeholder name far ptr + 'A'×8 name + the score. */
+            /* insert the placeholder name far ptr + 'A'×HIGHSCORE_NAME_LEN name + the score. */
             highscore_entry_ptr[0] = highscore_new_name_off;
             highscore_entry_ptr[1] = highscore_new_name_seg;
             name = (u8 __far *)MK_FP(highscore_entry_ptr[1], highscore_entry_ptr[0]);
-            for (shift_idx = 0; shift_idx < 8; shift_idx = shift_idx + 1) {
+            for (shift_idx = 0; shift_idx < HIGHSCORE_NAME_LEN; shift_idx = shift_idx + 1) {
                 name[shift_idx] = 0x41;
             }
             highscore_entry_ptr[2] = score_lo;
             highscore_entry_ptr[3] = score_hi;
         }
-        /* draw the 8 name glyphs for this row. */
+        /* draw the HIGHSCORE_NAME_LEN name glyphs for this row. */
         ((u16 __far *)p1_sprite)[1] = (u16)row_idx * 0x10 + 0x41;
         name = (u8 __far *)MK_FP(highscore_entry_ptr[1], highscore_entry_ptr[0]);
-        for (char_col = 0; char_col < 8; char_col = char_col + 1) {
+        for (char_col = 0; char_col < HIGHSCORE_NAME_LEN; char_col = char_col + 1) {
             p = (u16 __far *)p1_sprite;
             name_char = name[char_col];
             if (name_char == 0x2e) {
@@ -2058,7 +2059,7 @@ void show_highscore_screen(void)
     }
     play_iris_wipe_transition();
     d = (screen_view_desc __far *)render_descriptor_ptr;
-    d->image_off = fullscreen_img_buf + 99;
+    d->image_off = fullscreen_img_buf + 99;          /* image off (+99, skips the decoded-image header) */
     d->image_seg = highscore_bg_buf_seg;
     d->src_x = 0;
     d->src_y = 0;
@@ -2363,7 +2364,7 @@ void level_intro_screen(void)
     play_iris_wipe_transition();
 #endif
     d = (screen_view_desc __far *)render_descriptor_ptr;
-    d->image_off = fullscreen_buf + 99;
+    d->image_off = fullscreen_buf + 99;          /* image off (+99, skips the decoded-image header) */
     d->image_seg = fullscreen_buf_seg;
     d->src_x = 0;
     d->src_y = 0;

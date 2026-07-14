@@ -84,7 +84,9 @@ void gfx_overlay_thunk_init(void);           /* 1000:7bd7 */
 void sound_device_select_screen_thunk(void); /* 1000:97a4 — near-thunk to sound_device_select_screen (202c:0000) */
 void gfx_overlay_thunk_0232(u8 mode);        /* 1000:7bbd */
 void gfx_draw_sequence_thunk(void);          /* 1000:97f1 */
-void init_crtc_window(u16 x0, u16 y0, u16 x1, u16 y1);/* 1000:9821 set_crtc_window (carve) */
+void init_crtc_window(u16 x0, u16 y0, u16 x1, u16 y1);/* 1000:9821 (carve; stores a clip-window
+                                        record only, never touches the CRTC despite the
+                                        original "set_crtc_window" Ghidra misnomer) */
 void set_display_page(u8 page);
 void set_text_color(u8 fg, u8 bg);   /* 1000:97c5 → 1ab9:1311/14ef graphics-overlay set-text-colour
                                         (formerly misnomered set_palette_mode — it never

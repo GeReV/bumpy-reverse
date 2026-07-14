@@ -34,14 +34,25 @@ segments overlap in this model). The `src/` reconstruction refers to them by the
 `91cf`/`91d7`/`91df` …_mode0 · `9056` opl_read_status.
 
 ### Sound — MIDI sequencer + OPL2
+`8722` midi_start_playback · `873c` midi_process_event · `87cd` midi_load_sequence ·
+`8809` midi_parse_file · `8891` midi_read_varlen · `87a2` midi_init_track_table ·
+`864c` midi_tempo_tick (indirect-call-only target, installed by `86e9` as a far-pointer
+timer-slot-0 callback — no static call-graph edge, so Ghidra's auto-analysis never
+defined a function here; added + verified byte-for-byte against the unpacked binary
+2026-07-14, see `docs/reconstruction-fidelity.md`'s "CARVE-OUT (w) LIFTED" note) ·
 `86e9` midi_install_tempo_timer · `8977` midi_play_sequence · `8999` midi_get_track_count ·
 `89a8` midi_sound_init · `8a23` seq_normalize_far_ptr · `8b6b`/`8b81`/`8e93`
 midi_emit_voice_msg_w{2,1,3} · `922c` seq_set_channel_param · `8ea3` opl_event_note_on ·
 `8eeb` opl2_reset_all_regs · `8fb6` `maybe_`opl2_detect_chip.
 
 ### Display / render / engine glue
-`9804` draw_string_glyphs · `9814` set_active_display_page · `9821` set_crtc_window ·
-`97c5` set_palette_display_mode · `97a4` sound_device_select_screen_thunk (thunk into
+`9804` draw_string_glyphs · `9814` set_active_display_page · `9821` init_crtc_window
+(was `set_crtc_window` — thunks to `1ab9:1422`, which only stores its 4 args into the
+graphics-overlay clip-window record and never touches the CRTC; corrected 2026-07-14,
+see `docs/reconstruction-fidelity.md` and `src/host/host_video.c`) · `97c5` set_text_color
+(was `set_palette_display_mode` — thunks to `1ab9:1311`/`14ef`, expanding fg/bg into the
+4-plane text-glyph mask, never touches `palette_mode`; corrected 2026-07-14, same files) ·
+`97a4` sound_device_select_screen_thunk (thunk into
 `202c:0000` sound_device_select_screen — NOT a display/video function; corrected
 2026-07-14, was misattributed as init_display_controller_a/detect_video_adapter) ·
 `97f1` gfx_draw_sequence_thunk (was init_display_controller_b) ·
@@ -94,9 +105,11 @@ the mode index — confirmed against `local/borlandc/INCLUDE/GRAPHICS.H` + the i
 behavior of each vector target):
 
 `0179` gfx_init_viewport · `01c0` gfx_driver_nop · `01c1` gfx_device_clear_flag ·
-`01e1` gfx_putimage_dispatch (overlay cmd 21, `rep movsw` image copy) ·
+`01e1` gfx_stage_palette_dispatch (was `gfx_putimage_dispatch` — corrected 2026-07-14,
+matches the `gfx_stage_palette_cga/ega/vga` family it dispatches to) ·
 `01ff` gfx_cleardevice_dispatch (mode-0Dh reset) · `0232` gfx_device_reset_dispatch ·
-`02b1` gfx_palette_dispatch (VGA-DAC `OUT 0x3c8/0x3c9` upload) ·
+`02b1` gfx_upload_palette_dispatch (was `gfx_palette_dispatch` — corrected 2026-07-14;
+VGA-DAC `OUT 0x3c8/0x3c9` upload, matches the `gfx_upload_palette_cga/ega/vga` family) ·
 `0351` gfx_present_dispatch (called by `present_frame`) · `0384` gfx_device_inc_dispatch.
 
 Text output: `12b0` gfx_char_width · `1311` gfx_text_render_dispatch · `1409` gfx_set_text_mode ·
@@ -104,10 +117,12 @@ Text output: `12b0` gfx_char_width · `1311` gfx_text_render_dispatch · `1409` 
 state lives in the DGROUP block `0x6936`–`0x6946` (`gfx_clip_x0/y0/x1/y1`, `gfx_text_mode`, …).
 
 ### Graphics-overlay command-vector tables (DGROUP, slot = `[0x541d]*2 + base`)
-`0x4dda` cmdvec_init · `0x5435` cmdvec_putimage · `0x5441` cmdvec_palette ·
-`0x545d` cmdvec_cleardevice · `0x5469` cmdvec_device_reset · `0x5475` cmdvec_present ·
-`0x5481` cmdvec_setvisualpage. (Label binding is best-effort — the bases are computed offsets,
-not standalone defined-data items.)
+`0x4dda` cmdvec_init_modes · `0x5435` cmdvec_stage_palette_modes (was `cmdvec_putimage` —
+corrected 2026-07-14, matches the `01e1` rename above) · `0x5441` cmdvec_upload_palette_modes
+(was `cmdvec_palette` — corrected 2026-07-14, matches the `02b1` rename above) ·
+`0x545d` cmdvec_cleardevice_modes · `0x5469` cmdvec_device_reset_modes · `0x5475` cmdvec_present_modes ·
+`0x5481` cmdvec_setvisualpage_modes. (Label binding is best-effort — the bases are computed
+offsets, not standalone defined-data items; live names confirmed via `list_data_items` 2026-07-14.)
 
 ## Other overlays
 

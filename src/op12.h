@@ -14,7 +14,7 @@
      - DECODE ARENA  at linear base 0x67bf0 (op12_port's STREAM): the inner
        record stream and where op12 builds the final decoded image.  Reads and
        (almost all) writes land here.  Maps to op12_arena[lin - ARENA_BASE].
-     - WINDOW (0x400) at linear base DG+0x4e97 = 0x119347: the sliding window
+     - WINDOW (0x400) at linear base DG+0x4e97 = 0x16347: the sliding window
        that the dst write cursor wraps into.  Maps to window[lin - WIN_BASE].
 
    The two regions are disjoint and far apart in the linear space, so routing

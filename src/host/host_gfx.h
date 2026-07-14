@@ -61,19 +61,25 @@ extern u8 gfx_write_mode_flag_b;   /* DGROUP 0x5420 */
  * (1ab9:0179), called via thunk 1000:7b4a (Ghidra: gfx_set_viewport_thunk).
  *
  * Sets clip-extent constants view[+0x18]=0x14, view[+0x1a]=0x19 and the two mode
- * flags (gfx_write_mode_flag_a=2, gfx_write_mode_flag_b=1), then returns with NO
- * pixel blit (VGA dispatch slot 0x4dda[2]=0x0000 is null).
+ * flags (gfx_write_mode_flag_a=2, gfx_write_mode_flag_b=1), then dispatches into
+ * the SECONDARY handler at 1ab9:0000 (0x4dda[palette_mode]'s VGA/EGA slot value is
+ * 0, which is NOT a null/no-op — it's a near CALL to 1ab9:0000 itself, a real rect-
+ * fill dispatcher; see host_gfx.c for the full trace).  For sub-mode view[+0x1c]==0
+ * with a black fill colour (the iris + name-entry-cursor callers), this is a SOLID
+ * RECTANGLE FILL across all 4 VGA planes at the geometry in view[+0x14/+0x16/+0x1e/+0x20].
  *
- * VGA iris: the iris loop passes a per-step rect in +0x14/+0x16/+0x1e/+0x20 but
- * gfx_init_viewport IGNORES it (writes CONSTANTS to +0x18/+0x1a).  The visible
- * VGA iris = the vsync-timed hold (4x wait_vretrace_thunk/step, 10 steps) + the
- * final blank-palette upload (Task-1/2 palette path) → TIMED-HOLD -> BLANK-TO-BLACK,
- * not a geometric shrink (the geometric iris is an EGA/CGA effect; on VGA it
- * degenerates).  Do NOT invent a geometric wipe here.
+ * CORRECTED 2026-07-05 (was: "returns with NO pixel blit... do NOT invent a
+ * geometric wipe here" — that description was WRONG, based on mis-reading the
+ * dispatch-table zero entry as a no-op rather than a call to address 0). The VGA
+ * iris genuinely IS the geometric rect-fill shrink this primitive performs, and
+ * draw_name_entry_cursor's letter-trail-free erase depends on it too.
  *
- * RECONSTRUCTION FIDELITY: host clip-state reconstruction; VGA blit handler null;
- * per-step iris rect unconsumed on VGA; iris visible via timed hold + palette path.
- * Deviation recorded in docs/reconstruction-fidelity.md + faithfulness-gap-audit.md §1.
+ * RECONSTRUCTION FIDELITY: only sub-mode 0 (rect fill) with a black fill colour is
+ * reconstructed — the only path the playable build's callers exercise; other
+ * view[+0x1c] sub-handlers and non-black fills are left unimplemented (early
+ * return).  The self-modifying per-plane inner loop is replaced by an equivalent
+ * all-planes zero fill.  Deviation recorded in docs/reconstruction-fidelity.md
+ * ("playable host: graphics-overlay primitives").
  *
  * Called from gfx_set_viewport_thunk (screens.c) under #ifdef BUMPY_PLAYABLE.
  * `seg` is the DGROUP segment (already encoded in the far ptr `view`; unused here). */

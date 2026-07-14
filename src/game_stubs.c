@@ -221,9 +221,12 @@ int dos_abort(void)                         { return 0; }
  *  the canonical Ghidra label is cited per stub.  install_keyboard_isr is the one
  *  REAL reconstructed call in this block (input.c).
  *
- *  BUMPY_PLAYABLE: all hardware-init symbols below (through gfx_overlay_thunk_0232) are
- *  owned by src/host/host_boot.c and src/host/host_video.c in the playable build.
- *  Guard them out so both game_stubs.obj + host_*.obj can link without duplicates. */
+ *  BUMPY_PLAYABLE: most hardware-init symbols below are owned by src/host/host_boot.c
+ *  and src/host/host_video.c in the playable build, and are guarded out here (#ifndef
+ *  BUMPY_PLAYABLE) so both game_stubs.obj + host_*.obj can link without duplicates.
+ *  EXCEPTION: gfx_overlay_thunk_init and gfx_overlay_thunk_0232 (below) are NOT
+ *  guarded — they compile unconditionally in every build, because no host_*.c file
+ *  defines them; only the symbols BETWEEN/AFTER them are guarded out. */
 
 #ifndef BUMPY_PLAYABLE
 /* set_disk_swap_callback 1000:72ef — install INT24 + disk-swap prompt callback. */
@@ -285,12 +288,14 @@ void gfx_overlay_thunk_0232(u8 mode)
 }
 
 #ifndef BUMPY_PLAYABLE
-/* 1000:97f1 init_display_controller_b — display controller init. */
+/* 1000:97f1 gfx_draw_sequence_thunk (was init_display_controller_b — corrected
+ * 2026-07-14) — thunk into 1ab9:137b gfx_draw_sequence. */
 void gfx_draw_sequence_thunk(void)
 {
 }
 
-/* 1000:9821 set_crtc_window — CRTC window setup (x0,y0,x1,y1). */
+/* 1000:9821 init_crtc_window (was set_crtc_window — corrected 2026-07-14: only
+ * stores a clip-window record, never touches the CRTC). */
 void init_crtc_window(u16 x0, u16 y0, u16 x1, u16 y1)
 {
     (void)x0; (void)y0; (void)x1; (void)y1;

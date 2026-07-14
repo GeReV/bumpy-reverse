@@ -27,7 +27,7 @@
  *    accesses are `g_key_state_table[scancode & 0x7f]`, matching the engine's
  *    effective semantics; only the near-ptr level of indirection is dropped.
  *  - stack_check_limit guard: several originals begin with
- *    `if (stack_check_limit <= &stack0xfffe) FUN_1000_ab83();` — Borland C
+ *    `if (stack_check_limit <= &stack0xfffe) borland_stack_overflow();` — Borland C
  *    stack-overflow CRT noise with no game-state effect.  Omitted (documented
  *    here, per the brief), as in the rest of src/.
  *  - poll_joystick_state is a STUB for this keyboard-only slice (see below).
@@ -236,7 +236,7 @@ u16 read_joystick_axes(u16 player_sel)   /* in_AL: bit0 selects P1(0)/P2(1) */
                 return 0xffff;                    /* 0xff -> no joystick */
             }
             port_val = (u8)inp(GAME_PORT);            /* untested: probe once */
-            if ((port_val & 3) != 0) {
+            if ((port_val & 3) != 0) {                /* P1 = game-port bits 0-1 (X,Y) */
                 return 0xffff;
             }
             g_p1_joystick_present = 1;
@@ -250,7 +250,7 @@ u16 read_joystick_axes(u16 player_sel)   /* in_AL: bit0 selects P1(0)/P2(1) */
                 return 0xffff;
             }
             port_val = (u8)inp(GAME_PORT);
-            if ((port_val & 0xc) != 0) {
+            if ((port_val & 0xc) != 0) {               /* P2 = game-port bits 2-3 (X,Y) */
                 return 0xffff;
             }
             g_p2_joystick_present = 1;
@@ -304,11 +304,17 @@ u16 read_joystick_axes(u16 player_sel)   /* in_AL: bit0 selects P1(0)/P2(1) */
             port_val  = (u8)axis_mask;             /* low mask byte (BL=0x02 → port bit1 = Y line) */
             high_mask = (u8)(axis_mask >> 8);      /* high mask byte (BH=0x01 → port bit0 = X line) */
             if (port_val == 0) {
-LAB_1000_78ff:
+LAB_1000_78ff:                     /* port_val==0: the Y-line mask bit already went low
+                                       on an earlier pass through this loop (or on entry
+                                       via the goto below) — check whether the X-line
+                                       (high_mask) has now gone low too. */
                 if ((high_mask & y_mask) == 0) {
                     axis_mask = axis_mask & 0xff;
                     g_joy_x_raw = g_joy_pit_counter;
-joined_r0x0001792a:
+joined_r0x0001792a:                /* both this loop's line and the other line the code
+                                       already latched have now gone low — port_val==0
+                                       here means EVERY axis line is accounted for, so
+                                       finish and return the packed X/Y timing counts. */
                     if (port_val == 0) {
                         axis_mask = (u16)g_joy_x_raw;
                         if (g_joy_x_raw < 0) {

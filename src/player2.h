@@ -40,6 +40,7 @@
  *      p2_ai_threshold     0x7920  u8
  *      p2_dir_blocked_0    0xa0e0  u8
  *      p2_dir_blocked_1    0xa0e1  u8
+ *      p2_dir_blocked_2    0xa0e2  u8
  *      p2_dir_blocked_3    0xa1b2  u8
  *      pvp_collision_flag  0xa1aa  u8
  *      pvp_p1_bbox[4]      0x084c..0x0852 s16   (x0,x1,y0,y1)

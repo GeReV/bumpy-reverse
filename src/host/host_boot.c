@@ -31,10 +31,13 @@
  *    Engine body: calls set_joystick_handler_slot() with register-passed args
  *    (stores a far function pointer into g_joystick_handler_table at index AX).
  *    The "sound table" the name implies is actually a joystick-slot install for
- *    the sound driver.  In the playable host:
- *    SILENT SOUND (Tier 1): the sound sequencer is not driven; init_sound_tables
- *    is a benign no-op.  Sound output is Plan B / Tier 2.
- *    Deviation: silent-sound in docs/reconstruction-fidelity.md row "host_boot.c".
+ *    the sound driver, unrelated to sound playback itself — this leaf stays a
+ *    benign no-op in the playable host regardless of the audio subsystem's own
+ *    state.  (UPDATED 2026-07-14: the audio subsystem — src/sound.c, src/midi.c —
+ *    was completed and merged 2026-07-13 and IS driven for real via
+ *    host_timer.c's INT8 ISR; the playable build has audio.  This leaf's no-op
+ *    is unaffected either way — it was never on the audio path.)
+ *    Deviation: documented in docs/reconstruction-fidelity.md row "host_boot.c".
  *
  *  set_disk_swap_callback (1000:72ef):
  *    Engine body: stores the callback far ptr + installs a DOS INT 24h critical-
@@ -155,14 +158,16 @@ void mouse_reset(void)
 
 /* init_sound_tables 1000:7563 — joystick-slot install for the sound driver.
  * Engine: calls set_joystick_handler_slot() (register-passed far ptr, index AX).
- * SILENT SOUND (Tier 1): benign no-op.  Sound output is Plan B / Tier 2. */
+ * Benign no-op here: this is a joystick-table install, not audio playback itself
+ * (the audio subsystem — src/sound.c/midi.c — is fully implemented and driven
+ * from host_timer.c's INT8 ISR; this leaf was never on that path either way). */
 void init_sound_tables(u16 a, u16 b, u16 seg)
 {
     (void)a;
     (void)b;
     (void)seg;
-    /* Engine stores a sound-driver far-fn pointer into the joystick table.
-     * Not needed for Tier 1 (no sound output). */
+    /* Engine stores a sound-driver far-fn pointer into the joystick table;
+     * not consumed by the playable host's joystick handling. */
 }
 
 /* set_disk_swap_callback 1000:72ef — install INT 24h + disk-swap callback.

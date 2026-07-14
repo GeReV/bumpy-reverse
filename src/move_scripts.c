@@ -263,6 +263,8 @@ u8 __far g_move_script_blob[3798] = {
     0x0e,0x00,0xf8,0x21,0x3b,0x10,
 };
 
+/* ── end of the raw move-script data blob — real logic resumes below ──────── */
+
 /* mode -> header DGROUP offset (0 = NULL mode: 0x05/0x0b/0x1c/0x23/0x24).
  * __far: kept out of the already-full DGROUP. */
 static const u16 __far s_hdr_off[0x40] = {
@@ -409,21 +411,21 @@ static void init_p2_state_scripts(void)
     extern u8 __far *p2_state_script_tbl;   /* player2.c — DGROUP 0x2520/0x2522 */
     u16 seg  = FP_SEG((void __far *)g_p2_state_blob);
     u16 base = FP_OFF((void __far *)g_p2_state_blob);
-    u16 s;
-    for (s = 0u; s < 10u; s++) {
-        u16 te   = (u16)((P2S_TBL - P2S_BASE) + s * 4u);
+    u16 state;
+    for (state = 0u; state < 10u; state++) {
+        u16 te   = (u16)((P2S_TBL - P2S_BASE) + state * 4u);
         u16 hoff = *(u16 __far *)(g_p2_state_blob + te + 0);
         u16 hseg = *(u16 __far *)(g_p2_state_blob + te + 2);
         if (hoff == 0u && hseg == 0u) {
-            *(u16 *)(g_p2_state_tbl + s * 4 + 0) = 0u;
-            *(u16 *)(g_p2_state_tbl + s * 4 + 2) = 0u;
+            *(u16 *)(g_p2_state_tbl + state * 4 + 0) = 0u;
+            *(u16 *)(g_p2_state_tbl + state * 4 + 2) = 0u;
         } else {
             u16 hidx = (u16)(hoff - P2S_BASE);
             u16 j;
             u8  first = 1u;
             /* relocate the header\'s entries far-ptr field exactly once (headers are
                unique in this blob — the guard mirrors the P1 loop\'s discipline). */
-            for (j = 0u; j < s; j++) {
+            for (j = 0u; j < state; j++) {
                 u16 pe = (u16)((P2S_TBL - P2S_BASE) + j * 4u);
                 if (*(u16 __far *)(g_p2_state_blob + pe) == hoff) {
                     first = 0u;
@@ -435,15 +437,19 @@ static void init_p2_state_scripts(void)
                 *(u16 __far *)(g_p2_state_blob + hidx + 2) = (u16)(base + (eoff - P2S_BASE));
                 *(u16 __far *)(g_p2_state_blob + hidx + 4) = seg;
             }
-            *(u16 *)(g_p2_state_tbl + s * 4 + 0) = (u16)(base + (hoff - P2S_BASE));
-            *(u16 *)(g_p2_state_tbl + s * 4 + 2) = seg;
+            *(u16 *)(g_p2_state_tbl + state * 4 + 0) = (u16)(base + (hoff - P2S_BASE));
+            *(u16 *)(g_p2_state_tbl + state * 4 + 2) = seg;
         }
     }
     p2_state_script_tbl = (u8 __far *)g_p2_state_tbl;
 }
 
-/* Far ptr to a move-script ENTRY array at original DGROUP offset `dg` (for the
- * direct p1_begin_walk_* callers that bypass mode_script_tbl). */
+/* ── move_script_entries — direct entry-array lookup, bypassing mode_script_tbl ─
+ * Host-side helper with no direct Ghidra address of its own (unlike its siblings
+ * init_move_scripts/init_p2_state_scripts, which relocate the whole blob): the
+ * p1_begin_walk_* callers already know the specific DGROUP offset `dg` of the
+ * entry array they want, so this just re-bases that one offset into the
+ * relocated runtime blob instead of walking mode_script_tbl to find it. */
 u16 __far *move_script_entries(u16 dg)
 {
     u16 seg  = FP_SEG((void __far *)g_move_script_blob);

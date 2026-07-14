@@ -9,9 +9,11 @@ in the unpacked image (`local/build/unpack/BUMPY_unpacked.exe`) unless given as 
 
 ## Subsystem map
 
-`BUMPY.EXE` is ~399 functions across several Ghidra segments. ~340 are named, typed,
-and commented in the Ghidra project (the remaining ~60 are C-runtime startup garble,
-tiny thunks, and low-confidence stubs, deliberately left unnamed rather than guessed).
+`BUMPY.EXE` is ~399 functions across several Ghidra segments. All of them are named,
+typed, and commented in the Ghidra project (the last raw `FUN_*` symbols were resolved
+2026-07-14); a handful of low-confidence identities carry a `maybe_` prefix rather than
+an invented meaning instead of being left unnamed — see
+[ghidra-symbol-map.md](ghidra-symbol-map.md#uncertain-identities).
 
 | Subsystem | Segment | Representative functions |
 |---|---|---|

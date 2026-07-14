@@ -191,9 +191,9 @@ void enter_game_mode(u8 mode)
         g_oob_last_pending = p1_pending_action;
         g_oob_last_cell    = p1_cell;
         {
-            u8 *r = g_oob_log + (u16)g_oob_log_idx * 5u;
-            r[0] = mode; r[1] = p1_contact_code; r[2] = p1_pending_action;
-            r[3] = p1_cell; r[4] = g_oob_mode_count;
+            u8 *slot = g_oob_log + (u16)g_oob_log_idx * 5u;
+            slot[0] = mode; slot[1] = p1_contact_code; slot[2] = p1_pending_action;
+            slot[3] = p1_cell; slot[4] = g_oob_mode_count;
             g_oob_log_idx = (u8)((g_oob_log_idx + 1u) & 7u);
         }
         if ((g_oob_mode_count & 7u) == 0u) {
@@ -509,8 +509,8 @@ u8 move_step_dispatch_tbl[0x40 * 0x22] = {
 
 /* ── SCOPE handlers — ported 1:1 from the decomp ──────────────────────────────
  *
- * Note on the FUN_1000_ab83() stack-check prologue: every original function opens
- * with `if (stack_check_limit <= &stack0xfffe) FUN_1000_ab83();` — Turbo C's
+ * Note on the borland_stack_overflow() stack-check prologue: every original function opens
+ * with `if (stack_check_limit <= &stack0xfffe) borland_stack_overflow();` — Turbo C's
  * stack-overflow probe.  It is a compiler-emitted runtime guard, NOT game logic;
  * it is intentionally OMITTED from the ports (documented once here) so the C reads
  * as the actual behaviour.  This is the same convention the 6a spine used.
@@ -671,7 +671,8 @@ void gamemode_03_move(void)
 /*
  * gamemode_25_contact — 1000:2138   (game_mode 0x25 — P1 left-walk contact)
  * --------------------------------------------------------------------------
- * Clears contact.  With up/fire held (input_state&0x12), play sound + enter mode
+ * Clears contact.  With down/fire held (input_state&0x12 — bits 2=down|0x10=fire,
+ * see the legend at p1_input_dispatch_bit01), play sound + enter mode
  * 0x32.  Else at step 0 force contact 0x1f and mode 0x27; otherwise probe cell-1
  * terrain (read_tile_layer_contact, a tile leaf → T6c) and route via
  * contact_transition_tbl_b[p1_contact_code] (0x25 → p1_enter_walk_left_mode).
@@ -683,7 +684,7 @@ void gamemode_25_contact(void)
     u8 next_mode;
 
     p1_contact_code = 0;
-    if ((input_state & 0x12) == 0) {
+    if ((input_state & 0x12) == 0) {          /* 0x12 = down(0x02)|fire(0x10) */
         if (p1_step_col_count == 0) {             /* 0x855e */
             p1_contact_code = 0x1f;
             enter_game_mode(0x27);
@@ -713,7 +714,8 @@ void gamemode_25_contact(void)
 /*
  * gamemode_26_contact — 1000:21e7   (game_mode 0x26 — P1 right-walk contact)
  * --------------------------------------------------------------------------
- * With up/fire held (input_state&0x12), play sound + enter mode 0x33.  Else if the
+ * With down/fire held (input_state&0x12 — bits 2=down|0x10=fire, see the legend
+ * at p1_input_dispatch_bit01), play sound + enter mode 0x33.  Else if the
  * step counter==7 force contact 0x1f and enter mode 0x28; otherwise save cell,
  * probe terrain (read_tile_layer_contact → T6c) and route via
  * contact_transition_tbl[p1_contact_code] (0x42f6) — 0x26 → p1_enter_walk_right_mode.
@@ -724,7 +726,7 @@ void gamemode_26_contact(void)
     u8 sound_id;
     u8 next_mode;
 
-    if ((input_state & 0x12) == 0) {
+    if ((input_state & 0x12) == 0) {          /* 0x12 = down(0x02)|fire(0x10) */
         if (p1_step_col_count == 7) {             /* 0x855e */
             p1_contact_code = 0x1f;
             enter_game_mode(0x28);
@@ -994,6 +996,11 @@ void move_down(void)
         tile_below = tilemap[(u16)p1_cell - 8];
         move_action = down_action_lut[tile_below];
     }
+    /* No down-tile action from the LUT: fall back to an rng_frame-driven pick
+       among 4 down-move variants (0x3c..0x3f), most-likely-first. Partitions
+       rng_frame (0-255) into 5 buckets: [0,0xaf] (~69%) leaves move_action
+       unchanged (no random action this tick); (0xaf,0xc4] -> 0x3f; (0xc4,0xd8]
+       -> 0x3e; (0xd8,0xec] -> 0x3d; (0xec,0xff] -> 0x3c (each ~8%). */
     if (move_action == 0) {
         if (rng_frame < 0xec) {
             if (rng_frame < 0xd8) {
@@ -1438,15 +1445,16 @@ void move_right_step_resolve_alt(void)
  */
 void p1_resolve_walk_left_contact(void)
 {
+    u8 sound_id;
     u8 mode;
 
     p1_contact_code = 0;
     if (sound_device_state == 4) {
-        mode = 0x26;
+        sound_id = 0x26;
     } else {
-        mode = 2;
+        sound_id = 2;
     }
-    play_sound(mode);
+    play_sound(sound_id);
     if (p1_step_col_count == 0) {                 /* 0x855e */
         p1_contact_code = 0x1f;
         mode = 0x38;
@@ -1493,15 +1501,16 @@ void p1_resolve_walk_left_contact(void)
  */
 void p1_resolve_walk_right_contact(void)
 {
+    u8 sound_id;
     u8 mode;
 
     p1_contact_code = 0;
     if (sound_device_state == 4) {
-        mode = 0x26;
+        sound_id = 0x26;
     } else {
-        mode = 2;
+        sound_id = 2;
     }
-    play_sound(mode);
+    play_sound(sound_id);
     if (p1_step_col_count == 7) {                 /* 0x855e */
         p1_contact_code = 0x1f;
         mode = 0x39;
@@ -2192,6 +2201,11 @@ void p1_set_pixel_from_cell(void)
  */
 void reset_round_counters(void)
 {
+    /* Declared local (not file-scope, unlike the file's usual convention):
+       this function is the only place in the file that needs these specific
+       cross-module globals as raw externs (some, like input_state, are also
+       reachable file-wide via their module's header — this local copy is just
+       this function's own explicit reset-list documentation). */
     extern u8  g_anim_cur_cmd_byte;       /* anim.c   0x8578 */
     extern u8  anim_b_cur_frame_byte;     /* anim.c   0x8579 */
     extern u8  g_anim_a_active_mirror;    /* spawn.c  0x8e8b */
@@ -2480,7 +2494,7 @@ void check_exit_tile_horiz(void)
     u8 sound_id;
 
     if ((p1_step_col_count != 0) &&
-        ((s8)tilemap[(u16)p1_cell + TILE_CONTACT_LAYER_OFF - 1] == '\f')) {
+        ((s8)tilemap[(u16)p1_cell + TILE_CONTACT_LAYER_OFF - 1] == 0x0c)) {
         p1_move_step_idx = 0;
         physics_frozen = 1;
         enter_game_mode(0x2e);
@@ -3376,12 +3390,12 @@ void draw_p1_sprite(void)
     u8 __far *obj;
 
     if (p1_move_anim != 100) {
-        sprite_obj_t __far *so;
+        sprite_obj_t __far *p1_obj;
         obj = p1_sprite;
-        so = (sprite_obj_t __far *)obj;
-        so->frame = (u16)p1_move_anim;                                /* frame */
-        so->x     = (s16)p1_pixel_x;                                  /* x     */
-        so->y     = (s16)p1_pixel_y;                                  /* y     */
+        p1_obj = (sprite_obj_t __far *)obj;
+        p1_obj->frame = (u16)p1_move_anim;                            /* frame */
+        p1_obj->x     = (s16)p1_pixel_x;                              /* x     */
+        p1_obj->y     = (s16)p1_pixel_y;                              /* y     */
         p1_blit_sprite_leaf(0x792e, 0x203b);                         /* present leaf */
     }
     return;
@@ -3506,7 +3520,7 @@ void p1_advance_move_anim(u8 frame_count, const u16 __far *frame_table)
  * present in the original's compiled form, so both are reproduced verbatim and
  * in order for a 1:1 mirror.  The decomp's '0' character literal is 0x30 (the
  * FX/effect code named in the decomp comment).  The Borland stack-check
- * prologue (stack_check_limit / FUN_1000_ab83) is omitted as elsewhere.
+ * prologue (stack_check_limit / borland_stack_overflow) is omitted as elsewhere.
  */
 void p1_begin_move_anim(u8 mode)
 {
@@ -3678,7 +3692,7 @@ void p1_try_move_up(void)
  * Globals: p1_cell (DGROUP 0x856e).  Callees (sibling batch): p1_cell_solid (45cf),
  * p1_begin_move_anim (45a0), p1_input_dispatch_bit04b (43d2).
  *
- * Stack-check prologue (stack_check_limit / FUN_1000_ab83) omitted — non-semantic
+ * Stack-check prologue (stack_check_limit / borland_stack_overflow) omitted — non-semantic
  * compiler guard, omitted throughout the reconstruction.
  */
 void p1_try_move_down(void)
@@ -3817,8 +3831,7 @@ void p1_input_dispatch_bit01(void)
 {
     if ((input_state & 1) == 0) {
         p1_input_dispatch_bit02();
-    }
-    else {
+    } else {
         p1_try_move_up();
     }
     return;
@@ -3836,7 +3849,7 @@ void p1_input_dispatch_bit01(void)
  * & 1) is clear.  (input_state bits: 1=up, 2=down, 4=left, 8=right, 0x10=fire.)
  *
  * (Borland stack-check prologue `if (stack_check_limit <= &stack0xfffe)
- *  FUN_1000_ab83();` omitted — non-semantic compiler guard.)
+ *  borland_stack_overflow();` omitted — non-semantic compiler guard.)
  */
 void p1_input_dispatch_bit02(void)
 {
@@ -3924,7 +3937,7 @@ void p1_input_router_bit08(void)
  * p1_input_dispatch_bit01 (the up/jump leaf, 0x4398).
  *
  * (Stack-check prologue at 0x4344 — `if (stack_check_limit <= &stack0xfffe)
- * FUN_1000_ab83();` — is the non-semantic Borland compiler guard; omitted.)
+ * borland_stack_overflow();` — is the non-semantic Borland compiler guard; omitted.)
  */
 void p1_input_dispatch_bit10(void)
 {
@@ -3977,6 +3990,8 @@ void move_walk_right_anim_step(void)
  */
 void move_step_check_walkable(void)
 {
+    /* TILE_TELEPORT (0x0b) reused here for an unrelated meaning: "solid ground
+       underfoot" — see the decomp note above, not a teleport check. */
     if (p1_pending_action == 0 && tilemap[(u16)p1_cell + 8] != TILE_TELEPORT) {
         enter_mode_04_fall();
     } else {
@@ -4052,7 +4067,7 @@ void move_anim_step_to_mode0c(void)
  *     enter_game_mode(0xb);
  *     dispatch_move_step();
  *
- * (Borland FUN_1000_ab83 stack-check prologue omitted — see the SCOPE-handlers
+ * (Borland borland_stack_overflow stack-check prologue omitted — see the SCOPE-handlers
  * note above; non-semantic compiler guard.)
  */
 void enter_mode_0b_jump_start(void)
@@ -4097,7 +4112,7 @@ void play_walk_anim_default(void)
  * (Borland stack-check prologue at 22d2..22dc omitted — non-semantic.) */
 void advance_physics_freeze(void)
 {
-    physics_frozen = physics_frozen + 1;
+    physics_frozen = (u8)(physics_frozen + 1);
     if (physics_frozen == 3) {
         run_physics_settle();
     } else {

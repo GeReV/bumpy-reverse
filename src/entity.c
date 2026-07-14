@@ -76,7 +76,10 @@ typedef union {
     u8 raw[OBJ_SIZE];
 } entity_obj_t;
 
-/* PLANE_SIZE must match sprite_blit.c's PLANE_SIZE / HOST_PLANE_SIZE (HOST_FB_16K). */
+/* PLANE_SIZE must match sprite_blit.c's PLANE_SIZE / HOST_PLANE_SIZE (HOST_FB_16K).
+ * Not referenced anywhere below — kept only as documentary parity with those
+ * modules' own PLANE_SIZE, so a value mismatch is visible to a reader diffing
+ * the three definitions; not dead code to remove. */
 #ifdef HOST_FB_16K
 #define ENTITY_PLANE_SIZE  0x4000UL
 #else
@@ -151,7 +154,7 @@ static const anim_desc_t anim_a_desc[64] = {
     /* [ 8] */ { 5,  92 },
     /* [ 9] */ { 5, 101 },
     /* [10] */ { 5, 113 },
-    /* [11] */ {-26, 63 },
+    /* [11] */ {-26, 63 }, /* verified: large negative yoff, not a data-entry error */
     /* [12] */ { 5, 132 },
     /* [13] */ { 6, 110 },
     /* [14] */ { 5, 155 },
@@ -324,7 +327,10 @@ static void seed_ftbl(entity_obj_t *obj, const u8 __far *dg, u16 dg_obj_base)
    Corresponds to blit_sprite(obj_seg_off, 0x203b) in the engine, expanded
    into the three constituent validated stages.
    ----------------------------------------------------------------------- */
-static void entity_blit_object(u8 __huge *planes, u8 *obj,
+static void entity_blit_object(u8 __huge *planes,
+                                u8 *obj,   /* near, not far/huge: every caller passes a
+                                              local entity_obj_t.raw stack buffer, never
+                                              a far/huge object */
                                 u8 __huge *bank, u32 bank_base_lin,
                                 const sprite_view *view)
 {
@@ -352,7 +358,7 @@ static void entity_blit_object(u8 __huge *planes, u8 *obj,
        Unpack descriptor fields per chain_ctest.c / blit_ctest.c. */
     {
         u32 dlin = (u32)bd->dst_seg * 16u + (u32)bd->dst_off;
-        voff = (u16)(dlin - 0xA0000UL);
+        voff = (u16)(dlin - VGA_SEG_A000_LIN);   /* VGA segment a000's linear base */
     }
     dst_stride = bd->dst_stride;
     full_w     = bd->full_w;
@@ -459,7 +465,8 @@ void entity_draw_p1(u8 __huge *planes, const u8 __far *dg,
 }
 
 #ifdef BUMPY_PLAYABLE
-/* ── entity_draw_screen_sprite — host menu/screen-sprite blit ──────────────────────
+/* -----------------------------------------------------------------------
+   entity_draw_screen_sprite — host menu/screen-sprite blit.
    Like entity_draw_p1, but takes the frame-table far ptr EXPLICITLY instead of reading
    it from the DGROUP descriptor at obj+6/+8.  The engine's run_main_menu sets the
    p1_sprite obj +6/+8 to the cursor table (DAT_6c2c = FLECHE.BIN) and blits frame 0;

@@ -24,7 +24,7 @@
  *  declared extern via items.h, NEVER redefined here.
  *
  *  STACK-CHECK PROLOGUE: every original opens with
- *  `if (stack_check_limit <= &stack0xfffe) FUN_1000_ab83();` — Turbo C's compiler-
+ *  `if (stack_check_limit <= &stack0xfffe) borland_stack_overflow();` — Turbo C's compiler-
  *  emitted stack-overflow probe, NOT game logic.  It is intentionally OMITTED from
  *  the ports (the same convention player.c uses; documented once there).
  *
@@ -132,15 +132,19 @@ void p1_collect_item_score(void)
         extern s16       pending_erase_y;                  /* player.c 0x9ba2 */
         extern u8 __far *pending_erase_view;               /* player.c 0x8e4  */
         extern u8 __far *level_get_entity_dg(void);        /* level.c — posC @ +0x274 */
-        u8 __far *dg = level_get_entity_dg();
-        if (dg != (u8 __far *)0 && pending_erase_view != (u8 __far *)0) {
-            u16 base = (u16)(0x274u + (u16)p1_cell * 4u);
-            s16 px = (s16)((u16)dg[base]      | ((u16)dg[base + 1u] << 8));
-            s16 py = (s16)((u16)dg[base + 2u] | ((u16)dg[base + 3u] << 8));
+        u8 __far *posc_dg = level_get_entity_dg();
+        if (posc_dg != (u8 __far *)0 && pending_erase_view != (u8 __far *)0) {
+            /* posC table: one interleaved 4-byte entry per cell (X lo/hi, Y lo/hi),
+               NOT two separate parallel tables — entry_off is that one record's
+               base offset, indexed +0/+1 for X and +2/+3 for Y. */
+            u16 entry_off = (u16)(0x274u + (u16)p1_cell * 4u);
+            s16 px = (s16)((u16)posc_dg[entry_off]      | ((u16)posc_dg[entry_off + 1u] << 8));
+            s16 py = (s16)((u16)posc_dg[entry_off + 2u] | ((u16)posc_dg[entry_off + 3u] << 8));
             pending_erase_count = 2u;                      /* 6ca1: one per page  */
             pending_erase_x = (s16)(px >> 4);              /* 6ca6..6cb9: SAR AX,4 */
             pending_erase_y = (s16)(py >> 3);              /* 6cbc..6cd1: SAR ×3   */
-            *(u16 __far *)(pending_erase_view + 0x1e) =    /* 6cd4..6ce7: width    */
+            *(u16 __far *)(pending_erase_view + 0x1e) =    /* 6cd4..6ce7: width;
+                                                               1 = odd cell, 2 = even cell */
                 ((p1_cell & 1u) != 0u) ? 1u : 2u;
         }
     }
@@ -184,17 +188,24 @@ void p1_collect_item(void)
     p1_collect_item_score();
     tilemap[(u16)p1_cell + TILEMAP_LAYER_C_OFF] = 0;  /* clear the collected item */
 
-    if (p1_item_code != '\x01' && p1_item_code != '#') {
+    if (p1_item_code != '\x01' && p1_item_code != '#') {   /* '\x01' excluded from
+                                                               the decrement path;
+                                                               engine behavior, not
+                                                               yet independently
+                                                               identified — see '#'
+                                                               above for the one
+                                                               excluded code that IS
+                                                               documented */
         items_remaining = items_remaining - 1;
         if (items_remaining == 0) {
-            sound_id = (sound_device_state == 4) ? 0x2c : 0x0b;
+            sound_id = (sound_device_state == 4) ? 0x2c : 0x0b;   /* 0x2c OPL : 0x0b other */
             play_sound(sound_id);                     /* level-complete sound (stub) */
             anim_target_cell = level_exit_cell;
             apply_cell_animation('Y');                /* exit anim (stub, → Phase 5) */
             level_complete_flag = 1;
             level_complete_anim_counter = 0xf2;
         } else {
-            sound_id = (sound_device_state == 4) ? 0x21 : 0x0e;
+            sound_id = (sound_device_state == 4) ? 0x21 : 0x0e;   /* 0x21 OPL : 0x0e other */
             play_sound(sound_id);                     /* item-pickup sound (stub)    */
         }
     }
@@ -252,7 +263,7 @@ void check_exit_tile_vert(void)
        The counter read is DGROUP 0x855e (CMP [0x855e],7) = p1_step_col_count,
        the COLUMN counter — NOT move_step_count @ 0x824c (see disasm note above). */
     if ((p1_step_col_count != '\a') &&
-        ((s8)tilemap[(u16)p1_cell + TILEMAP_LAYER_B_OFF] == '\f')) {
+        ((s8)tilemap[(u16)p1_cell + TILEMAP_LAYER_B_OFF] == '\x0c')) {
         p1_move_step_idx = 0;
         physics_frozen = 1;
         enter_game_mode(0x2e);

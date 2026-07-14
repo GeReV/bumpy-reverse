@@ -119,13 +119,13 @@ static int vec_read_record(u16 *op_out)
     sv(0x4e31, w4);
     sv(0x4e35, w0); sv(0x4e33, w1);
 
-    if (w0 > 0x0Fu) {
+    if (w0 > 0x0Fu) {                              /* w0 = record-type marker; >0xf = end of stream */
         return 0;
     }
-    if ((w4 & 0x7F00u) != 0u) {
+    if ((w4 & 0x7F00u) != 0u) {                    /* w4 = opcode word; reject bad high bits */
         return 0;
     }
-    if ((u16)(w0 ^ w1 ^ w2 ^ w3 ^ w4) != w5) {
+    if ((u16)(w0 ^ w1 ^ w2 ^ w3 ^ w4) != w5) {     /* w5 = XOR checksum of w0..w4 */
         return 0;
     }
     *op_out = (u16)(w4 & 0x7FFFu);
@@ -184,7 +184,7 @@ static int phase1(void)
     u32 stream;
     u32 vsrc;
     u32 probe;
-    u32 p;
+    u32 fill_addr;
     u16 raw_hi, raw_lo;
     u32 val;
     u32 vend;
@@ -201,9 +201,9 @@ static int phase1(void)
         return 0;
     }
     /* 0x4d8: fill word (BE) at stream+0xc; dst = stream+0xe */
-    p = stream + 0xCUL;
-    setlin(0x4df6, 0x4df8, p);
-    sv(0x4e22, (u16)(((u16)mrd(p) << 8) | mrd(p + 1)));
+    fill_addr = stream + 0xCUL;
+    setlin(0x4df6, 0x4df8, fill_addr);
+    sv(0x4e22, (u16)(((u16)mrd(fill_addr) << 8) | mrd(fill_addr + 1)));
     sv(0x4df6, (u16)(gv(0x4df6) + 2));
 
     /* 0x503: crd = round-up(vec_src, 0x20) >> 3.  Clear low 5 bits; if that
@@ -329,7 +329,7 @@ static void run(void)
     u32 vsav;
     u32 src;
     u32 crd;
-    u32 t;
+    u32 src_plus_crd;
     u32 srcp2;
     u32 vend;
     u32 dstend;
@@ -344,12 +344,13 @@ static void run(void)
     sv(0x4e04, (u16)((src >> 4) & 0xFFFF));
     sv(0x4e02, (u16)(src & 0xF));
     crd = (u32)gv(0x4e1e) | ((u32)gv(0x4e20) << 16);
-    t = srcp + crd;
-    srcp2 = t + 0xEUL;
+    src_plus_crd = srcp + crd;
+    srcp2 = src_plus_crd + 0xEUL;   /* 0xE = 0xC-byte record header + the 2-byte
+                                        fill word phase1() writes at stream+0xC */
     sv(0x4e08, (u16)((srcp2 >> 4) & 0xFFFF));
     sv(0x4e06, (u16)(srcp2 & 0xF));
     vend = ((u32)gv(0x4e0c) << 4) + (u32)gv(0x4e0a);
-    dstend = vend - 0x400UL;
+    dstend = vend - (u32)WIN_SIZE;
     sv(0x4e00, (u16)((dstend >> 4) & 0xFFFF));
     sv(0x4dfe, (u16)(dstend & 0xF));
     sv(0x4e0c, gv(0x4dfc)); sv(0x4e0a, gv(0x4dfa));   /* mask ptr = dst2 */
@@ -583,10 +584,10 @@ static void op4_handler(u16 payload_len)
         }
     }
 
-    /* Reproduce the 0x400 window end-aligned from the snapshotted payload. */
+    /* Reproduce the WIN_SIZE window end-aligned from the snapshotted payload. */
     plen = (u16)n;
-    if (n <= 0x400UL) {
-        pad = (u16)(0x400u - plen);
+    if (n <= (u32)WIN_SIZE) {
+        pad = (u16)(WIN_SIZE - plen);
         for (i = 0; i < pad; i++) {
             g_win[i] = 0;
         }
@@ -594,8 +595,8 @@ static void op4_handler(u16 payload_len)
             g_win[pad + i] = g_op4_scratch[i];
         }
     } else {
-        for (i = 0; i < 0x400u; i++) {
-            g_win[i] = g_op4_scratch[(u16)(n - 0x400UL) + i];
+        for (i = 0; i < WIN_SIZE; i++) {
+            g_win[i] = g_op4_scratch[(u16)(n - (u32)WIN_SIZE) + i];
         }
     }
 }

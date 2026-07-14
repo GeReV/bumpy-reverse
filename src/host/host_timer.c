@@ -71,8 +71,7 @@
  *
  * CHAIN_EVERY: how many host ISR ticks before we chain the old BIOS handler.
  *   1,193,182 / 65536 ≈ 18.2063 Hz (original BIOS rate).
- *   PIT_DIVISOR / (65536 / PIT_DIVISOR) == 2385 * 65536 / 65536 = 2385 ... wrong.
- *   Correct formula: fire old handler every (65536 / PIT_DIVISOR) of our ticks.
+ *   Fire the old handler every (65536 / PIT_DIVISOR) of our ticks:
  *   65536 / 2385 ≈ 27.48 → 27 (rounds toward original cadence; slight overshoot
  *   means BIOS clock slightly fast, which is the safe direction vs. a drift that
  *   starves the clock).  27 × 2385 / 1,193,182 ≈ 0.05396 s → 18.53 Hz, ~2%

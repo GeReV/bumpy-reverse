@@ -45,8 +45,10 @@ void video_blit_planar(const u8 *planar)
     u16 i;
 
     /* Ensure GC write mode 0 with no bit-mask gating (all bits pass through). */
-    outp(VIDEO_GC_INDEX, VIDEO_GC_MODE); outp(VIDEO_GC_DATA, 0x00);         /* write mode 0 */
-    outp(VIDEO_GC_INDEX, VIDEO_GC_BIT_MASK); outp(VIDEO_GC_DATA, VIDEO_GC_BIT_MASK_ALL); /* all bits enabled */
+    outp(VIDEO_GC_INDEX, VIDEO_GC_MODE);
+    outp(VIDEO_GC_DATA, 0x00);                                    /* write mode 0 */
+    outp(VIDEO_GC_INDEX, VIDEO_GC_BIT_MASK);
+    outp(VIDEO_GC_DATA, VIDEO_GC_BIT_MASK_ALL);                   /* all bits enabled */
 
     outp(VIDEO_SEQ_INDEX, VIDEO_SEQ_MAP_MASK);   /* sequencer address = map-mask register */
     for (p = 0; p < VIDEO_PLANE_COUNT; p++) {

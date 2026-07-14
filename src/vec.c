@@ -171,7 +171,16 @@ u16 vec_decode_planar(const u8 *data, u16 n, u8 *planar, u8 *pal_out)
        For op4-only full-screen files, w0 == 0. */
     if (w0 > 0x000fu) { return 0xffffu; }
 
-    /* Checksum: w5 = w0 ^ w1 ^ w2 ^ w3 ^ w4. */
+    /* Checksum: w5 = w0 ^ w1 ^ w2 ^ w3 ^ w4.
+       VERIFIED against the real TITRE.VEC header (2026-07-14, local/originals):
+       00 00 7d63 49dc 3356 8004 87ed -> 0^0x7d63^0x49dc^0x3356^0x8004 == 0x87ed
+       == w5, exactly, even though w0==0 (not 0x0f).  This refutes an earlier
+       audit finding that the checksum is only meaningful when w0==0x0f (that
+       reading of vec_read_record's asm branch at 1c28:0a46-0a49 turned out to
+       be incomplete/misleading — [0x4e31] and the checksum gate it guards
+       don't reflect how this file's real record is actually validated; the
+       real record satisfies the "extended-form" checksum regardless of w0).
+       Keep this check unconditional, as originally written. */
     checksum_expected = be16(data, 10);
     checksum_actual   = (u16)(be16(data, 0) ^ be16(data, 2) ^
                               be16(data, 4) ^ be16(data, 6) ^

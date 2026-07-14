@@ -56,7 +56,8 @@ typedef struct {
 static int sprite_blit_clip(const u8 __far *obj, const sprite_view *view,
                              blit_state *st)
 {
-    s16 iVar1;
+    s16 bottom_overflow;   /* view.top+height vs st->row overflow test (first use) */
+    s16 row_stride_term;   /* dst_off's row-stride contribution (second, unrelated use) */
     s16 width  = (s16)rd_u16(obj + 0x10);
     s16 height = (s16)rd_u16(obj + 0x12);
     s16 half_w = (s16)((u16)width >> 1);
@@ -69,12 +70,12 @@ static int sprite_blit_clip(const u8 __far *obj, const sprite_view *view,
         st->bcf = 0;
     }
     if (st->bcf != 0) {
-        st->bec = 2;
+        st->bec = 2;                       /* bit 1: clip left-edge carry preload */
     }
     if ((s16)(view->right - st->col) < 0 ||
         (s16)((view->right - st->col) - (half_w + 1)) < 0) {
         st->be5 = (s16)((view->right - st->bcf) - st->col);
-        st->bec |= 1;
+        st->bec |= 1;                      /* bit 0: right-edge clip */
     } else {
         st->be5 = (s16)(half_w - st->bcf);
         if (st->be5 < 0) {
@@ -87,17 +88,17 @@ static int sprite_blit_clip(const u8 __far *obj, const sprite_view *view,
         st->bcb = (s16)-st->bcd;
         st->bcd = 0;
     }
-    iVar1 = (s16)((view->top + view->height) - st->row);
-    if (iVar1 < 0 || (s16)(iVar1 - height) < 0) {
+    bottom_overflow = (s16)((view->top + view->height) - st->row);
+    if (bottom_overflow < 0 || (s16)(bottom_overflow - height) < 0) {
         st->be7 = (s16)(((view->top - st->bcd) + view->height) - st->row);
     } else {
         st->be7 = (s16)(height - st->bcd);
     }
-    iVar1 = 0;
+    row_stride_term = 0;
     if ((s16)(st->bcb + view->top) != 0) {
-        iVar1 = (s16)(((st->bcb + view->top) & 0xff) * VIEW_ROW_STRIDE);
+        row_stride_term = (s16)(((st->bcb + view->top) & 0xff) * VIEW_ROW_STRIDE);
     }
-    st->dst_off = (u16)(iVar1 + view->data_off + st->bc9 + view->left);
+    st->dst_off = (u16)(row_stride_term + view->data_off + st->bc9 + view->left);
 
     if (st->be5 != 0 && st->be5 >= 0 && st->be7 != 0 &&
         st->be7 >= 0 && st->be7 < 100) {
@@ -168,7 +169,7 @@ static int sprite_blit_object_list(const u8 __far *obj, const sprite_view *view,
     s16 width  = (s16)rd_u16(obj + 0x10);
     s16 height = (s16)rd_u16(obj + 0x12);
     s16 half_w = (s16)((u16)width >> 1);
-    s16 iv4;
+    s16 right_edge;   /* col + half_w: right-edge cull bound */
     blit_state st;
 
     if ((flags & SPRITE_FLAG_VISIBLE) == 0) {
@@ -189,9 +190,9 @@ static int sprite_blit_object_list(const u8 __far *obj, const sprite_view *view,
     st.row   = (s16)(rd_s16(obj + 0x02) - rd_s16(obj + 0x16));
 
     /* View-bounds cull (iRam00026bbd/bbf/bc1/bc3/bc7) */
-    iv4 = (s16)(st.col + half_w);
-    if (!(st.row < view->bottom && st.col < view->right && iv4 >= 0 &&
-          view->left <= iv4 && (s16)(st.row + height) >= 0 &&
+    right_edge = (s16)(st.col + half_w);
+    if (!(st.row < view->bottom && st.col < view->right && right_edge >= 0 &&
+          view->left <= right_edge && (s16)(st.row + height) >= 0 &&
           view->top <= (s16)(st.row + height))) {
         return 0;                              /* culled */
     }

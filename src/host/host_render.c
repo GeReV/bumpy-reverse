@@ -546,8 +546,12 @@ void host_animb_capture(u16 voff, u16 cols, u16 rows, u16 stride)
     /* +1 byte covers the blit's sub-byte shift carry into the next column. */
     w = (u16)(cols + 1u);
     h = rows;
-    if (w > HR_ANIMB_MAXW) { w = HR_ANIMB_MAXW; }
-    if (h > HR_ANIMB_MAXH) { h = HR_ANIMB_MAXH; }
+    if (w > HR_ANIMB_MAXW) {
+        w = HR_ANIMB_MAXW;
+    }
+    if (h > HR_ANIMB_MAXH) {
+        h = HR_ANIMB_MAXH;
+    }
     for (r = 0u; r < (u8)h; r++) {
         for (c = 0u; c < (u8)w; c++) {
             u16 off = (u16)(voff + (u16)r * stride + c);
@@ -606,9 +610,13 @@ static int hr_su_rect(const u8 __far *view, u16 cell_off, u16 ext_off,
     u16 cy = hr_vw(view, (u16)(cell_off + 2u));
     u16 ex = hr_vw(view, ext_off);              /* real footprint field (see header) */
     u16 ey = hr_vw(view, (u16)(ext_off + 2u));
-    if (ex > 4u) { ex = 4u; }                      /* buffer holds at most 4 tiles wide */
-    if (ey > 4u) { ey = 4u; }
-    if (ex == 0u || ey == 0u || cx >= 20u || cy >= 25u) {
+    if (ex > 4u) {                                 /* buffer holds at most 4 tiles wide */
+        ex = 4u;
+    }
+    if (ey > 4u) {
+        ey = 4u;
+    }
+    if (ex == 0u || ey == 0u || cx >= SCREEN_W_TILES || cy >= SCREEN_H_TILES) {
         return 0;
     }
     /* RECONSTRUCTION FIDELITY (host save-under top margin): benign over-coverage kept
@@ -643,7 +651,7 @@ static void hr_save_under(const u8 __far *view, u8 *buf, u16 cell_off, u16 ext_o
     }
     for (row = 0u; row < h; row++) {
         for (col = 0u; col < w; col++) {
-            u16 off = (u16)(origin + row * 40u + col);
+            u16 off = (u16)(origin + row * VGA_ROW_BYTES + col);
             u16 bi  = (u16)(row * w + col);
             host_vga_read4(off, &buf[bi], &buf[HR_SU_PLANE + bi],
                            &buf[2u*HR_SU_PLANE + bi], &buf[3u*HR_SU_PLANE + bi]);
@@ -662,7 +670,7 @@ static void hr_restore_under(const u8 __far *view, const u8 *buf, u16 cell_off, 
         const u8 __far *clean = host_clean_bg();
         for (row = 0u; row < h; row++) {
             for (col = 0u; col < w; col++) {
-                u16 off = (u16)(origin + row * 40u + col);
+                u16 off = (u16)(origin + row * VGA_ROW_BYTES + col);
                 u16 bi  = (u16)(row * w + col);
                 u8  q0 = buf[bi];
                 u8  q1 = buf[HR_SU_PLANE + bi];
@@ -735,6 +743,14 @@ extern const u8 __far *host_clean_bg(void);    /* view_setup.c — hv_saveunder_
 
 void anim_render_view_leaf(u8 __far *view)     { (void)view; }  /* save: single-page no-op */
 
+/* 4-step algorithm (see the dispatch/fidelity notes above for the full history):
+ *   1. filter — only layer-A's anim_a_erase_view and layer-B's pending-item views
+ *      trigger a repaint; everything else is a single-page no-op (return early).
+ *   2. resolve extent — layer-B uses its mode-01 fields, layer-A/pending use the
+ *      mode-10 footprint fields, clamped to the save-under buffer's max tile size.
+ *   3. apply the half-tile-offset flag adjustments the specific view needs.
+ *   4. repaint the clean background (host_clean_bg()) into the current a000
+ *      draw page, plane-by-plane, over exactly that extent. */
 void anim_restore_bg_view_leaf(u8 __far *view)
 {
     const u8 __far *clean;
@@ -838,8 +854,8 @@ void anim_restore_bg_view_leaf(u8 __far *view)
             if ((u16)(oy + row) >= 200u) {
                 break;
             }
-            sline = (u16)(((u16)(oy + row)) * 40u + sox);
-            dline = (u16)(((u16)(oy + row)) * 40u + dox);
+            sline = (u16)(((u16)(oy + row)) * VGA_ROW_BYTES + sox);
+            dline = (u16)(((u16)(oy + row)) * VGA_ROW_BYTES + dox);
             for (col = 0u; col < wbytes; col++) {
                 u16 soff = (u16)(sline + col);   /* clean-bg source (page-relative) */
                 u16 doff = (u16)(dline + col);   /* page dest       (page-relative) */
@@ -916,7 +932,7 @@ static void hr_compose_screen_vga(const u8 __far *view, const u8 __huge *src)
        each present) — resolve through the LIVE table, not a fixed page. */
     u16 dest_page_off = host_page_off_of((u8)word0e);
     u32 src_plane_stride = (u32)row_bytes * (u32)rows;
-    u16 dst_origin = (u16)(dest_page_off + (u16)(dy_tiles * 8u) * 40u + dx_tiles * 2u);
+    u16 dst_origin = (u16)(dest_page_off + (u16)(dy_tiles * 8u) * VGA_ROW_BYTES + dx_tiles * 2u);
     u8  plane;
     u16 row, col;
 
@@ -933,7 +949,7 @@ static void hr_compose_screen_vga(const u8 __far *view, const u8 __huge *src)
         outp(SEQ_DATA, (u8)(1u << plane));   /* enable just this plane (opaque store) */
         for (row = 0u; row < rows; row++) {
             u8 __far *dp = (u8 __far *)MK_FP(VGA_SEG_PAGE0,
-                                             (u16)(dst_origin + row * 40u));
+                                             (u16)(dst_origin + row * VGA_ROW_BYTES));
             const u8 __huge *srow = sp + (u32)row * row_bytes;
             for (col = 0u; col < row_bytes; col++) {
                 dp[col] = srow[col];
@@ -1130,7 +1146,7 @@ static void hr_text_draw_char(u8 ch)
         if (y < 0 || y > 199) {
             continue;
         }
-        cell = (u16)(pg + (u16)y * 40u + (hr_text_x >> 3));
+        cell = (u16)(pg + (u16)y * VGA_ROW_BYTES + (hr_text_x >> 3));
         sh   = (u8)(hr_text_x & 7u);
         if (sh == 0u) {
             hr_text_row_write(cell, m, cov);

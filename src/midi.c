@@ -312,6 +312,24 @@ void emit_midi_voice_message(void)
 
     opl_write_reg(0x08, 0x00);                          /* CSW/note-select clear (always) */
 
+    /* 30-byte patch descriptor (p[]) field legend — both branches below read a
+       subset of the same layout (operator-1 fields 2-0xd, operator-2 fields
+       0xf-0x1a are the operator-1 fields' exact mirror, +0xd offset):
+         p[0]        flag byte: 0 = full 2-operator program, else reduced 4-reg
+         p[2]/p[0xf]      op1/op2 level/KSL high bits (>>2 & 0xc0)
+         p[3]/p[0x10]     op1/op2 AM/VIB/EG/KSR/mult low nibble
+         p[4]             feedback/connection (chan reg, &0x7) — op1 branch only
+         p[5]/p[0x12]     op1/op2 attack (high nibble source, <<4)
+         p[6]/p[0x13]     op1/op2 sustain (high nibble source, <<4)
+         p[7]/p[0x14]     op1/op2 EG-type flag (bit 0x20)
+         p[8]/p[0x15]     op1/op2 decay (low nibble)
+         p[9]/p[0x16]     op1/op2 release (low nibble)
+         p[0xa]/p[0x17]   op1/op2 level/KSL low bits (&0x3f)
+         p[0xb]/p[0x18]   op1/op2 AM flag (bit 0x80)
+         p[0xc]/p[0x19]   op1/op2 VIB flag (bit 0x40)
+         p[0xd]/p[0x1a]   op1/op2 KSR flag (bit 0x10)
+         p[0xe]           connection-type bit (op1 branch only, XORed with 1)
+         p[0x1c]/p[0x1d]  op1/op2 waveform select (&0x3) */
     if (p[0] == 0) {
         /* ── 12-register "2-operator" program ── */
         dl = (u8)(al + 0xc0);                           /* reg 0xC0+al: feedback/connection */
@@ -1054,6 +1072,9 @@ int midi_load_sequence(void *song_data, void *aux_ptr, u16 flag)
 
     midi_data_seg = flag;                            /* 87d4/87d7 (a.k.a. "midi_load_flag") */
 
+    /* NAME CAVEAT (see the fn header above): song_data -> midi_aux_ptr_*, and
+       aux_ptr -> midi_song_data_* — deliberately swapped from what the
+       parameter names suggest, not a copy-paste bug. */
     midi_aux_ptr_off = FP_OFF(song_data);             /* 87e8 LDS SI,[BP+4]; 87eb            */
     midi_aux_ptr_seg = FP_SEG(song_data);             /* 87f0 MOV AX,DS; 87f2                */
 

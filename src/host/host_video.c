@@ -65,6 +65,11 @@
  * frame-compare gate missed this because it compared page CONTENT (byte 0x2000)
  * without checking the CRTC-selected DISPLAY window.
  */
+/* CRTC_PAGE0_ADDR is never referenced below — kept for documentation/symmetry
+ * with CRTC_PAGE1_ADDR only. Page 0 needs no explicit host_crtc_set_start call:
+ * the BIOS AH=0/AL=0x0D mode set just below resets the CRTC start address to 0
+ * as part of the mode change, so boot lands on page 0 implicitly; only the
+ * page-1 boot-parity anchor (host_crtc_set_start's own note) needs a write. */
 #define CRTC_PAGE0_ADDR  0x0000u
 #define CRTC_PAGE1_ADDR  0x2000u
 

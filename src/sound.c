@@ -260,11 +260,11 @@ void play_sound(u8 sound_id)
  *  engine (schedule_timer_callback_a / _b).  In OPL mode (sound_device_state == 4)
  *  emit a raw two-byte sample from table 0x27ae via snd_emit_raw_sample (PORTED T5).
  *  Switch ported VERBATIM from the decomp (cases NOT collapsed); the goto LAB_70d6
- *  tail (cases 1/9/0xc/0x10/0x15 share `subsweep_value=1; tone_arg2=0x1e`) is preserved 1:1. */
+ *  tail (cases 1/9/0xc/0x10/0x15 share `subsweep_value=1; lifetime_count=0x1e`) is preserved 1:1. */
 void play_sound_effect(u8 effect_id)
 {
-    u16 tone_arg3;
-    u16 tone_arg2;
+    u16 pitch_reload;
+    u16 lifetime_count;
     u16 pitch_increment;
     u16 ch2_reload_current;
     u16 subsweep_value;
@@ -280,77 +280,77 @@ void play_sound_effect(u8 effect_id)
         ch2_reload_increment = 1;
         ch2_reload_current = 0x1c2;
         pitch_increment = 10;
-        tone_arg3 = 1000;
+        pitch_reload = 1000;
         goto LAB_1000_70d6;
     case 0x02:
         ch2_reload_increment = 1;
         subsweep_value = 1;
         ch2_reload_current = 0x1c2;
         pitch_increment = 0xfff6;
-        tone_arg3 = 800;
-        tone_arg2 = 0x28;
+        pitch_reload = 800;
+        lifetime_count = 0x28;
         break;
     case 0x03:
         ch2_reload_increment = 0xffff;
         subsweep_value = 4;
         ch2_reload_current = 499;
         pitch_increment = 0xffff;
-        tone_arg3 = 0x1b8;
-        tone_arg2 = 400;
+        pitch_reload = 0x1b8;
+        lifetime_count = 400;
         break;
     case 0x04:
         ch2_reload_increment = 4;
         subsweep_value = 1;
         ch2_reload_current = 100;
         pitch_increment = 0xffff;
-        tone_arg3 = 0xdc;
-        tone_arg2 = 0x5a;
+        pitch_reload = 0xdc;
+        lifetime_count = 0x5a;
         break;
     case 0x05:
         ch2_reload_increment = 2;
         subsweep_value = 1;
         ch2_reload_current = 0x1b8;
         pitch_increment = 10;
-        tone_arg3 = 1000;
-        tone_arg2 = 0x19;
+        pitch_reload = 1000;
+        lifetime_count = 0x19;
         break;
     case 0x06:
         ch2_reload_increment = 5;
         subsweep_value = 2;
         ch2_reload_current = 0x1b8;
         pitch_increment = 10;
-        tone_arg3 = 0x44c;
-        tone_arg2 = 0x14;
+        pitch_reload = 0x44c;
+        lifetime_count = 0x14;
         break;
     case 0x07:
         ch2_reload_increment = 3;
         subsweep_value = 1;
         ch2_reload_current = 0x1b8;
         pitch_increment = 10;
-        tone_arg3 = 0x4b0;
-        tone_arg2 = 0xf;
+        pitch_reload = 0x4b0;
+        lifetime_count = 0xf;
         break;
     case 0x08:
         ch2_reload_increment = 5;
         subsweep_value = 1;
         ch2_reload_current = 100;
         pitch_increment = 0xfffb;
-        tone_arg3 = 0xdc;
-        tone_arg2 = 0x28;
+        pitch_reload = 0xdc;
+        lifetime_count = 0x28;
         break;
     case 0x09:
         ch2_reload_increment = 1;
         ch2_reload_current = 0x1c2;
         pitch_increment = 0x14;
-        tone_arg3 = 0x32;
+        pitch_reload = 0x32;
         goto LAB_1000_70d6;
     case 0x0a:
         ch2_reload_increment = 10;
         subsweep_value = 1;
         ch2_reload_current = 0x15d;
         pitch_increment = 0x32;
-        tone_arg3 = 200;
-        tone_arg2 = 0xf;
+        pitch_reload = 200;
+        lifetime_count = 0xf;
         break;
     case 0x0b:
         schedule_timer_callback_b(2, 0x28, 0x14, 499, 1, 0xfffc);
@@ -359,37 +359,37 @@ void play_sound_effect(u8 effect_id)
         ch2_reload_increment = 2;
         ch2_reload_current = 0x1a4;
         pitch_increment = 10;
-        tone_arg3 = 0x4b0;
+        pitch_reload = 0x4b0;
         goto LAB_1000_70d6;
     case 0x0d:
         ch2_reload_increment = 0xf;
         subsweep_value = 2;
         ch2_reload_current = 0x15d;
         pitch_increment = 0x32;
-        tone_arg3 = 200;
-        tone_arg2 = 0x14;
+        pitch_reload = 200;
+        lifetime_count = 0x14;
         break;
     case 0x0e:
         ch2_reload_increment = 0;
         subsweep_value = 10;
         ch2_reload_current = 200;
         pitch_increment = 4;
-        tone_arg3 = 10;
-        tone_arg2 = 0x32;
+        pitch_reload = 10;
+        lifetime_count = 0x32;
         break;
     case 0x0f:
         ch2_reload_increment = 1;
         subsweep_value = 2;
         ch2_reload_current = 100;
         pitch_increment = 2;
-        tone_arg3 = 300;
-        tone_arg2 = 400;
+        pitch_reload = 300;
+        lifetime_count = 400;
         break;
     case 0x10:
         ch2_reload_increment = 2;
         ch2_reload_current = 0x1a4;
         pitch_increment = 10;
-        tone_arg3 = 0x4b0;
+        pitch_reload = 0x4b0;
         goto LAB_1000_70d6;
     case 0x11:
         schedule_timer_callback_b(2, 0x28, 0x14, 499, 1, 0xfffc);
@@ -402,30 +402,30 @@ void play_sound_effect(u8 effect_id)
         subsweep_value = 2;
         ch2_reload_current = 100;
         pitch_increment = 1;
-        tone_arg3 = 300;
-        tone_arg2 = 800;
+        pitch_reload = 300;
+        lifetime_count = 800;
         break;
     case 0x14:
         ch2_reload_increment = 0;
         subsweep_value = 10;
         ch2_reload_current = 200;
         pitch_increment = 4;
-        tone_arg3 = 10;
-        tone_arg2 = 0x32;
+        pitch_reload = 10;
+        lifetime_count = 0x32;
         break;
     case 0x15:
         ch2_reload_increment = 1;
         ch2_reload_current = 0x1c2;
         pitch_increment = 10;
-        tone_arg3 = 600;
+        pitch_reload = 600;
 LAB_1000_70d6:
         subsweep_value = 1;
-        tone_arg2 = 0x1e;
+        lifetime_count = 0x1e;
         break;
     default:
         goto switchD_1000_6e7e_default;
     }
-    schedule_timer_callback_a(2, tone_arg2, tone_arg3, 1, pitch_increment, ch2_reload_current, subsweep_value, ch2_reload_increment);
+    schedule_timer_callback_a(2, lifetime_count, pitch_reload, 1, pitch_increment, ch2_reload_current, subsweep_value, ch2_reload_increment);
 switchD_1000_6e7e_default:
     return;
 }
@@ -1188,7 +1188,7 @@ void play_contact_sound(void)
     if (sound_id != 0) {
         play_sound(sound_id);
     }
-    if ((0xd < p1_contact_code) && (p1_contact_code < 0x12)) {
+    if ((0xd < p1_contact_code) && (p1_contact_code < 0x12)) {   /* 0xe..0x11 */
         sweep_active_entities();
     }
 }
@@ -1343,6 +1343,10 @@ int select_sound_device_from_mask(u16 mask)
             bit_set = mask & 1;
             mask = mask >> 1;
             if (bit_set != 0) {
+                /* &0x1f mirrors the x86 shift-count truncation the asm's SHL/CL
+                   convention implies; bit_index is always 0..15 here (the loop
+                   below exits at 0x10), so the mask never actually clamps —
+                   dead in practice, kept for asm fidelity. */
                 snddrv_mode = (u16)(1 << ((u8)bit_index & 0x1f));
                 sound_init_state = 2;
                 sound_active_device_mask = snddrv_mode;
@@ -1847,13 +1851,20 @@ void opl_play_note(u8 key_on_bit, u8 attenuation, u16 chan_index, u16 note_index
     fword = (u16)(opl_fnum_hi_559c[(u8)(opl_chan_idx_5614[chan_index & 0xff] * 2)] |
                   (opl_fnum_hi_559c[(u8)(opl_chan_idx_5614[chan_index & 0xff] * 2) + 1] << 8));
     fword &= 0x3ff;
-    opl_write_reg((u8)(0xa0 + (u8)note_index), (u8)(fword & 0xff));  /* (3) reg=0xA0+chan-ish */
+    /* (3) reg = 0xA0 + note_index, NOT chan_index: confirmed against the asm and
+       against opl2_all_notes_off's call opl_play_note(0,0,0,voice) — chan_index
+       is always 0 there, and note_index carries the real per-voice OPL channel
+       number for these two register-select writes.  chan_index is used only for
+       the frequency-table lookups above (opl_chan_data_55b4/opl_chan_idx_5614);
+       it's genuinely a separate concept from the register-select "channel" here,
+       not a copy/typo. Intentional per the original, not a bug. */
+    opl_write_reg((u8)(0xa0 + (u8)note_index), (u8)(fword & 0xff));  /* (3) */
 
     ah = (u8)(fword >> 8);
     ah &= 0x3;                                            /* AND AL,0x3 (F-hi bits)  */
     ah = (u8)(ah + (u8)((block_chan & 7) << 2));          /* + (CL&7)<<2 (block)     */
     ah = (u8)(ah + key_on_bit);                           /* + [BP+4] (key-on bit)   */
-    opl_write_reg((u8)(0xb0 + (u8)note_index), ah);       /* (4) reg=0xB0+chan, key-on */
+    opl_write_reg((u8)(0xb0 + (u8)note_index), ah);       /* (4) reg = 0xB0 + note_index, key-on */
 }
 
 /* ── opl2_all_notes_off (1000:8e2f) — OPL2 all-notes-off ─────────────────────────────

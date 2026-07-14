@@ -63,6 +63,7 @@ under the git-ignored `local/` tree; users supply their own.
 | `src/` | Reconstructed C source (the current big effort) | yes |
 | `tools/extract/` | Pure-stdlib decoders/renderers (`.PAV/.DEC/.BUM`, `.VEC`, `.BIN`, `.CAR`, `.BNK`) | yes |
 | `tools/tinyprog_unpack.py`, `tools/disasm16.py` | TinyProg unpacker + a small disassembly utility | yes |
+| `imhex/` | ImHex pattern-language format specs (`.hexpat`), verified via `plcli` | yes |
 | `docs/` | Format specs (`docs/formats/`), packing, copy-protection, data files, engine | yes |
 | `local/` | Game files, toolchain (Ghidra/JDK/DOSBox/Open Watcom), build intermediates, planning, and the archived dev-only tooling (`local/archive/tools/`: the Ghidra analysis scripts, the from-scratch emulators, the `validate_*.sh`/oracle/ctest fidelity-validation suite, and the DOSBox capture pipeline that produced the results in `docs/reconstruction-fidelity.md`) | **gitignored** |
 | `results/` | Generated outputs (PNGs, sprite sheets, JSON) — regenerable | **gitignored** |
@@ -70,10 +71,11 @@ under the git-ignored `local/` tree; users supply their own.
 ## Ghidra (decompilation source of truth)
 
 - Live project **`BumpyDecomp`** in Ghidra 12.1.2 (`local/toolchain/ghidra_12.1.2_PUBLIC`).
-  ~340/399 functions are named, typed, and commented. The remaining ~60 are
-  C-runtime startup garble, tiny thunks, and low-confidence stubs — left unnamed
-  on purpose; **don't guess** them.
-- **Ghidra MCP** is wired up (`.mcp.json` → bridge on `http://127.0.0.1:8080/`).
+  All functions are named, typed, and commented (the last raw `FUN_*` symbols were
+  resolved 2026-07-14); a handful of low-confidence identities carry a `maybe_` prefix
+  rather than an invented meaning — see `docs/ghidra-symbol-map.md`'s "Uncertain
+  identities" section. **Don't guess** them.
+- **Ghidra MCP** is wired up (`.mcp.json` → bridge on `http://127.0.0.1:18080/`).
   Requires the Ghidra GUI running with the GhidraMCP plugin and `BumpyDecomp` open.
   Use the `mcp__ghidra__*` tools to decompile / list / xref / rename / retype.
   If `decompile_function` by friendly name fails, fall back to the raw `FUN_seg_off`

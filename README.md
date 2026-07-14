@@ -17,6 +17,7 @@ The original game files are copyright and **not distributed here**; you supply y
 | `tools/extract/` | pure-Python decoders/renderers for the game's data (`.PAV/.DEC/.BUM`, `.VEC`, `.BIN`, `.CAR`, `.BNK`) → level PNGs, sprite sheets, world maps, JSON level tables. Pure stdlib, no third-party deps. |
 | `tools/tinyprog_unpack.py` | recovers the unpacked load module from the TinyProg-packed `BUMPY.EXE` (see [`docs/tinyprog.md`](docs/tinyprog.md)) |
 | `tools/disasm16.py` | a small capstone-based 16-bit disassembler, for inspecting the binary or a built `.EXE` directly |
+| `imhex/`         | ImHex pattern-language format specs (`.hexpat`), verified via `plcli` |
 | `docs/`          | reference docs: engine internals, rendering pipeline, the reconstruction-fidelity audit, executable packing, copy protection, data files & resource pipeline, and the file-format specs under `docs/formats/` ([index](docs/README.md)) |
 | `local/`         | **git-ignored** working tree: your game files, the toolchain (Ghidra/JDK/DOSBox/Open Watcom), and build intermediates |
 | `results/`       | **git-ignored** generated outputs (level PNGs, sprite sheets, world maps, level JSON) — regenerable from the game files via the tools |

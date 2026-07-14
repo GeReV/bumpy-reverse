@@ -67,9 +67,10 @@
 #include "spawn.h"
 #include "anim.h"   /* anim_channels_a/b_tbl, anim_a/b_frame_tbl, g_anim_cur_cmd_byte,
                        anim_b_cur_frame_byte, p1_sprite, tilemap (all OWNED elsewhere) */
-/* tilemap layer B/C band offsets (see spawn.h's layer-A/B/C prose; items.c
- * keeps its own copy of the same pair). Bare (unsuffixed, signed-int)
+/* tilemap layer A/B/C band offsets (see spawn.h's layer-A/B/C prose; items.c
+ * keeps its own copy of the B/C pair). Bare (unsuffixed, signed-int)
  * literals — matches the original exactly. */
+#define TILEMAP_LAYER_A_OFF 0x00
 #define TILEMAP_LAYER_B_OFF 0x30
 #define TILEMAP_LAYER_C_OFF 0x60
 
@@ -129,14 +130,14 @@ extern void host_render_set_spawn(u8 active);   /* host_render.c — suppress th
 #endif
 
 /* NOTE: the decomp opens with the Borland stack-overflow-check prologue
-   (CMP SP,stack_check_limit; CALL FUN_1000_ab83).  That is a non-semantic
+   (CMP SP,stack_check_limit; CALL borland_stack_overflow).  That is a non-semantic
    compiler-emitted guard, omitted here as throughout the reconstruction. */
 void spawn_and_draw_level_entities(void)
 {
     anim_chan_rec __far *rec_a;   /* local_12 — A slot-0 record (active slot)         */
     anim_chan_rec __far *rec_b;   /* local_16 — B slot-0 record (active slot)         */
     u8 __far  *bum_hdr;           /* via tilemap (0xa0d8) — BUM header (p1/exit/items)*/
-    u8 __far  *src;               /* via level_src_ptr (0x75d0) — p2 fields           */
+    u8 __far  *p2_hdr;            /* via level_src_ptr (0x75d0) — p2 fields           */
     u8         grid_row;
     u8         grid_col;
     u8         cell_index;
@@ -190,11 +191,11 @@ void spawn_and_draw_level_entities(void)
     }
     items_remaining = bum_hdr[0x92];
 
-    src = level_src_ptr;
-    p2_cell = (s8)(src[0x93] - 1);
-    p2_ai_threshold = src[0x95];
-    p2_move_state = src[0x94];
-    p2_frame_base = spawn_p2_frame_tbl[src[0x96]];
+    p2_hdr = level_src_ptr;
+    p2_cell = (s8)(p2_hdr[0x93] - 1);
+    p2_ai_threshold = p2_hdr[0x95];
+    p2_move_state = p2_hdr[0x94];
+    p2_frame_base = spawn_p2_frame_tbl[p2_hdr[0x96]];
 
     /* ── 3. setup_fullscreen_view (asm 2b5e) ─────────────────────────────────────── */
     setup_fullscreen_view();
@@ -205,7 +206,11 @@ void spawn_and_draw_level_entities(void)
             cell_index = grid_row * 8 + grid_col;
 
             /* ── layer A (tilemap[+0x00 + cell]) — asm 2b9a..2be8 ──────────────────── */
-            cv = tilemap[(u16)grid_row * 8 + (u16)grid_col];
+            /* Recomputes grid_row*8+grid_col here (and again for layers B/C below)
+               rather than reusing cell_index: mirrors the asm, which computes BX
+               separately per section: cell_index above is only reused for the
+               *record* -> cell writes (rec_a/b/c->cell), not for the tilemap index. */
+            cv = tilemap[(u16)grid_row * 8 + (u16)grid_col + TILEMAP_LAYER_A_OFF];
             if (cv != 0) {
                 type = spawn_a_type_tbl[cv];
                 descfar = (u16 __far *)MK_FP(
