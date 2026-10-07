@@ -18,6 +18,13 @@ config, supplying the copyrighted data files, and picking an audio device), and 
 [README asset-extraction section](../README.md#reproducing) for the pure-Python
 tools that don't need a compiler at all.
 
+> **Just want the EXE?** Every push to `main` refreshes a single rolling **Latest
+> build** release on the repo's GitHub Releases page, with a prebuilt `BUMPYP.EXE`
+> and its `SHA256SUMS`, built by
+> [`.github/workflows/release.yml`](../.github/workflows/release.yml). It contains no
+> game data — you still supply the original files (see
+> [`docs/playable-dos.md`](playable-dos.md)).
+
 ---
 
 ## Prerequisites
@@ -27,7 +34,9 @@ You need the **Open Watcom 16-bit DOS toolchain** placed under
 in `local/`); this repo does not ship it.
 
 - **Get it** from the [Open Watcom v2 fork](https://github.com/open-watcom/open-watcom-v2)
-  (the build here was made with *Open Watcom Make 2.0 beta*). Grab a release build or
+  (the build here was made with *Open Watcom Make 2.0 beta*; CI pins the
+  [`2026-06-01-Build`](https://github.com/open-watcom/open-watcom-v2/releases/tag/2026-06-01-Build)
+  snapshot, whose `ow-snapshot.tar.xz` reproduces `BUMPYP.EXE` byte-for-byte). Grab a release build or
   build it yourself, then unpack it so that `local/toolchain/open-watcom/` contains the
   usual Open Watcom layout (`binl64/`, `binl/`, `h/`, `eddat/`, `wipfc/`, …).
 - **Host:** a 64-bit Linux x86-64 machine — the build drives the toolchain's native

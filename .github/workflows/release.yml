@@ -1,0 +1,121 @@
+# Build the playable BUMPYP.EXE with Open Watcom and publish it as a rolling release.
+#
+#   pull_request              → build, upload BUMPYP.EXE as a workflow artifact
+#   push to main / manual run → build, then replace the single rolling `latest` release
+#                               with the new EXE (one release per push, however many
+#                               commits it carries)
+#
+# There are no versioned releases: the `latest` tag is force-moved to the built commit
+# and the release's files are overwritten, so this link always serves the newest build:
+#   https://github.com/<owner>/<repo>/releases/latest/download/BUMPYP.EXE
+#
+# The toolchain comes from the official open-watcom/setup-watcom action, extracted
+# straight into local/toolchain/open-watcom — the path the self-bootstrapping
+# src/Makefile already expects — so the build is exactly `./src/build.sh play`, the
+# same command as a local build (see docs/building.md).
+#
+# The snapshot is PINNED: 2026-06-01-Build reproduces the locally built BUMPYP.EXE
+# byte-for-byte (verified 2026-10-07). Bump it deliberately, not by drifting with the
+# rolling `current` snapshot.
+
+name: release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push cancels an in-flight run, so an older build can never finish last and
+# roll the release back.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  OPEN_WATCOM_TAG: 2026-06-01-Build
+  RELEASE_TAG: latest
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Open Watcom ${{ env.OPEN_WATCOM_TAG }}
+        uses: open-watcom/setup-watcom@v1
+        with:
+          version: '2.0-64'
+          tag: ${{ env.OPEN_WATCOM_TAG }}
+          location: ${{ github.workspace }}/local/toolchain/open-watcom
+          # The Makefile sets %WATCOM/%INCLUDE/%PATH itself; leaving the environment
+          # unset keeps CI honest about that.
+          environment: false
+
+      - name: Build BUMPYP.EXE
+        run: ./src/build.sh play
+
+      - name: Stage release files
+        run: |
+          mkdir -p dist
+          cp local/build/src/BUMPYP.EXE dist/
+          cd dist
+          sha256sum BUMPYP.EXE > SHA256SUMS
+          {
+            echo '### BUMPYP.EXE'
+            echo '```'
+            cat SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: BUMPYP
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      # GitHub only honours a release's target commit when it CREATES the tag, so on
+      # every later run the tag has to be moved by hand before the release is updated.
+      - name: Move the ${{ env.RELEASE_TAG }} tag to this commit
+        run: |
+          git tag --force "$RELEASE_TAG" "$GITHUB_SHA"
+          git push --force origin "refs/tags/$RELEASE_TAG"
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: BUMPYP
+          path: dist
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Latest build
+          make_latest: 'true'
+          files: |
+            dist/BUMPYP.EXE
+            dist/SHA256SUMS
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          body: |
+            `BUMPYP.EXE` is the **playable** build of the Bumpy's Arcade Fantasy source
+            reconstruction: a 16-bit DOS executable, built with Open Watcom
+            (`${{ env.OPEN_WATCOM_TAG }}`) from `main` at
+            [`${{ github.sha }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}).
+            This release is replaced on every push to `main`.
+
+            **It contains no game data.** It needs the original game's data files,
+            which are copyrighted and must be supplied by you. Put `BUMPYP.EXE` next to
+            them and run it under DOSBox. See
+            [docs/playable-dos.md](https://github.com/${{ github.repository }}/blob/${{ github.sha }}/docs/playable-dos.md).

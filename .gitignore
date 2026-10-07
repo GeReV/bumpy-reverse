@@ -18,3 +18,4 @@ __pycache__/
 # Root dotfiles (sandbox-mounted shell/editor/agent config — not part of the repo)
 /.*
 !/.gitignore
+!/.github/
